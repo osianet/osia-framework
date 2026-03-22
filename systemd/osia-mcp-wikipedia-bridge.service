@@ -1,0 +1,16 @@
+[Unit]
+Description=OSIA Wikipedia MCP Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/osia-framework
+ExecStart=/home/ubuntu/osia-framework/.venv/bin/python src/mcp_bridge.py --name wikipedia --command /home/ubuntu/mcp-wikipedia-py/.venv/bin/python --args /home/ubuntu/mcp-wikipedia-py/main.py --port 8002
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/ubuntu/osia-framework/.env
+Environment=PYTHONPATH=/home/ubuntu/osia-framework
+
+[Install]
+WantedBy=multi-user.target

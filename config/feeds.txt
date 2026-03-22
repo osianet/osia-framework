@@ -1,0 +1,19 @@
+# OSIA Intelligence Feed List
+
+# Geopolitics & Security
+https://www.reutersagency.com/feed/?best-topics=political-news
+https://www.defenseone.com/rss/all/
+https://www.longwarjournal.org/feed
+https://worldview.stratfor.com/rss.xml
+https://apnews.com/hub/world-news.rss
+
+# Technology & Cyber
+https://techcrunch.com/feed/
+https://feeds.feedburner.com/TheHackersNews
+https://www.theverge.com/rss/index.xml
+https://spectrum.ieee.org/rss/fulltext
+
+# Finance & Economics
+https://www.ft.com/?format=rss
+https://www.economist.com/sections/international/rss.xml
+https://www.cnbc.com/id/10000029/device/rss/rss.html

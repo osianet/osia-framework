@@ -1,0 +1,16 @@
+[Unit]
+Description=OSIA ArXiv MCP Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/osia-framework
+ExecStart=/home/ubuntu/osia-framework/.venv/bin/python src/mcp_bridge.py --name arxiv --command /home/ubuntu/mcp-arxiv/.venv/bin/python --args -m arxiv_mcp_server --port 8001 --env-path /home/ubuntu/mcp-arxiv/src
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/ubuntu/osia-framework/.env
+Environment=PYTHONPATH=/home/ubuntu/osia-framework
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for OSIA RSS Ingress
+Requires=osia-rss-ingress.service
+
+[Timer]
+Unit=osia-rss-ingress.service
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
