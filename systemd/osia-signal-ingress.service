@@ -1,0 +1,17 @@
+[Unit]
+Description=OSIA Signal Ingress Gateway
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/osia-framework
+ExecStart=/home/ubuntu/osia-framework/.venv/bin/python src/gateways/signal_ingress.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/ubuntu/osia-framework/.env
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

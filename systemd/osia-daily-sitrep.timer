@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for OSIA Daily SITREP
+Requires=osia-daily-sitrep.service
+
+[Timer]
+Unit=osia-daily-sitrep.service
+OnCalendar=*-*-* 07:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
