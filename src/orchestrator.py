@@ -102,6 +102,11 @@ class OsiaOrchestrator:
     async def send_signal_message(self, recipient: str, message: str):
         """Sends a Signal message back to the requester."""
         url = f"{self.signal_api_url}/v2/send"
+        
+        # Ensure group IDs are properly prefixed for the API
+        if not recipient.startswith("+") and not recipient.startswith("group."):
+            recipient = f"group.{recipient}"
+
         payload = {
             "message": message,
             "number": self.signal_number,

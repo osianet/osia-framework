@@ -23,7 +23,7 @@ MCP_SERVERS = {
     ),
     "tavily": StdioServerParameters(
         command="npx",
-        args=["-y", "@tavily/mcp-server"],
+        args=["-y", "tavily-mcp"],
         env={"TAVILY_API_KEY": os.getenv("TAVILY_API_KEY", ""), **os.environ}
     )
 }
