@@ -36,17 +36,27 @@ async def listen_to_signal():
                             envelope = data["envelope"]
                             source = envelope.get("source")
                             
+                            # Check for group ID
+                            group_id = None
+                            if "dataMessage" in envelope:
+                                group_info = envelope["dataMessage"].get("groupInfo")
+                                if group_info:
+                                    group_id = group_info.get("groupId")
+
                             # Check if it's a data message (text)
                             if "dataMessage" in envelope:
                                 data_msg = envelope["dataMessage"]
                                 text = data_msg.get("message", "")
                                 
                                 if text:
-                                    print(f"[Signal] New message from {source}: {text}")
+                                    print(f"[Signal] New message from {source} (Group: {group_id}): {text}")
                                     
                                     # Build the OSIA Task
+                                    # If it's a group message, we use the group ID as the source for replies
+                                    task_source = f"signal:{group_id}" if group_id else f"signal:{source}"
+                                    
                                     task = {
-                                        "source": f"signal:{source}",
+                                        "source": task_source,
                                         "query": text
                                     }
                                     
