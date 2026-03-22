@@ -34,6 +34,7 @@ async def listen_to_signal():
                         # signal-cli-rest-api wraps the envelope
                         if "envelope" in data:
                             envelope = data["envelope"]
+                            print(f"DEBUG: Raw envelope: {json.dumps(envelope)}")
                             source = envelope.get("source")
                             
                             # Check for group ID

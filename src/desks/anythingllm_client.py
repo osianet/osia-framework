@@ -16,9 +16,17 @@ class AnythingLLMDesk:
     async def send_task(self, workspace_slug: str, message: str) -> str:
         """Sends a query to a specific workspace and returns the response."""
         url = f"{self.base_url}/api/v1/workspace/{workspace_slug}/chat"
+        
+        # We attach the collection-directorate documents to every query 
+        # so the specialized desk can "read" the latest raw intel.
         payload = {
             "message": message,
-            "mode": "chat"
+            "mode": "chat",
+            "attachments": [
+                {
+                    "workspaceSlug": "collection-directorate"
+                }
+            ]
         }
         
         async with httpx.AsyncClient(timeout=300.0) as client:
