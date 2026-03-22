@@ -42,8 +42,12 @@ async def listen_to_signal():
                             if "dataMessage" in envelope:
                                 group_info = envelope["dataMessage"].get("groupInfo")
                                 if group_info:
+                                    print(f"DEBUG: Group info found: {json.dumps(group_info)}")
                                     # The Signal REST API returns the full base64 ID in the 'groupId' field
                                     group_id = group_info.get("groupId")
+                                    if not group_id:
+                                        # Some versions might use hex_id or similar
+                                        group_id = group_info.get("hex_id")
 
                             # Check if it's a data message (text)
                             if "dataMessage" in envelope:
