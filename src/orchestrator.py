@@ -226,18 +226,24 @@ class OsiaOrchestrator:
         except Exception as e:
             print(f"[-] Automated research failed: {e}")
 
-        # 3. Routing to Analytical Desk
+        # Step 1: Chief of Staff develops a plan based on the Core Directives
+        with open("DIRECTIVES.md", "r") as f:
+            mandate = f.read()
+
         plan_prompt = f"""
-        You are the Chief of Staff for an Open Source Intelligence Agency (OSIA).
-        A new Request for Information (RFI) has come in: '{query}'
-        
-        Which of our specialized desks should analyze this? Choose ONE:
+        {mandate}
+
+        ---
+
+        You are the Chief of Staff for OSIA. A new Request for Information (RFI) has come in: '{query}'
+
+        Based on the Socialist Intelligence Mandate above, which of our specialized desks should analyze this? Choose ONE:
         - geopolitical-and-security-desk
         - cultural-and-theological-intelligence-desk
         - science-technology-and-commercial-desk
         - human-intelligence-and-profiling-desk
         - finance-and-economics-directorate
-        
+
         Reply with ONLY the slug of the desk, nothing else.
         """
         
