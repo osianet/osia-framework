@@ -9,9 +9,13 @@ async def trigger_sitrep():
     load_dotenv()
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     queue_name = os.getenv("OSIA_TASK_QUEUE", "osia:task_queue")
-    recipient = os.getenv("SIGNAL_SENDER_NUMBER") # Default to self
+    
+    # Target the briefings group if available, otherwise default to self
+    group_id = os.getenv("SIGNAL_GROUP_ID")
+    sender = os.getenv("SIGNAL_SENDER_NUMBER")
+    recipient = group_id if group_id else sender
 
-    print(f"[*] OSIA: Triggering Daily SITREP for {datetime.now().strftime('%Y-%m-%d')}...")
+    print(f"[*] OSIA: Triggering Daily SITREP for {datetime.now().strftime('%Y-%m-%d')} targeting {recipient}...")
 
     task = {
         "source": f"signal:{recipient}",

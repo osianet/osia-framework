@@ -1,0 +1,16 @@
+[Unit]
+Description=OSIA Semantic Scholar MCP Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/osia-framework
+ExecStart=/home/ubuntu/osia-framework/.venv/bin/python src/mcp_bridge.py --name semantic-scholar --command /home/ubuntu/mcp-semantic-scholar/.venv/bin/python --port 8005 --env-path /home/ubuntu/mcp-semantic-scholar/src --args -m semantic_scholar_mcp.cli serve
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/ubuntu/osia-framework/.env
+Environment=PYTHONPATH=/home/ubuntu/osia-framework
+
+[Install]
+WantedBy=multi-user.target

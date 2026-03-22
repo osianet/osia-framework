@@ -14,12 +14,15 @@ import uvicorn
 
 parser = argparse.ArgumentParser(description="OSIA MCP Stdio-to-SSE Bridge")
 parser.add_argument("--command", required=True, help="Command to run the STDIO MCP server")
-parser.add_argument("--args", nargs="*", default=[], help="Arguments for the MCP server")
 parser.add_argument("--port", type=int, required=True, help="Port to serve SSE on")
 parser.add_argument("--name", required=True, help="Internal name for the MCP server")
 parser.add_argument("--env-path", help="Optional PYTHONPATH")
+parser.add_argument("remainder", nargs=argparse.REMAINDER, help="Arguments for the MCP server")
 
 args = parser.parse_args()
+mcp_args = args.remainder
+if mcp_args and mcp_args[0] == "--args":
+    mcp_args = mcp_args[1:]
 
 # Initialize the MCP Server (The Bridge)
 mcp_server = Server(args.name)
@@ -64,7 +67,7 @@ if __name__ == "__main__":
 
     server_params = StdioServerParameters(
         command=args.command,
-        args=args.args,
+        args=mcp_args,
         env=env
     )
 
