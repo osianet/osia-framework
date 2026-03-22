@@ -61,6 +61,28 @@ class OsiaOrchestrator:
                             },
                             required=["query"]
                         )
+                    ),
+                    types.FunctionDeclaration(
+                        name="search_semantic_scholar",
+                        description="Search Semantic Scholar for peer-reviewed scientific literature and citations.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "query": types.Schema(type="STRING", description="The scientific search query.")
+                            },
+                            required=["query"]
+                        )
+                    ),
+                    types.FunctionDeclaration(
+                        name="get_youtube_transcript",
+                        description="Retrieve the text transcript of a YouTube video for analysis.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "video_url": types.Schema(type="STRING", description="The full YouTube URL.")
+                            },
+                            required=["video_url"]
+                        )
                     )
                 ]
             )
@@ -118,6 +140,14 @@ class OsiaOrchestrator:
                     mcp_res = await self.mcp.call_tool("wikipedia", "search_pages", {"input": {"query": call.args["query"]}})
                 elif call.name == "search_arxiv":
                     mcp_res = await self.mcp.call_tool("arxiv", "search_papers", {"query": call.args["query"]})
+                elif call.name == "search_semantic_scholar":
+                    mcp_res = await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": call.args["query"]})
+                elif call.name == "get_youtube_transcript":
+                    # Parse video ID from URL
+                    video_id_match = re.search(r'(?:v=|\/)([0-9A-Za-z_-]{11}).*', call.args["video_url"])
+                    video_id = video_id_match.group(1) if video_id_match else None
+                    if video_id:
+                        mcp_res = await self.mcp.call_tool("youtube", "getTranscripts", {"videoIds": [video_id], "format": "full_text"})
                 
                 if mcp_res:
                     # Collect result and feed back to Gemini
