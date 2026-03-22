@@ -1,0 +1,18 @@
+services:
+  redis:
+    image: redis:alpine
+    container_name: osia-redis
+    ports:
+      - "6379:6379"
+    restart: always
+
+  signal-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: osia-signal
+    environment:
+      - MODE=json-rpc
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./signal-data:/home/signalapi/.local/share/signal-cli
+    restart: always
