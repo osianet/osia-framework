@@ -41,6 +41,7 @@ async def listen_to_signal():
                             if "dataMessage" in envelope:
                                 group_info = envelope["dataMessage"].get("groupInfo")
                                 if group_info:
+                                    # Use the full group ID (the one starting with group.)
                                     group_id = group_info.get("groupId")
 
                             # Check if it's a data message (text)

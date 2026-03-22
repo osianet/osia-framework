@@ -25,6 +25,16 @@ MCP_SERVERS = {
         command="npx",
         args=["-y", "tavily-mcp"],
         env={"TAVILY_API_KEY": os.getenv("TAVILY_API_KEY", ""), **os.environ}
+    ),
+    "youtube": StdioServerParameters(
+        command="node",
+        args=["/home/ubuntu/osia-knowledge-base/mcp/youtube/node_modules/@fabriqa.ai/youtube-transcript-mcp/index.js"],
+        env=os.environ
+    ),
+    "time": StdioServerParameters(
+        command="uvx",
+        args=["mcp-server-time"],
+        env=os.environ
     )
 }
 
