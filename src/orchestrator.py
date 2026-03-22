@@ -225,7 +225,9 @@ class OsiaOrchestrator:
             if any(domain in url.lower() for domain in ['instagram.com', 'facebook.com', 'tiktok.com', 'youtube.com', 'youtu.be']):
                 try:
                     media_analysis = await self.process_media_link(url)
-                    await self.desk_client.ingest_raw_data("collection-directorate", media_analysis, f"Media Intercept: {url}")
+                    # Truncate title to avoid ENAMETOOLONG
+                    safe_title = (url[:50] + '...') if len(url) > 50 else url
+                    await self.desk_client.ingest_raw_data("collection-directorate", media_analysis, f"Media Intercept: {safe_title}")
                     query = f"A media intercept from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
                 except Exception as e:
                     print(f"[-] Media interception failed: {e}")
@@ -235,7 +237,9 @@ class OsiaOrchestrator:
             research_summary = await self.handle_research(original_query)
             if research_summary:
                 print("[*] Research complete. Injecting into Collection Desk...")
-                await self.desk_client.ingest_raw_data("collection-directorate", research_summary, f"Research: {original_query}")
+                # Truncate title to avoid ENAMETOOLONG (AnythingLLM limits)
+                safe_title = (original_query[:50] + '...') if len(original_query) > 50 else original_query
+                await self.desk_client.ingest_raw_data("collection-directorate", research_summary, f"Research: {safe_title}")
                 query = f"Baseline research summary for this topic:\n{research_summary}\n\nOriginal Request: {query}"
         except Exception as e:
             print(f"[-] Automated research failed: {e}")
@@ -271,8 +275,10 @@ class OsiaOrchestrator:
             print(f"\n[+] Intelligence Synthesis Complete:\n{analysis}")
             
             if source.startswith("signal:"):
-                recipient_number = source.split(":")[1]
-                await self.send_signal_message(recipient_number, analysis)
+                recipient = source.split(":")[1]
+                # If we received from a group, source will be signal:group.xyz
+                # The send_signal_message already handles prefixing
+                await self.send_signal_message(recipient, analysis)
             
         except Exception as e:
             print(f"[-] Orchestration or Desk Analysis Failed: {e}")
