@@ -1,0 +1,16 @@
+[Unit]
+Description=OSIA Time MCP Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/osia-framework
+ExecStart=/home/ubuntu/osia-framework/.venv/bin/python src/mcp_bridge.py --name time --command uvx --args mcp-server-time --port 8004
+Restart=always
+RestartSec=5
+EnvironmentFile=/home/ubuntu/osia-framework/.env
+Environment=PYTHONPATH=/home/ubuntu/osia-framework
+
+[Install]
+WantedBy=multi-user.target
