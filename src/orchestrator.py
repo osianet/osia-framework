@@ -83,6 +83,17 @@ class OsiaOrchestrator:
                             },
                             required=["video_url"]
                         )
+                    ),
+                    types.FunctionDeclaration(
+                        name="search_web",
+                        description="Search the live web for current events, news, and real-time information using Tavily.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "query": types.Schema(type="STRING", description="The search query.")
+                            },
+                            required=["query"]
+                        )
                     )
                 ]
             )
@@ -148,6 +159,8 @@ class OsiaOrchestrator:
                     video_id = video_id_match.group(1) if video_id_match else None
                     if video_id:
                         mcp_res = await self.mcp.call_tool("youtube", "getTranscripts", {"videoIds": [video_id], "format": "full_text"})
+                elif call.name == "search_web":
+                    mcp_res = await self.mcp.call_tool("tavily", "tavily_search", {"query": call.args["query"]})
                 
                 if mcp_res:
                     # Collect result and feed back to Gemini

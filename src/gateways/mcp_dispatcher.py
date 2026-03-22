@@ -20,6 +20,11 @@ MCP_SERVERS = {
         command="/home/ubuntu/mcp-wikipedia-py/.venv/bin/python",
         args=["/home/ubuntu/mcp-wikipedia-py/main.py"],
         env=os.environ
+    ),
+    "tavily": StdioServerParameters(
+        command="npx",
+        args=["-y", "@tavily/mcp-server"],
+        env={"TAVILY_API_KEY": os.getenv("TAVILY_API_KEY", ""), **os.environ}
     )
 }
 
