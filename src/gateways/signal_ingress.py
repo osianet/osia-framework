@@ -42,7 +42,7 @@ async def listen_to_signal():
                             if "dataMessage" in envelope:
                                 group_info = envelope["dataMessage"].get("groupInfo")
                                 if group_info:
-                                    # Use the full group ID (the one starting with group.)
+                                    # The Signal REST API returns the full base64 ID in the 'groupId' field
                                     group_id = group_info.get("groupId")
 
                             # Check if it's a data message (text)
@@ -54,8 +54,12 @@ async def listen_to_signal():
                                     print(f"[Signal] New message from {source} (Group: {group_id}): {text}")
                                     
                                     # Build the OSIA Task
-                                    # If it's a group message, we use the group ID as the source for replies
-                                    task_source = f"signal:{group_id}" if group_id else f"signal:{source}"
+                                    # If it's a group message, we use the full group ID as the source
+                                    # Ensure it starts with 'group.' for the egress gateway
+                                    if group_id:
+                                        task_source = f"signal:group.{group_id}" if not group_id.startswith("group.") else f"signal:{group_id}"
+                                    else:
+                                        task_source = f"signal:{source}"
                                     
                                     task = {
                                         "source": task_source,
