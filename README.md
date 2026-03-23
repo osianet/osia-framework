@@ -17,6 +17,7 @@ OSIA utilizes **AnythingLLM**'s isolated Workspaces to act as specialized "Desks
 *   **Science & Tech Desk:** (Local GPU) - Evaluates technical accuracy and engineering breakthroughs.
 *   **Human Intelligence Desk:** (Local GPU) - Uncensored behavioral profiling and network mapping.
 *   **Finance & Economics Desk:** (Cloud/GPT-4o) - Market dynamics, sanctions, and internal agency auditing.
+*   **Cyber Intelligence & Warfare Desk:** (Cloud) - Specialized analysis of nation-state cyber operations, digital sovereignty, and global cyber-crime.
 *   **The Watch Floor:** (Cloud) - Synthesis of multi-desk reports into final **INTSUM** (Intelligence Summary) documents.
 
 ---

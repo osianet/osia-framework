@@ -26,6 +26,7 @@ VALID_DESKS = {
     "science-technology-and-commercial-desk",
     "human-intelligence-and-profiling-desk",
     "finance-and-economics-directorate",
+    "cyber-intelligence-and-warfare-desk",
 }
 
 
@@ -476,6 +477,7 @@ class OsiaOrchestrator:
         - science-technology-and-commercial-desk
         - human-intelligence-and-profiling-desk
         - finance-and-economics-directorate
+        - cyber-intelligence-and-warfare-desk
 
         Reply with ONLY the slug of the desk, nothing else.
         """
