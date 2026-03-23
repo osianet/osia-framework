@@ -187,8 +187,22 @@ class OsiaOrchestrator:
                         ]
                         # Actually yt-dlp has a cleaner way via subprocess
                         import subprocess
+                        # Use a common browser user agent to avoid being blocked
+                        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        
                         proc = subprocess.run(
-                            ["/home/ubuntu/osia-framework/.venv/bin/yt-dlp", "--skip-download", "--get-title", "--write-auto-subs", "--sub-lang", "en.*", "--convert-subs", "srt", "--output", "yt_intel", video_url],
+                            [
+                                "/home/ubuntu/osia-framework/.venv/bin/yt-dlp", 
+                                "--skip-download", 
+                                "--get-title", 
+                                "--write-auto-subs", 
+                                "--sub-lang", "en.*", 
+                                "--convert-subs", "srt", 
+                                "--output", "yt_intel", 
+                                "--user-agent", user_agent,
+                                "--geo-bypass",
+                                video_url
+                            ],
                             capture_output=True, text=True, cwd="/home/ubuntu/osia-framework"
                         )
                         video_title = proc.stdout.strip().split("\n")[0]

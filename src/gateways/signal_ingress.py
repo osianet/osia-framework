@@ -2,6 +2,7 @@ import asyncio
 import websockets
 import json
 import os
+import base64
 import redis.asyncio as redis
 from dotenv import load_dotenv
 
@@ -39,12 +40,16 @@ async def listen_to_signal():
                             if "dataMessage" in envelope:
                                 group_info = envelope["dataMessage"].get("groupInfo")
                                 if group_info:
-                                    # The Signal REST API returns the string we need for replies in the 'groupId' field.
-                                    # Based on debug logs, it is e.g. "pugWDcTiDcjExyOKVfJ6blbYxOPPNifdqTTD37jnwMo="
-                                    # We just need to prefix it with "group."
-                                    group_id = group_info.get("groupId")
-                                    if group_id and not group_id.startswith("group."):
-                                        group_id = f"group.{group_id}"
+                                    # The Signal REST API returns the raw internal ID in 'groupId'
+                                    # To send back to a group, we need: group.base64(groupId)
+                                    raw_group_id = group_info.get("groupId")
+                                    if raw_group_id:
+                                        if raw_group_id.startswith("group."):
+                                            group_id = raw_group_id
+                                        else:
+                                            # Encode to base64 and add prefix
+                                            encoded_id = base64.b64encode(raw_group_id.encode()).decode()
+                                            group_id = f"group.{encoded_id}"
 
                             if "dataMessage" in envelope:
                                 data_msg = envelope["dataMessage"]
@@ -53,7 +58,7 @@ async def listen_to_signal():
                                 if text:
                                     print(f"[Signal] New message from {source} (Resolved Group: {group_id}): {text}")
                                     
-                                    # If it's a group message, the source for the orchestrator reply is the group ID
+                                    # If group_id is found, it is the source for replies
                                     task_source = f"signal:{group_id}" if group_id else f"signal:{source}"
                                     
                                     task = {
