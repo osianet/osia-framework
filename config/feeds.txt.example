@@ -1,0 +1,23 @@
+# OSIA RSS Intelligence Feeds
+# One feed URL per line. Lines starting with # are ignored.
+# Copy this file to feeds.txt and customize.
+
+# --- Global News ---
+https://feeds.bbci.co.uk/news/world/rss.xml
+https://rss.nytimes.com/services/xml/rss/nyt/World.xml
+https://www.aljazeera.com/xml/rss/all.xml
+https://www.theguardian.com/world/rss
+
+# --- Finance & Economics ---
+https://feeds.ft.com/rss/home/us
+https://feeds.bloomberg.com/markets/news.rss
+
+# --- Technology & Science ---
+https://www.technologyreview.com/feed/
+https://arstechnica.com/feed/
+https://export.arxiv.org/rss/cs.AI
+
+# --- Security & Defence ---
+https://www.janes.com/feeds/news
+https://warontherocks.com/feed/
+https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml

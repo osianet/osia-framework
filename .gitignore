@@ -19,6 +19,7 @@ build/
 
 # Config & Sensitive Data
 config/
+!config/*.example
 signal-data/
 storage/
 
