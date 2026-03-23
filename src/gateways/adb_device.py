@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import subprocess
 
 logger = logging.getLogger("osia.adb")
@@ -106,6 +107,29 @@ class ADBDevice:
             ["shell", "screenrecord", "--time-limit", str(time_limit), remote_path]
         )
         await asyncio.to_thread(subprocess.run, cmd)
+
+    async def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
+        """Perform a swipe gesture between two points."""
+        await self._run_checked(
+            ["shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms)]
+        )
+
+    async def press_back(self):
+        """Press the Android back button."""
+        await self._run_checked(["shell", "input", "keyevent", "4"])
+
+    async def press_enter(self):
+        """Press the Enter/Return key."""
+        await self._run_checked(["shell", "input", "keyevent", "66"])
+
+    async def get_screen_size(self) -> tuple[int, int]:
+        """Return (width, height) of the device display."""
+        output = await self._run_checked(["shell", "wm", "size"])
+        # Output looks like: "Physical size: 1080x2400"
+        match = re.search(r"(\d+)x(\d+)", output)
+        if not match:
+            raise RuntimeError(f"Could not parse screen size from: {output}")
+        return int(match.group(1)), int(match.group(2))
 
     async def pull_file(self, remote_path: str, local_path: str):
         logger.info("Pulling %s to %s...", remote_path, local_path)

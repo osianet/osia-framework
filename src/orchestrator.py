@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 from src.desks.anythingllm_client import AnythingLLMDesk
 from src.gateways.adb_device import ADBDevice
 from src.gateways.mcp_dispatcher import MCPDispatcher
+from src.agents.social_media_agent import SocialMediaAgent
 
 logger = logging.getLogger("osia.orchestrator")
 
@@ -55,6 +56,12 @@ class OsiaOrchestrator:
         self.desk_client = AnythingLLMDesk()
         self.adb = ADBDevice()
         self.mcp = MCPDispatcher()
+        self.social_agent = SocialMediaAgent(
+            adb=self.adb,
+            gemini_client=self.client,
+            model_id=self.model_id,
+            base_dir=self.base_dir,
+        )
 
         # Define Research Tools for the Chief of Staff
         self.tools = [
@@ -116,6 +123,49 @@ class OsiaOrchestrator:
                             type="OBJECT",
                             properties={"query": types.Schema(type="STRING", description="The search query.")},
                             required=["query"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="read_social_comments",
+                        description="Use the physical phone to navigate to a social media post and extract all visible comments.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={"url": types.Schema(type="STRING", description="Direct URL to the social media post.")},
+                            required=["url"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="post_social_comment",
+                        description="Use the physical phone to post a comment on a social media post.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "url": types.Schema(type="STRING", description="Direct URL to the social media post."),
+                                "comment": types.Schema(type="STRING", description="The comment text to post."),
+                            },
+                            required=["url", "comment"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="reply_social_comment",
+                        description="Use the physical phone to reply to a specific comment on a social media post.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "url": types.Schema(type="STRING", description="Direct URL to the social media post."),
+                                "target_author": types.Schema(type="STRING", description="Username of the comment author to reply to."),
+                                "reply": types.Schema(type="STRING", description="The reply text."),
+                            },
+                            required=["url", "target_author", "reply"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="read_social_post",
+                        description="Use the physical phone to navigate to a social media post and extract its full content, stats, and metadata.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={"url": types.Schema(type="STRING", description="Direct URL to the social media post.")},
+                            required=["url"],
                         ),
                     ),
                 ]
@@ -198,6 +248,18 @@ class OsiaOrchestrator:
             return await self.mcp.call_tool("time", "get_current_time", {"timezone": args.get("timezone", "Etc/UTC")})
         elif name == "search_web":
             return await self.mcp.call_tool("tavily", "tavily_search", {"query": args["query"]})
+        elif name == "read_social_comments":
+            result = await self.social_agent.read_comments(args["url"])
+            return result.data if result.success else f"FAILED: {result.error}"
+        elif name == "post_social_comment":
+            result = await self.social_agent.post_comment(args["url"], args["comment"])
+            return "Comment posted successfully." if result.success else f"FAILED: {result.error}"
+        elif name == "reply_social_comment":
+            result = await self.social_agent.reply_to_comment(args["url"], args["target_author"], args["reply"])
+            return "Reply posted successfully." if result.success else f"FAILED: {result.error}"
+        elif name == "read_social_post":
+            result = await self.social_agent.read_post_content(args["url"])
+            return result.data if result.success else f"FAILED: {result.error}"
         else:
             logger.warning("Unknown tool requested by Gemini: %s", name)
             return None
