@@ -2,7 +2,6 @@ import asyncio
 import websockets
 import json
 import os
-import base64
 import redis.asyncio as redis
 from dotenv import load_dotenv
 
@@ -40,19 +39,12 @@ async def listen_to_signal():
                             if "dataMessage" in envelope:
                                 group_info = envelope["dataMessage"].get("groupInfo")
                                 if group_info:
-                                    raw_group_id = group_info.get("groupId")
-                                    if raw_group_id:
-                                        if raw_group_id.startswith("group."):
-                                            group_id = raw_group_id
-                                        else:
-                                            # The Signal REST API often returns the internal base64 ID
-                                            # We need to ensure it has the group. prefix
-                                            # And if it's the raw ID, it needs to be base64 encoded
-                                            # Based on logs, pugWDcTi... is the internal ID.
-                                            # group.cHVnV0Rj... is the public ID.
-                                            # cHVnV0Rj... is base64(pugWDcTi...)
-                                            encoded_id = base64.b64encode(raw_group_id.encode()).decode()
-                                            group_id = f"group.{encoded_id}"
+                                    # The Signal REST API returns the string we need for replies in the 'groupId' field.
+                                    # Based on debug logs, it is e.g. "pugWDcTiDcjExyOKVfJ6blbYxOPPNifdqTTD37jnwMo="
+                                    # We just need to prefix it with "group."
+                                    group_id = group_info.get("groupId")
+                                    if group_id and not group_id.startswith("group."):
+                                        group_id = f"group.{group_id}"
 
                             if "dataMessage" in envelope:
                                 data_msg = envelope["dataMessage"]
@@ -61,6 +53,7 @@ async def listen_to_signal():
                                 if text:
                                     print(f"[Signal] New message from {source} (Resolved Group: {group_id}): {text}")
                                     
+                                    # If it's a group message, the source for the orchestrator reply is the group ID
                                     task_source = f"signal:{group_id}" if group_id else f"signal:{source}"
                                     
                                     task = {

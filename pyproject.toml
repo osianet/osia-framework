@@ -16,4 +16,5 @@ dependencies = [
     "starlette-context>=0.5.1",
     "uvicorn>=0.42.0",
     "websockets>=16.0",
+    "yt-dlp>=2026.3.17",
 ]

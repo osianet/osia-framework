@@ -170,7 +170,46 @@ class OsiaOrchestrator:
                 elif call.name == "search_semantic_scholar":
                     mcp_res = await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": call.args["query"]})
                 elif call.name == "get_youtube_transcript":
-                    mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": call.args["url"]})
+                    video_url = call.args["url"]
+                    print(f"[*] OSIA: Extracting native transcript using yt-dlp for: {video_url}")
+                    
+                    try:
+                        # Extract transcript using yt-dlp (get only the subtitles)
+                        # We use --get-description --get-title for metadata as well
+                        cmd = [
+                            "/home/ubuntu/osia-framework/.venv/bin/python", "-m", "yt_dlp",
+                            "--skip-download",
+                            "--write-auto-subs",
+                            "--sub-format", "srt/vtt/best",
+                            "--convert-subs", "srt",
+                            "--print", "subtitles",
+                            video_url
+                        ]
+                        # Actually yt-dlp has a cleaner way via subprocess
+                        import subprocess
+                        proc = subprocess.run(
+                            ["/home/ubuntu/osia-framework/.venv/bin/yt-dlp", "--skip-download", "--get-title", "--write-auto-subs", "--sub-lang", "en.*", "--convert-subs", "srt", "--output", "yt_intel", video_url],
+                            capture_output=True, text=True, cwd="/home/ubuntu/osia-framework"
+                        )
+                        video_title = proc.stdout.strip().split("\n")[0]
+                        
+                        # Find the generated srt file
+                        transcript_text = f"Title: {video_title}\n\n"
+                        if os.path.exists("/home/ubuntu/osia-framework/yt_intel.en.srt"):
+                            with open("/home/ubuntu/osia-framework/yt_intel.en.srt", "r") as f:
+                                transcript_text += f.read()
+                            os.remove("/home/ubuntu/osia-framework/yt_intel.en.srt")
+                        else:
+                            # Fallback to MCP if yt-dlp didn't get subs
+                            print("[*] yt-dlp failed to find subtitles, falling back to MCP...")
+                            mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
+                            transcript_text = str(mcp_res)
+                        
+                        mcp_res = transcript_text
+                    except Exception as e:
+                        print(f"[-] yt-dlp process failed: {e}. Falling back to MCP...")
+                        mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
+                    
                     print(f"DEBUG: YouTube Transcript Raw: {str(mcp_res)[:500]}...")
                 elif call.name == "get_current_time":
                     mcp_res = await self.mcp.call_tool("time", "get_current_time", {"timezone": call.args.get("timezone", "Etc/UTC")})
