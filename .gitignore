@@ -1,8 +1,36 @@
+# Environment & Secrets
 .env
+*.env
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Python
 .venv/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Config & Sensitive Data
+config/
 signal-data/
 storage/
-config/
+
+# Cookies & Session Files
+*.txt.cookies
+*cookies*.txt
+*.cookies
+
+# IDE & Tool Artifacts
+view.xml
+*.xml
+.idea/
+.vscode/
+*.swp
+*.swo
