@@ -2,6 +2,7 @@ import asyncio
 import websockets
 import json
 import os
+import base64
 import redis.asyncio as redis
 from dotenv import load_dotenv
 
@@ -31,46 +32,42 @@ async def listen_to_signal():
                     try:
                         data = json.loads(message_str)
                         
-                        # signal-cli-rest-api wraps the envelope
                         if "envelope" in data:
                             envelope = data["envelope"]
-                            print(f"DEBUG: Raw envelope: {json.dumps(envelope)}")
                             source = envelope.get("source")
                             
-                            # Check for group ID
                             group_id = None
                             if "dataMessage" in envelope:
                                 group_info = envelope["dataMessage"].get("groupInfo")
                                 if group_info:
-                                    print(f"DEBUG: Group info found: {json.dumps(group_info)}")
-                                    # The Signal REST API returns the full base64 ID in the 'groupId' field
-                                    group_id = group_info.get("groupId")
-                                    if not group_id:
-                                        # Some versions might use hex_id or similar
-                                        group_id = group_info.get("hex_id")
+                                    raw_group_id = group_info.get("groupId")
+                                    if raw_group_id:
+                                        if raw_group_id.startswith("group."):
+                                            group_id = raw_group_id
+                                        else:
+                                            # The Signal REST API often returns the internal base64 ID
+                                            # We need to ensure it has the group. prefix
+                                            # And if it's the raw ID, it needs to be base64 encoded
+                                            # Based on logs, pugWDcTi... is the internal ID.
+                                            # group.cHVnV0Rj... is the public ID.
+                                            # cHVnV0Rj... is base64(pugWDcTi...)
+                                            encoded_id = base64.b64encode(raw_group_id.encode()).decode()
+                                            group_id = f"group.{encoded_id}"
 
-                            # Check if it's a data message (text)
                             if "dataMessage" in envelope:
                                 data_msg = envelope["dataMessage"]
                                 text = data_msg.get("message", "")
                                 
                                 if text:
-                                    print(f"[Signal] New message from {source} (Group: {group_id}): {text}")
+                                    print(f"[Signal] New message from {source} (Resolved Group: {group_id}): {text}")
                                     
-                                    # Build the OSIA Task
-                                    # If it's a group message, we use the full group ID as the source
-                                    # Ensure it starts with 'group.' for the egress gateway
-                                    if group_id:
-                                        task_source = f"signal:group.{group_id}" if not group_id.startswith("group.") else f"signal:{group_id}"
-                                    else:
-                                        task_source = f"signal:{source}"
+                                    task_source = f"signal:{group_id}" if group_id else f"signal:{source}"
                                     
                                     task = {
                                         "source": task_source,
                                         "query": text
                                     }
                                     
-                                    # Push to Redis Orchestrator Queue
                                     await redis_client.rpush(TASK_QUEUE, json.dumps(task))
                                     print(f"[*] Task pushed to {TASK_QUEUE}")
                                     

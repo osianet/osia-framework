@@ -178,13 +178,14 @@ class OsiaOrchestrator:
                 
                 if mcp_res:
                     # Collect result and feed back to Gemini
+                    print(f"[*] MCP: Tool '{call.name}' returned data (length: {len(str(mcp_res))})")
                     research_results.append(str(mcp_res))
         
         if not research_results:
             return ""
 
         # Summarize findings
-        summary_prompt = f"Summarize these raw intelligence findings into a collection report for our desks:\n\n" + "\n\n".join(research_results)
+        summary_prompt = f"Analyze and summarize these raw intelligence findings into a comprehensive collection report for our specialized desks. Ensure you capture all factual data, quotes, and technical details accurately:\n\n" + "\n\n".join(research_results)
         summary_res = self.client.models.generate_content(model=self.model_id, contents=summary_prompt)
         return summary_res.text
 
