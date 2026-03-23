@@ -17,12 +17,10 @@ parser.add_argument("--command", required=True, help="Command to run the STDIO M
 parser.add_argument("--port", type=int, required=True, help="Port to serve SSE on")
 parser.add_argument("--name", required=True, help="Internal name for the MCP server")
 parser.add_argument("--env-path", help="Optional PYTHONPATH")
-parser.add_argument("remainder", nargs=argparse.REMAINDER, help="Arguments for the MCP server")
+parser.add_argument("--args", nargs=argparse.REMAINDER, help="Arguments for the MCP server", dest="remainder")
 
 args = parser.parse_args()
-mcp_args = args.remainder
-if mcp_args and mcp_args[0] == "--args":
-    mcp_args = mcp_args[1:]
+mcp_args = args.remainder or []
 
 # Initialize the MCP Server (The Bridge)
 mcp_server = Server(args.name)
