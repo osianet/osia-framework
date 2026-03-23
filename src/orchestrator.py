@@ -2,7 +2,8 @@ import os
 import json
 import re
 import asyncio
-import time
+import logging
+from pathlib import Path
 import httpx
 import redis.asyncio as redis
 from google import genai
@@ -12,25 +13,44 @@ from src.desks.anythingllm_client import AnythingLLMDesk
 from src.gateways.adb_device import ADBDevice
 from src.gateways.mcp_dispatcher import MCPDispatcher
 
+logger = logging.getLogger("osia.orchestrator")
+
+# Domains that trigger the ADB media-capture pipeline
+MEDIA_DOMAINS = ("instagram.com", "facebook.com", "tiktok.com", "youtube.com", "youtu.be")
+
+# Valid desk slugs the Chief of Staff can route to
+VALID_DESKS = {
+    "geopolitical-and-security-desk",
+    "cultural-and-theological-intelligence-desk",
+    "science-technology-and-commercial-desk",
+    "human-intelligence-and-profiling-desk",
+    "finance-and-economics-directorate",
+}
+
+
 class OsiaOrchestrator:
     """The central nervous system of OSIA. Routes tasks from Redis to the appropriate intelligence desks."""
-    
+
     def __init__(self):
         load_dotenv()
+        # Paths
+        self.base_dir = Path(os.getenv("OSIA_BASE_DIR", Path(__file__).resolve().parent.parent))
+
         # Redis Queue
         self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         self.redis = redis.from_url(self.redis_url)
         self.queue_name = os.getenv("OSIA_TASK_QUEUE", "osia:task_queue")
-        
+
         # Signal Gateway
         self.signal_api_url = os.getenv("SIGNAL_API_URL", "http://localhost:8081")
         self.signal_number = os.getenv("SIGNAL_SENDER_NUMBER")
-        
+        self._signal_client = httpx.AsyncClient(timeout=30.0)
+
         # Modern Gemini (Chief of Staff Logic)
         api_key = os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(api_key=api_key)
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
-        
+
         # API Clients
         self.desk_client = AnythingLLMDesk()
         self.adb = ADBDevice()
@@ -45,44 +65,36 @@ class OsiaOrchestrator:
                         description="Search Wikipedia for baseline factual context on a topic.",
                         parameters=types.Schema(
                             type="OBJECT",
-                            properties={
-                                "query": types.Schema(type="STRING", description="The search term.")
-                            },
-                            required=["query"]
-                        )
+                            properties={"query": types.Schema(type="STRING", description="The search term.")},
+                            required=["query"],
+                        ),
                     ),
                     types.FunctionDeclaration(
                         name="search_arxiv",
                         description="Search ArXiv for academic papers and technical pre-prints.",
                         parameters=types.Schema(
                             type="OBJECT",
-                            properties={
-                                "query": types.Schema(type="STRING", description="The academic search query.")
-                            },
-                            required=["query"]
-                        )
+                            properties={"query": types.Schema(type="STRING", description="The academic search query.")},
+                            required=["query"],
+                        ),
                     ),
                     types.FunctionDeclaration(
                         name="search_semantic_scholar",
                         description="Search Semantic Scholar for peer-reviewed scientific literature and citations.",
                         parameters=types.Schema(
                             type="OBJECT",
-                            properties={
-                                "query": types.Schema(type="STRING", description="The scientific search query.")
-                            },
-                            required=["query"]
-                        )
+                            properties={"query": types.Schema(type="STRING", description="The scientific search query.")},
+                            required=["query"],
+                        ),
                     ),
                     types.FunctionDeclaration(
                         name="get_youtube_transcript",
                         description="Retrieve the text transcript of a YouTube video for analysis.",
                         parameters=types.Schema(
                             type="OBJECT",
-                            properties={
-                                "url": types.Schema(type="STRING", description="The full YouTube video URL.")
-                            },
-                            required=["url"]
-                        )
+                            properties={"url": types.Schema(type="STRING", description="The full YouTube video URL.")},
+                            required=["url"],
+                        ),
                     ),
                     types.FunctionDeclaration(
                         name="get_current_time",
@@ -90,50 +102,68 @@ class OsiaOrchestrator:
                         parameters=types.Schema(
                             type="OBJECT",
                             properties={
-                                "timezone": types.Schema(type="STRING", description="The timezone name, use 'Etc/UTC'.", default="Etc/UTC")
+                                "timezone": types.Schema(
+                                    type="STRING", description="The timezone name, use 'Etc/UTC'.", default="Etc/UTC"
+                                )
                             },
-                            required=["timezone"]
-                        )
+                            required=["timezone"],
+                        ),
                     ),
                     types.FunctionDeclaration(
                         name="search_web",
                         description="Search the live web for current events, news, and real-time information using Tavily.",
                         parameters=types.Schema(
                             type="OBJECT",
-                            properties={
-                                "query": types.Schema(type="STRING", description="The search query.")
-                            },
-                            required=["query"]
-                        )
-                    )
+                            properties={"query": types.Schema(type="STRING", description="The search query.")},
+                            required=["query"],
+                        ),
+                    ),
                 ]
             )
         ]
 
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
+
+    async def shutdown(self):
+        """Gracefully close shared clients."""
+        await self._signal_client.aclose()
+        await self.desk_client.close()
+        await self.mcp.close_all()
+
+    # ------------------------------------------------------------------
+    # Signal messaging
+    # ------------------------------------------------------------------
+
     async def send_signal_message(self, recipient: str, message: str):
         """Sends a Signal message back to the requester."""
         url = f"{self.signal_api_url}/v2/send"
-        
-        # Ensure group IDs are properly prefixed for the API
+
         if not recipient.startswith("+") and not recipient.startswith("group."):
             recipient = f"group.{recipient}"
 
         payload = {
             "message": message,
             "number": self.signal_number,
-            "recipients": [recipient]
+            "recipients": [recipient],
         }
-        print(f"[*] Sending intelligence report to {recipient} via Signal...")
+        logger.info("Sending intelligence report to %s via Signal...", recipient)
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                print("[+] Report delivered successfully.")
-        except Exception as e:
-            print(f"[-] Failed to send Signal message: {e}")
+            response = await self._signal_client.post(url, json=payload)
+            response.raise_for_status()
+            logger.info("Report delivered successfully.")
+        except httpx.HTTPStatusError as e:
+            logger.error("Signal API returned %s: %s", e.response.status_code, e.response.text)
+        except httpx.RequestError as e:
+            logger.error("Failed to reach Signal API: %s", e)
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
 
     async def run_forever(self):
-        print(f"OSIA Orchestrator (Chief of Staff) is online. Listening to Redis queue: {self.queue_name}")
+        logger.info("OSIA Orchestrator online. Listening to Redis queue: %s", self.queue_name)
         while True:
             try:
                 result = await self.redis.blpop(self.queue_name, timeout=0)
@@ -141,163 +171,235 @@ class OsiaOrchestrator:
                     _, task_json = result
                     task = json.loads(task_json)
                     await self.process_task(task)
+            except redis.ConnectionError as e:
+                logger.error("Redis connection lost: %s — retrying in 5s", e)
+                await asyncio.sleep(5)
             except Exception as e:
-                print(f"Error processing task: {e}")
+                logger.exception("Unexpected error processing task: %s", e)
+
+    # ------------------------------------------------------------------
+    # MCP tool dispatch (maps Gemini function names → MCP calls)
+    # ------------------------------------------------------------------
+
+    async def _dispatch_tool(self, call) -> str | None:
+        """Execute a single Gemini function-call via the appropriate MCP server."""
+        name = call.name
+        args = dict(call.args) if call.args else {}
+
+        if name == "search_wikipedia":
+            return await self.mcp.call_tool("wikipedia", "search_pages", {"input": {"query": args["query"]}})
+        elif name == "search_arxiv":
+            return await self.mcp.call_tool("arxiv", "search_papers", {"query": args["query"]})
+        elif name == "search_semantic_scholar":
+            return await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": args["query"]})
+        elif name == "get_youtube_transcript":
+            return await self._extract_youtube_transcript(args["url"])
+        elif name == "get_current_time":
+            return await self.mcp.call_tool("time", "get_current_time", {"timezone": args.get("timezone", "Etc/UTC")})
+        elif name == "search_web":
+            return await self.mcp.call_tool("tavily", "tavily_search", {"query": args["query"]})
+        else:
+            logger.warning("Unknown tool requested by Gemini: %s", name)
+            return None
+
+    # ------------------------------------------------------------------
+    # YouTube transcript extraction (3-tier fallback)
+    # ------------------------------------------------------------------
+
+    async def _extract_youtube_transcript(self, video_url: str) -> str | None:
+        logger.info("Attempting transcript extraction for: %s", video_url)
+        mcp_res = None
+
+        # 1. yt-dlp (software)
+        try:
+            yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
+            user_agent = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            cmd = [
+                str(yt_dlp_bin), "--skip-download",
+                "--write-auto-subs", "--sub-lang", "en.*", "--convert-subs", "srt",
+                "--output", "yt_intel", "--user-agent", user_agent, "--geo-bypass",
+            ]
+            cookies_path = self.base_dir / "config" / "youtube_cookies.txt"
+            if cookies_path.exists():
+                logger.info("Using YouTube Premium cookies.")
+                cmd.extend(["--cookies", str(cookies_path)])
+            cmd.append(video_url)
+
+            proc = await asyncio.to_thread(
+                __import__("subprocess").run, cmd,
+                capture_output=True, text=True, cwd=str(self.base_dir),
+            )
+            srt_path = self.base_dir / "yt_intel.en.srt"
+            if srt_path.exists():
+                mcp_res = srt_path.read_text()
+                srt_path.unlink()
+        except Exception as e:
+            logger.warning("yt-dlp failed: %s", e)
+
+        # 2. MCP fallback
+        if not mcp_res:
+            logger.info("Software extraction failed. Falling back to MCP...")
+            try:
+                mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
+                if "Error: Request to YouTube was blocked" in str(mcp_res):
+                    mcp_res = None
+            except Exception as e:
+                logger.warning("MCP YouTube fallback failed: %s", e)
+                mcp_res = None
+
+        # 3. Physical capture (PHINT)
+        if not mcp_res:
+            logger.warning("All software extraction blocked. Triggering PHINT capture...")
+            try:
+                mcp_res = await self.process_media_link(video_url)
+                mcp_res = f"PHYSICAL INTERCEPT REPORT:\n{mcp_res}"
+            except Exception as e:
+                mcp_res = f"ERROR: All extraction methods failed, including physical capture. {e}"
+
+        logger.info("YouTube intelligence length: %d", len(str(mcp_res)))
+        return mcp_res
+
+    # ------------------------------------------------------------------
+    # Research loop — proper multi-turn tool calling
+    # ------------------------------------------------------------------
 
     async def handle_research(self, query: str) -> str:
-        """Executes a research loop using MCP tools if Gemini requests them."""
-        print(f"[*] Chief of Staff initiating research loop for: {query}")
-        
-        # Initial request to see if tools are needed
-        response = self.client.models.generate_content(
-            model=self.model_id,
-            contents=query,
-            config=types.GenerateContentConfig(tools=self.tools)
-        )
+        """Executes a multi-turn research loop, feeding tool results back to Gemini."""
+        logger.info("Chief of Staff initiating research loop for: %s", query)
 
-        research_results = []
-        
-        for part in response.candidates[0].content.parts:
-            if part.function_call:
+        config = types.GenerateContentConfig(tools=self.tools)
+        contents = [types.Content(role="user", parts=[types.Part(text=query)])]
+
+        max_rounds = 5  # safety cap to avoid infinite tool loops
+        for _round in range(max_rounds):
+            response = self.client.models.generate_content(
+                model=self.model_id, contents=contents, config=config,
+            )
+
+            candidate = response.candidates[0]
+            # Append the model's response to the conversation
+            contents.append(candidate.content)
+
+            # Collect all function calls from this turn
+            function_calls = [p for p in candidate.content.parts if p.function_call]
+            if not function_calls:
+                # Model is done calling tools — return its final text
+                text_parts = [p.text for p in candidate.content.parts if p.text]
+                return "\n".join(text_parts)
+
+            # Execute each tool and build FunctionResponse parts
+            response_parts = []
+            for part in function_calls:
                 call = part.function_call
-                print(f"[*] Gemini requested tool: {call.name}")
-                
-                mcp_res = None
-                if call.name == "search_wikipedia":
-                    mcp_res = await self.mcp.call_tool("wikipedia", "search_pages", {"input": {"query": call.args["query"]}})
-                elif call.name == "search_arxiv":
-                    mcp_res = await self.mcp.call_tool("arxiv", "search_papers", {"query": call.args["query"]})
-                elif call.name == "search_semantic_scholar":
-                    mcp_res = await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": call.args["query"]})
-                elif call.name == "get_youtube_transcript":
-                    video_url = call.args["url"]
-                    print(f"[*] OSIA: Attempting robust transcript extraction for: {video_url}")
-                    
-                    mcp_res = None
-                    try:
-                        # 1. Try yt-dlp (Software)
-                        import subprocess
-                        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                        
-                        cmd = [
-                            "/home/ubuntu/osia-framework/.venv/bin/yt-dlp", "--skip-download", 
-                            "--write-auto-subs", "--sub-lang", "en.*", "--convert-subs", "srt", 
-                            "--output", "yt_intel", "--user-agent", user_agent, "--geo-bypass",
-                        ]
+                logger.info("Gemini requested tool: %s", call.name)
+                try:
+                    result = await self._dispatch_tool(call)
+                    result_str = str(result) if result else "No results found."
+                except Exception as e:
+                    logger.error("Tool %s failed: %s", call.name, e)
+                    result_str = f"Tool error: {e}"
 
-                        # Use David's Premium Cookies if available
-                        cookies_path = "/home/ubuntu/osia-framework/config/youtube_cookies.txt"
-                        if os.path.exists(cookies_path):
-                            print("[*] OSIA: Using David Thorne's YouTube Premium cookies.")
-                            cmd.extend(["--cookies", cookies_path])
-                        
-                        cmd.append(video_url)
-                        proc = subprocess.run(cmd, capture_output=True, text=True, cwd="/home/ubuntu/osia-framework")
-                        
-                        if os.path.exists("/home/ubuntu/osia-framework/yt_intel.en.srt"):
-                            with open("/home/ubuntu/osia-framework/yt_intel.en.srt", "r") as f:
-                                mcp_res = f.read()
-                            os.remove("/home/ubuntu/osia-framework/yt_intel.en.srt")
-                    except Exception as e:
-                        print(f"[*] yt-dlp failed: {e}")
+                logger.info("Tool '%s' returned data (length: %d)", call.name, len(result_str))
+                response_parts.append(
+                    types.Part(function_response=types.FunctionResponse(
+                        name=call.name,
+                        response={"result": result_str},
+                    ))
+                )
 
-                    # 2. Try MCP (Software Fallback)
-                    if not mcp_res:
-                        print("[*] Software extraction failed/blocked. Falling back to MCP...")
-                        try:
-                            mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
-                            if "Error: Request to YouTube was blocked" in str(mcp_res):
-                                mcp_res = None # Force physical fallback
-                        except:
-                            mcp_res = None
+            # Feed tool results back to Gemini for the next round
+            contents.append(types.Content(role="user", parts=response_parts))
 
-                    # 3. Try Physical Capture (PHINT Fallback - The Ghost Persona)
-                    if not mcp_res:
-                        print("[!] ALL SOFTWARE EXTRACTION BLOCKED. Triggering PHINT (Physical Intelligence) capture...")
-                        try:
-                            mcp_res = await self.process_media_link(video_url)
-                            mcp_res = f"PHYSICAL INTERCEPT REPORT:\n{mcp_res}"
-                        except Exception as phint_e:
-                            mcp_res = f"ERROR: All extraction methods failed, including physical capture. {phint_e}"
-                    
-                    print(f"DEBUG: Final YouTube Intelligence (length: {len(str(mcp_res))})")
-                elif call.name == "get_current_time":
-                    mcp_res = await self.mcp.call_tool("time", "get_current_time", {"timezone": call.args.get("timezone", "Etc/UTC")})
-                elif call.name == "search_web":
-                    mcp_res = await self.mcp.call_tool("tavily", "tavily_search", {"query": call.args["query"]})
-                
-                if mcp_res:
-                    # Collect result and feed back to Gemini
-                    print(f"[*] MCP: Tool '{call.name}' returned data (length: {len(str(mcp_res))})")
-                    research_results.append(str(mcp_res))
-        
-        if not research_results:
-            return ""
+        # If we exhausted rounds, summarize what we have
+        logger.warning("Research loop hit max rounds (%d)", max_rounds)
+        text_parts = [p.text for p in contents[-1].parts if hasattr(p, "text") and p.text]
+        return "\n".join(text_parts) if text_parts else ""
 
-        # Summarize findings
-        summary_prompt = f"Analyze and summarize these raw intelligence findings into a comprehensive collection report for our specialized desks. Ensure you capture all factual data, quotes, and technical details accurately:\n\n" + "\n\n".join(research_results)
-        summary_res = self.client.models.generate_content(model=self.model_id, contents=summary_prompt)
-        return summary_res.text
+    # ------------------------------------------------------------------
+    # ADB media capture
+    # ------------------------------------------------------------------
 
     async def process_media_link(self, url: str) -> str:
         """Uses ADB to capture media from a URL, then analyzes it with Gemini."""
-        print(f"[*] Triggering ADB Capture for URL: {url}")
-        self.adb.open_url(url)
+        logger.info("Triggering ADB capture for URL: %s", url)
+        await self.adb.open_url(url)
         await asyncio.sleep(5)
         remote_path = "/sdcard/osia_capture.mp4"
-        local_path = "osia_capture.mp4"
-        self.adb.record_screen(remote_path=remote_path, time_limit=15)
-        self.adb.pull_file(remote_path, local_path)
-        
-        print("[*] Uploading captured video to Gemini...")
+        local_path = str(self.base_dir / "osia_capture.mp4")
+        await self.adb.record_screen(remote_path=remote_path, time_limit=15)
+        await self.adb.pull_file(remote_path, local_path)
+
+        logger.info("Uploading captured video to Gemini...")
         video_file = self.client.files.upload(file=local_path)
         while video_file.state.name == "PROCESSING":
             await asyncio.sleep(2)
             video_file = self.client.files.get(name=video_file.name)
-            
-        prompt = "Watch this intercepted short-form video. Transcribe any spoken audio, describe the visual context, identify any text on screen, and summarize the core message or propaganda narrative."
-        response = self.client.models.generate_content(model=self.model_id, contents=[video_file, prompt])
-        
-        if os.path.exists(local_path): os.remove(local_path)
+
+        prompt = (
+            "Watch this intercepted short-form video. Transcribe any spoken audio, "
+            "describe the visual context, identify any text on screen, and summarize "
+            "the core message or propaganda narrative."
+        )
+        response = self.client.models.generate_content(
+            model=self.model_id, contents=[video_file, prompt]
+        )
+
+        capture_path = Path(local_path)
+        if capture_path.exists():
+            capture_path.unlink()
         return response.text
+
+    # ------------------------------------------------------------------
+    # Task processing
+    # ------------------------------------------------------------------
+
+    def _safe_title(self, text: str, max_len: int = 50) -> str:
+        return (text[:max_len] + "...") if len(text) > max_len else text
 
     async def process_task(self, task: dict):
         """Main routing logic for an incoming OSINT task."""
         source = task.get("source", "unknown")
         original_query = task.get("query", "")
         query = original_query
-        
-        print(f"\n[+] Received new task from {source}: {query}")
-        
+
+        logger.info("Received new task from %s: %s", source, query)
+
         # 1. Media Link Interception
-        url_match = re.search(r'(https?://[^\s]+)', query)
+        url_match = re.search(r"(https?://[^\s]+)", query)
         if url_match:
             url = url_match.group(1)
-            if any(domain in url.lower() for domain in ['instagram.com', 'facebook.com', 'tiktok.com', 'youtube.com', 'youtu.be']):
+            if any(domain in url.lower() for domain in MEDIA_DOMAINS):
                 try:
                     media_analysis = await self.process_media_link(url)
-                    # Truncate title to avoid ENAMETOOLONG
-                    safe_title = (url[:50] + '...') if len(url) > 50 else url
-                    await self.desk_client.ingest_raw_data("collection-directorate", media_analysis, f"Media Intercept: {safe_title}")
+                    await self.desk_client.ingest_raw_data(
+                        "collection-directorate",
+                        media_analysis,
+                        f"Media Intercept: {self._safe_title(url)}",
+                    )
                     query = f"A media intercept from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
                 except Exception as e:
-                    print(f"[-] Media interception failed: {e}")
+                    logger.error("Media interception failed: %s", e)
 
-        # 2. Automated Research (Wikipedia/ArXiv)
+        # 2. Automated Research (multi-turn tool calling)
         try:
             research_summary = await self.handle_research(original_query)
             if research_summary:
-                print("[*] Research complete. Injecting into Collection Desk...")
-                # Truncate title to avoid ENAMETOOLONG (AnythingLLM limits)
-                safe_title = (original_query[:50] + '...') if len(original_query) > 50 else original_query
-                await self.desk_client.ingest_raw_data("collection-directorate", research_summary, f"Research: {safe_title}")
+                logger.info("Research complete. Injecting into Collection Desk...")
+                await self.desk_client.ingest_raw_data(
+                    "collection-directorate",
+                    research_summary,
+                    f"Research: {self._safe_title(original_query)}",
+                )
                 query = f"Baseline research summary for this topic:\n{research_summary}\n\nOriginal Request: {query}"
         except Exception as e:
-            print(f"[-] Automated research failed: {e}")
+            logger.error("Automated research failed: %s", e)
 
-        # Step 1: Chief of Staff develops a plan based on the Core Directives
-        with open("DIRECTIVES.md", "r") as f:
-            mandate = f.read()
+        # 3. Chief of Staff routes to the appropriate desk
+        directives_path = self.base_dir / "DIRECTIVES.md"
+        mandate = directives_path.read_text()
 
         plan_prompt = f"""
         {mandate}
@@ -315,20 +417,23 @@ class OsiaOrchestrator:
 
         Reply with ONLY the slug of the desk, nothing else.
         """
-        
+
         try:
             route_res = self.client.models.generate_content(model=self.model_id, contents=plan_prompt)
             assigned_desk = route_res.text.strip()
-            print(f"[*] Task routed to: {assigned_desk}")
-            
-            print(f"[*] Awaiting analysis from {assigned_desk}...")
+
+            # Validate the desk slug to avoid routing to a non-existent workspace
+            if assigned_desk not in VALID_DESKS:
+                logger.warning("Gemini returned invalid desk '%s', defaulting to geopolitical", assigned_desk)
+                assigned_desk = "geopolitical-and-security-desk"
+
+            logger.info("Task routed to: %s", assigned_desk)
             analysis = await self.desk_client.send_task(assigned_desk, query)
-            print(f"\n[+] Intelligence Synthesis Complete:\n{analysis}")
-            
+            logger.info("Intelligence synthesis complete.")
+
             if source.startswith("signal:"):
-                # source is e.g. "signal:+123" or "signal:group.abc"
                 recipient = source[len("signal:"):]
                 await self.send_signal_message(recipient, analysis)
-            
+
         except Exception as e:
-            print(f"[-] Orchestration or Desk Analysis Failed: {e}")
+            logger.exception("Orchestration or desk analysis failed: %s", e)

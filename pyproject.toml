@@ -1,7 +1,7 @@
 [project]
 name = "osia-framework"
 version = "0.1.0"
-description = "Add your description here"
+description = "Event-driven multi-agent intelligence orchestration framework for automated OSINT collection, analysis, and reporting."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
