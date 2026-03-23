@@ -1,21 +1,32 @@
 import asyncio
+import logging
 import os
 from dotenv import load_dotenv
 from src.orchestrator import OsiaOrchestrator
 
+
+def setup_logging():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
+
 async def main():
-    # Load environment variables
     load_dotenv()
-    
-    print("Initializing OSIA Framework...")
-    
-    # Initialize and run the Orchestrator
+    setup_logging()
+
+    logger = logging.getLogger("osia")
+    logger.info("Initializing OSIA Framework...")
+
     orchestrator = OsiaOrchestrator()
-    
     try:
         await orchestrator.run_forever()
     except KeyboardInterrupt:
-        print("\nShutting down OSIA Orchestrator...")
+        logger.info("Shutting down OSIA Orchestrator...")
+    finally:
+        await orchestrator.shutdown()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
