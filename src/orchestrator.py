@@ -171,6 +171,7 @@ class OsiaOrchestrator:
                     mcp_res = await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": call.args["query"]})
                 elif call.name == "get_youtube_transcript":
                     mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": call.args["url"]})
+                    print(f"DEBUG: YouTube Transcript Raw: {str(mcp_res)[:500]}...")
                 elif call.name == "get_current_time":
                     mcp_res = await self.mcp.call_tool("time", "get_current_time", {"timezone": call.args.get("timezone", "Etc/UTC")})
                 elif call.name == "search_web":
@@ -276,9 +277,8 @@ class OsiaOrchestrator:
             print(f"\n[+] Intelligence Synthesis Complete:\n{analysis}")
             
             if source.startswith("signal:"):
-                recipient = source.split(":")[1]
-                # If we received from a group, source will be signal:group.xyz
-                # The send_signal_message already handles prefixing
+                # source is e.g. "signal:+123" or "signal:group.abc"
+                recipient = source[len("signal:"):]
                 await self.send_signal_message(recipient, analysis)
             
         except Exception as e:
