@@ -171,60 +171,49 @@ class OsiaOrchestrator:
                     mcp_res = await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": call.args["query"]})
                 elif call.name == "get_youtube_transcript":
                     video_url = call.args["url"]
-                    print(f"[*] OSIA: Extracting native transcript using yt-dlp for: {video_url}")
+                    print(f"[*] OSIA: Attempting robust transcript extraction for: {video_url}")
                     
+                    mcp_res = None
                     try:
-                        # Extract transcript using yt-dlp (get only the subtitles)
-                        # We use --get-description --get-title for metadata as well
-                        cmd = [
-                            "/home/ubuntu/osia-framework/.venv/bin/python", "-m", "yt_dlp",
-                            "--skip-download",
-                            "--write-auto-subs",
-                            "--sub-format", "srt/vtt/best",
-                            "--convert-subs", "srt",
-                            "--print", "subtitles",
-                            video_url
-                        ]
-                        # Actually yt-dlp has a cleaner way via subprocess
+                        # 1. Try yt-dlp (Software)
                         import subprocess
-                        # Use a common browser user agent to avoid being blocked
                         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                        
                         proc = subprocess.run(
                             [
-                                "/home/ubuntu/osia-framework/.venv/bin/yt-dlp", 
-                                "--skip-download", 
-                                "--get-title", 
-                                "--write-auto-subs", 
-                                "--sub-lang", "en.*", 
-                                "--convert-subs", "srt", 
-                                "--output", "yt_intel", 
-                                "--user-agent", user_agent,
-                                "--geo-bypass",
-                                video_url
+                                "/home/ubuntu/osia-framework/.venv/bin/yt-dlp", "--skip-download", 
+                                "--write-auto-subs", "--sub-lang", "en.*", "--convert-subs", "srt", 
+                                "--output", "yt_intel", "--user-agent", user_agent, "--geo-bypass", video_url
                             ],
                             capture_output=True, text=True, cwd="/home/ubuntu/osia-framework"
                         )
-                        video_title = proc.stdout.strip().split("\n")[0]
                         
-                        # Find the generated srt file
-                        transcript_text = f"Title: {video_title}\n\n"
                         if os.path.exists("/home/ubuntu/osia-framework/yt_intel.en.srt"):
                             with open("/home/ubuntu/osia-framework/yt_intel.en.srt", "r") as f:
-                                transcript_text += f.read()
+                                mcp_res = f.read()
                             os.remove("/home/ubuntu/osia-framework/yt_intel.en.srt")
-                        else:
-                            # Fallback to MCP if yt-dlp didn't get subs
-                            print("[*] yt-dlp failed to find subtitles, falling back to MCP...")
-                            mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
-                            transcript_text = str(mcp_res)
-                        
-                        mcp_res = transcript_text
                     except Exception as e:
-                        print(f"[-] yt-dlp process failed: {e}. Falling back to MCP...")
-                        mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
+                        print(f"[*] yt-dlp failed: {e}")
+
+                    # 2. Try MCP (Software Fallback)
+                    if not mcp_res:
+                        print("[*] Software extraction failed/blocked. Falling back to MCP...")
+                        try:
+                            mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
+                            if "Error: Request to YouTube was blocked" in str(mcp_res):
+                                mcp_res = None # Force physical fallback
+                        except:
+                            mcp_res = None
+
+                    # 3. Try Physical Capture (PHINT Fallback - The Ghost Persona)
+                    if not mcp_res:
+                        print("[!] ALL SOFTWARE EXTRACTION BLOCKED. Triggering PHINT (Physical Intelligence) capture...")
+                        try:
+                            mcp_res = await self.process_media_link(video_url)
+                            mcp_res = f"PHYSICAL INTERCEPT REPORT:\n{mcp_res}"
+                        except Exception as phint_e:
+                            mcp_res = f"ERROR: All extraction methods failed, including physical capture. {phint_e}"
                     
-                    print(f"DEBUG: YouTube Transcript Raw: {str(mcp_res)[:500]}...")
+                    print(f"DEBUG: Final YouTube Intelligence (length: {len(str(mcp_res))})")
                 elif call.name == "get_current_time":
                     mcp_res = await self.mcp.call_tool("time", "get_current_time", {"timezone": call.args.get("timezone", "Etc/UTC")})
                 elif call.name == "search_web":

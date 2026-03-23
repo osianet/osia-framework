@@ -17,14 +17,6 @@ class AnythingLLMDesk:
         """Sends a query to a specific workspace and returns the response."""
         url = f"{self.base_url}/api/v1/workspace/{workspace_slug}/chat"
         
-        # Define model overrides for specialized desks
-        model_overrides = {
-            "finance-and-economics-directorate": "gpt-4o",
-            "geopolitical-and-security-desk": "gemini-2.5-flash",
-            "cultural-and-theological-intelligence-desk": "gemini-2.5-flash",
-            "the-watch-floor": "gemini-2.5-flash"
-        }
-
         # We attach the collection-directorate documents to every query 
         # so the specialized desk can "read" the latest raw intel.
         payload = {
@@ -36,11 +28,6 @@ class AnythingLLMDesk:
                 }
             ]
         }
-
-        if workspace_slug in model_overrides:
-            # Note: AnythingLLM API might need model custom settings updated
-            # For now we use the system defaults but ensure the slug is correct.
-            pass
         
         async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(url, headers=self.headers, json=payload)
