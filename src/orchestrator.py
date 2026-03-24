@@ -471,13 +471,13 @@ class OsiaOrchestrator:
 
         You are the Chief of Staff for OSIA. A new Request for Information (RFI) has come in: '{query}'
 
-        Based on the Socialist Intelligence Mandate above, which of our specialized desks should analyze this? Choose ONE:
-        - geopolitical-and-security-desk
-        - cultural-and-theological-intelligence-desk
-        - science-technology-and-commercial-desk
-        - human-intelligence-and-profiling-desk
-        - finance-and-economics-directorate
-        - cyber-intelligence-and-warfare-desk
+        Which of our specialized desks should analyze this? Choose ONE:
+        - geopolitical-and-security-desk: Geopolitical forecasting, conflict analysis, and national sovereignty. (Has Country Intel tools)
+        - cultural-and-theological-intelligence-desk: Sociological drivers, religious movements, and cultural drivers. (Has Cultural Observatory)
+        - science-technology-and-commercial-desk: Technical breakthroughs, software analysis, and ecological tech. (Has GitHub Intel)
+        - human-intelligence-and-profiling-desk: Behavioral profiling, digital personas, and tracking individuals. (Has Username Recon)
+        - finance-and-economics-directorate: Capital flows, labor rights, and market dynamics. (Has Stock Market Intel)
+        - cyber-intelligence-and-warfare-desk: Digital infrastructure, state-sponsored cyber-warfare, and technical network reconnaissance. (Has Kali Linux Sandbox for Nmap/Whois/Dig)
 
         Reply with ONLY the slug of the desk, nothing else.
         """
