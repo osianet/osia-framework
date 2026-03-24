@@ -757,16 +757,23 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         if action == "like" and self.stats.likes < self._daily_like_cap:
             logger.info("[%s] Liking: %s", name, decision.get("post_summary", "")[:60])
 
+            # For feed-based apps (Instagram, Facebook) the interaction buttons are
+            # often below the fold. Tap the post to open it — buttons appear on the
+            # right rail / bottom bar — then back out after interacting.
+            feed_app = app_name.lower() in ("instagram", "facebook")
+            if feed_app:
+                w, h = await self.adb.get_screen_size()
+                await self.adb.tap(w // 2, h // 2)
+                await asyncio.sleep(1.5)
+
             # --- Accessibility tree approach (fast, no vision cost) ---
             liked = False
             try:
                 nodes = await self.adb.dump_ui_tree()
-                # Try known content-desc patterns across Instagram, TikTok, Facebook
                 for desc in ("like", "like this", "likes", "heart", "thumbs up"):
                     if await self.adb.tap_element(nodes, content_desc=desc):
                         liked = True
                         break
-                # Instagram resource-id fallback
                 if not liked:
                     for rid in ("row_feed_button_like", "like_button", "btn_like"):
                         if await self.adb.tap_element(nodes, resource_id=rid):
@@ -781,8 +788,9 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 result = await self.agent.execute_custom(
                     "",
                     "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
-                    "Look for the interaction bar (like, comment, share) below the image or text. "
-                    "DO NOT tap the center of an image or video, as this will full-screen it and hide the buttons. "
+                    "Look for the interaction bar (like, comment, share) below the image or text, "
+                    "or along the right-hand side of the screen. "
+                    "DO NOT tap the center of an image or video. "
                     "If already liked, just use 'done'. Once liked, use 'done'.",
                 )
                 liked = result.success
@@ -790,7 +798,11 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             if liked:
                 self.stats.likes += 1
             else:
-                logger.info("[%s] Like failed, pressing back", name)
+                logger.info("[%s] Like failed", name)
+
+            if feed_app:
+                await self.adb.press_back()
+            elif not liked:
                 await self.adb.press_back()
             return
 
@@ -799,6 +811,13 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             if comment:
                 logger.info("[%s] Commenting: %s", name, comment[:80])
                 commented = False
+
+                # Open the post first on feed-based apps so buttons are visible
+                feed_app = app_name.lower() in ("instagram", "facebook")
+                if feed_app:
+                    w, h = await self.adb.get_screen_size()
+                    await self.adb.tap(w // 2, h // 2)
+                    await asyncio.sleep(1.5)
 
                 # --- Accessibility tree approach ---
                 try:
@@ -816,7 +835,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                                 break
 
                     if comment_tapped:
-                        await asyncio.sleep(1.5)  # wait for comment sheet to open
+                        await asyncio.sleep(1.5)
                         # Step 2: find the text input and type
                         nodes = await self.adb.dump_ui_tree()
                         input_tapped = False
@@ -825,7 +844,6 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                                 input_tapped = True
                                 break
                         if not input_tapped:
-                            # Fall back to any EditText on screen
                             for node in nodes:
                                 if "EditText" in node["class_name"]:
                                     await self.adb.tap(node["cx"], node["cy"])
@@ -856,24 +874,27 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                         "",
                         f"You are looking at a social media post. Follow these steps exactly:\n\n"
                         f"1. Find the comment icon/button (speech bubble icon, usually in the row of "
-                        f"   like/comment/share icons BELOW the post content). Tap it.\n"
+                        f"   like/comment/share icons BELOW the post content or along the right side). Tap it.\n"
                         f"2. Wait for the comments section to open. A text input field will appear "
                         f"   near the BOTTOM of the screen.\n"
                         f"3. Use 'tap_and_type' to tap the CENTER of that input field and type "
                         f"   this comment exactly:\n\n"
                         f"   \"{comment}\"\n\n"
-                        f"4. Tap the Post/Send button (usually to the right of the input field or "
-                        f"   on the keyboard) to submit.\n"
+                        f"4. Tap the Post/Send button to submit.\n"
                         f"5. Once the comment appears in the list, use 'done'.\n\n"
-                        f"IMPORTANT: Do NOT tap anywhere on the post image or video — only tap the "
-                        f"comment icon in the action bar, then the input field at the bottom.",
+                        f"IMPORTANT: Do NOT tap anywhere on the post image or video.",
                     )
                     commented = result.success
 
                 if commented:
                     self.stats.comments += 1
                 else:
-                    logger.info("[%s] Comment failed, pressing back", name)
+                    logger.info("[%s] Comment failed", name)
+
+                # Always back out of the post view on feed apps
+                if feed_app:
+                    await self.adb.press_back()
+                elif not commented:
                     await self.adb.press_back()
                 return
 
