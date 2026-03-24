@@ -691,37 +691,11 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
     async def _maybe_create_post(self, app_name: str) -> bool:
         """
-        Decide whether to create an original post this session.
-        ~25% chance per session, respects daily post cap.
-        Returns True if a post was created.
+        Original post creation is disabled until we have a proper image+text
+        generation pipeline. Picking random photos from the gallery is not
+        acceptable behaviour. Returns False unconditionally.
         """
-        if self.stats.posts >= self._daily_post_cap:
-            return False
-
-        # 25% chance to post, slightly higher in the evening (people post more then)
-        local_hour = (datetime.now(timezone.utc) + timedelta(hours=self._tz_offset)).hour
-        post_chance = 0.30 if 17 <= local_hour <= 22 else 0.20
-        if random.random() > post_chance:
-            return False
-
-        logger.info("[%s] Generating original post for %s...", self.persona_name, app_name)
-        content = await self._generate_post_content(app_name)
-        if not content:
-            return False
-
-        post_text = content["text"]
-        logger.info(
-            "[%s] Posting (%s): %s",
-            self.persona_name, content.get("type", "?"), post_text[:80],
-        )
-
-        success = await self._create_post_on_app(app_name, post_text)
-        if success:
-            self.stats.posts += 1
-            logger.info("[%s] Post created successfully (today: %d/%d)", self.persona_name, self.stats.posts, self._daily_post_cap)
-        else:
-            logger.warning("[%s] Failed to create post on %s", self.persona_name, app_name)
-        return success
+        return False
 
     async def _execute_interaction(self, decision: dict, app_name: str = ""):
         """Execute the decided interaction on the current screen."""
@@ -750,10 +724,19 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 logger.info("[%s] Commenting: %s", name, comment[:80])
                 result = await self.agent.execute_custom(
                     "",
-                    f"Tap the comment button/icon on the post currently visible. "
-                    f"Tap the comment input field, type this comment, then tap Post/Send:\n\n"
-                    f"\"{comment}\"\n\n"
-                    f"Once posted, press back to return to the feed and use 'done'.",
+                    f"You are looking at a social media post. Follow these steps exactly:\n\n"
+                    f"1. Find the comment icon/button (speech bubble icon, usually in the row of "
+                    f"   like/comment/share icons BELOW the post content). Tap it.\n"
+                    f"2. Wait for the comments section to open. A text input field will appear "
+                    f"   near the BOTTOM of the screen.\n"
+                    f"3. Use 'tap_and_type' to tap the CENTER of that input field and type "
+                    f"   this comment exactly:\n\n"
+                    f"   \"{comment}\"\n\n"
+                    f"4. Tap the Post/Send button (usually to the right of the input field or "
+                    f"   on the keyboard) to submit.\n"
+                    f"5. Once the comment appears in the list, use 'done'.\n\n"
+                    f"IMPORTANT: Do NOT tap anywhere on the post image or video — only tap the "
+                    f"comment icon in the action bar, then the input field at the bottom.",
                 )
                 if result.success:
                     self.stats.comments += 1
