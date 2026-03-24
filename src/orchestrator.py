@@ -17,6 +17,17 @@ from src.agents.social_media_agent import SocialMediaAgent
 
 logger = logging.getLogger("osia.orchestrator")
 
+
+def _extract_mcp_text(result) -> str:
+    """Extract plain text from an MCP CallToolResult."""
+    if isinstance(result, str):
+        return result
+    if hasattr(result, "content") and result.content:
+        return "\n".join(
+            block.text for block in result.content if hasattr(block, "text")
+        )
+    return str(result)
+
 # Domains that trigger the ADB media-capture pipeline
 MEDIA_DOMAINS = ("instagram.com", "facebook.com", "tiktok.com")
 
@@ -243,17 +254,17 @@ class OsiaOrchestrator:
         args = dict(call.args) if call.args else {}
 
         if name == "search_wikipedia":
-            return await self.mcp.call_tool("wikipedia", "search_pages", {"input": {"query": args["query"]}})
+            return _extract_mcp_text(await self.mcp.call_tool("wikipedia", "search_pages", {"input": {"query": args["query"]}}))
         elif name == "search_arxiv":
-            return await self.mcp.call_tool("arxiv", "search_papers", {"query": args["query"]})
+            return _extract_mcp_text(await self.mcp.call_tool("arxiv", "search_papers", {"query": args["query"]}))
         elif name == "search_semantic_scholar":
-            return await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": args["query"]})
+            return _extract_mcp_text(await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": args["query"]}))
         elif name == "get_youtube_transcript":
             return await self._extract_youtube_transcript(args["url"])
         elif name == "get_current_time":
-            return await self.mcp.call_tool("time", "get_current_time", {"timezone": args.get("timezone", "Etc/UTC")})
+            return _extract_mcp_text(await self.mcp.call_tool("time", "get_current_time", {"timezone": args.get("timezone", "Etc/UTC")}))
         elif name == "search_web":
-            return await self.mcp.call_tool("tavily", "tavily_search", {"query": args["query"]})
+            return _extract_mcp_text(await self.mcp.call_tool("tavily", "tavily_search", {"query": args["query"]}))
         elif name == "read_social_comments":
             result = await self.social_agent.read_comments(args["url"])
             return result.data if result.success else f"FAILED: {result.error}"
@@ -311,8 +322,9 @@ class OsiaOrchestrator:
         if not mcp_res:
             logger.info("Software extraction failed. Falling back to MCP...")
             try:
-                mcp_res = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
-                if "Error: Request to YouTube was blocked" in str(mcp_res):
+                result = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
+                mcp_res = _extract_mcp_text(result)
+                if mcp_res and "Error: Request to YouTube was blocked" in mcp_res:
                     mcp_res = None
             except Exception as e:
                 logger.warning("MCP YouTube fallback failed: %s", e)
