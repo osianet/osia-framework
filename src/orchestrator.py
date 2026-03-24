@@ -741,7 +741,7 @@ class OsiaOrchestrator:
 
         try:
             route_res = self.client.models.generate_content(model=self.model_id, contents=plan_prompt)
-            assigned_desk = route_res.text.strip()
+            assigned_desk = (route_res.text or "").strip()
 
             # Validate the desk slug to avoid routing to a non-existent workspace
             if assigned_desk not in VALID_DESKS:
