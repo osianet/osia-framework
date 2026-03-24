@@ -400,6 +400,12 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             await self.adb.tap(w // 2, h // 2)
             await asyncio.sleep(1)
 
+            # Unmute and raise volume so screenrecord captures audio.
+            # Press volume-up several times to ensure we're not at zero.
+            for _ in range(5):
+                await self.adb._run_checked(["shell", "input", "keyevent", "24"])  # KEYCODE_VOLUME_UP
+            await asyncio.sleep(0.3)
+
             logger.info("[%s] Screen recording fallback for %ds...", self.persona_name, duration)
             cmd = self.adb._build_cmd([
                 "shell", "screenrecord", "--time-limit", str(duration), remote_path,
