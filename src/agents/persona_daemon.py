@@ -852,8 +852,8 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                         if input_tapped:
                             await asyncio.sleep(0.5)
                             await self.adb.type_text(comment)
-                            await asyncio.sleep(0.5)
-                            # Step 3: tap Post/Send
+                            await asyncio.sleep(0.8)
+                            # Step 3: tap Post/Send — try tree first, then Enter key
                             nodes = await self.adb.dump_ui_tree()
                             for desc in ("post", "send", "share"):
                                 if await self.adb.tap_element(nodes, content_desc=desc):
@@ -864,6 +864,10 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                                     if await self.adb.tap_element(nodes, text=txt):
                                         commented = True
                                         break
+                            if not commented:
+                                # Some apps just need Enter to submit
+                                await self.adb.press_enter()
+                                commented = True
                 except Exception as e:
                     logger.warning("[%s] UI tree comment failed: %s", name, e)
 
