@@ -8,6 +8,12 @@ shares) guided by the persona profile and DIRECTIVES.md analytical lens.
 Supports multiple personas via a persona_id parameter — each persona gets its
 own ADB device, name, bio, and env var namespace (PERSONA_<id>_*).
 
+When the persona encounters a video, reel, or short, it captures the screen
+recording, uploads it to Gemini for multimodal analysis (transcription, visual
+context, thematic extraction), then evaluates the content against DIRECTIVES.md
+to decide whether to engage. Comments are only posted when the persona genuinely
+has something to say. Likes and reshares happen when content aligns with core values.
+
 Activity is randomized to mimic natural human behavior:
 - Heavier usage during "waking hours" (configurable per persona)
 - Variable session lengths (3-12 scroll actions per session)
@@ -20,6 +26,8 @@ import json
 import logging
 import os
 import random
+import re
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -171,12 +179,26 @@ When deciding whether to engage with a post, consider these principles:
             minutes = random.uniform(self._min_gap, self._max_gap)
         return minutes * 60
 
+    def _parse_json_response(self, text: str) -> dict | None:
+        """Strip markdown fences and parse JSON from a Gemini response."""
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
     async def _decide_interaction(self, screenshot_path: str) -> dict:
         """
         Ask Gemini to look at the current post on screen and decide what
         the persona would naturally do.
 
-        Tuned for more active engagement than a purely passive scroller.
+        Detects video content (reels, shorts, stories) and flags it for the
+        capture-and-analyze pipeline instead of a simple screenshot decision.
         """
         screen_file = self.gemini.files.upload(file=screenshot_path)
 
@@ -215,12 +237,17 @@ Also consider these interaction types:
 - "comment" — leave a short, natural comment
 - "share" — share/repost something particularly noteworthy (rare, ~5%)
 - "scroll" — just move on to the next post
-- "watch" — if it's a video, watch it for a bit before deciding (tap play if needed)
+- "watch_video" — if this is a video, reel, short, or story, flag it for deeper viewing
+
+IMPORTANT: If the post contains a video, reel, short, or story (look for play buttons,
+video progress bars, reel/shorts UI, or video thumbnails), use "watch_video" so we can
+actually watch and understand the content before deciding how to engage.
 
 Respond with ONLY valid JSON (no markdown, no code fences):
 {{
     "post_summary": "Brief description of what the post is about",
-    "action": "scroll|like|comment|share|watch",
+    "is_video": true/false,
+    "action": "scroll|like|comment|share|watch_video",
     "comment_text": "Only if action is comment — what {self.persona_name} would say",
     "reasoning": "Brief reason for the choice"
 }}
@@ -231,20 +258,287 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             contents=[screen_file, prompt],
         )
 
-        text = response.text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
+        parsed = self._parse_json_response(response.text)
+        if parsed:
+            return parsed
+        logger.warning("[%s] Could not parse interaction decision: %s", self.persona_name, response.text[:200])
+        return {"action": "scroll", "reasoning": "Parse error, defaulting to scroll"}
+
+    # ------------------------------------------------------------------
+    # Video comprehension pipeline
+    # ------------------------------------------------------------------
+
+    async def _extract_post_url(self) -> str | None:
+        """
+        Use the vision agent to tap the share button on the current post and
+        copy the link. Returns the URL string or None if extraction fails.
+        """
+        result = await self.agent.execute_custom(
+            "",
+            "Find and tap the Share button on the post currently visible on screen. "
+            "When the share sheet appears, look for 'Copy link' or 'Copy URL' and tap it. "
+            "If there's no share sheet but a link/URL is visible, read it. "
+            "Once you have the URL, put it in the 'data' field and use 'done'. "
+            "If you can't get a URL, use 'done' with whatever info you have.",
+        )
+        if result.success and result.data:
+            # Try to extract a URL from whatever the agent returned
+            match = re.search(r"https?://[^\s\"'<>]+", result.data)
+            if match:
+                url = match.group(0)
+                logger.info("[%s] Extracted post URL: %s", self.persona_name, url)
+                # Press back to dismiss share sheet and return to feed
+                await self.adb.press_back()
+                await asyncio.sleep(0.5)
+                return url
+        # Dismiss any open dialogs
+        await self.adb.press_back()
+        await asyncio.sleep(0.5)
+        return None
+
+    async def _download_video_ytdlp(self, url: str) -> str | None:
+        """
+        Use yt-dlp to download the video directly. Works for YouTube, Instagram
+        reels, Facebook videos, and TikTok. Returns local file path or None.
+        """
+        local_path = str(self.agent._scratch_dir / f"dl_{self.persona_id}.mp4")
+        yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
+        if not yt_dlp_bin.exists():
+            yt_dlp_bin = "yt-dlp"  # fall back to system PATH
+
+        user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        cmd = [
+            str(yt_dlp_bin),
+            "--no-playlist",
+            "--max-filesize", "50m",
+            "-f", "best[filesize<50M]/best",
+            "--user-agent", user_agent,
+            "--geo-bypass",
+            "-o", local_path,
+            url,
+        ]
+        # Use cookies if available (helps with age-gated / login-walled content)
+        cookies_path = self.base_dir / "config" / "youtube_cookies.txt"
+        if cookies_path.exists():
+            cmd.insert(-1, "--cookies")
+            cmd.insert(-1, str(cookies_path))
 
         try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            logger.warning("[%s] Could not parse interaction decision: %s", self.persona_name, text[:200])
-            return {"action": "scroll", "reasoning": "Parse error, defaulting to scroll"}
+            logger.info("[%s] Attempting yt-dlp download: %s", self.persona_name, url[:80])
+            proc = await asyncio.to_thread(
+                subprocess.run, cmd,
+                capture_output=True, text=True, timeout=60,
+            )
+            if proc.returncode == 0 and Path(local_path).exists():
+                logger.info("[%s] yt-dlp download succeeded (%s)", self.persona_name, local_path)
+                return local_path
+            else:
+                logger.info("[%s] yt-dlp failed (rc=%d): %s", self.persona_name, proc.returncode, proc.stderr[:200])
+        except subprocess.TimeoutExpired:
+            logger.warning("[%s] yt-dlp timed out for %s", self.persona_name, url[:80])
+        except Exception as e:
+            logger.warning("[%s] yt-dlp error: %s", self.persona_name, e)
+        return None
 
-    async def _execute_interaction(self, decision: dict):
+    async def _record_screen_fallback(self, duration: int = 15) -> str | None:
+        """
+        Fallback: record the phone screen while a video plays via ADB screenrecord.
+        """
+        remote_path = "/sdcard/osia_persona_capture.mp4"
+        local_path = str(self.agent._scratch_dir / f"capture_{self.persona_id}.mp4")
+
+        try:
+            # Tap center to ensure video is playing
+            w, h = await self.adb.get_screen_size()
+            await self.adb.tap(w // 2, h // 2)
+            await asyncio.sleep(1)
+
+            logger.info("[%s] Screen recording fallback for %ds...", self.persona_name, duration)
+            cmd = self.adb._build_cmd([
+                "shell", "screenrecord", "--time-limit", str(duration), remote_path,
+            ])
+            await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
+            await self.adb.pull_file(remote_path, local_path)
+            await self.adb._run(["shell", "rm", "-f", remote_path])
+            return local_path
+        except Exception as e:
+            logger.warning("[%s] Screen recording failed: %s", self.persona_name, e)
+            return None
+
+    async def _capture_video(self, duration: int = 15) -> str | None:
+        """
+        Tiered video capture:
+        1. Extract the post URL via the share button
+        2. Try yt-dlp to download the actual video (fast, full quality)
+        3. Fall back to ADB screen recording if yt-dlp can't handle it
+        """
+        # Tier 1: try to get the URL and download directly
+        url = await self._extract_post_url()
+        if url:
+            video_path = await self._download_video_ytdlp(url)
+            if video_path:
+                return video_path
+            logger.info("[%s] yt-dlp couldn't grab it, falling back to screen recording", self.persona_name)
+
+        # Tier 2: screen recording
+        return await self._record_screen_fallback(duration=duration)
+
+    async def _analyze_video_content(self, video_path: str) -> dict:
+        """
+        Upload a captured video to Gemini and get a comprehensive content analysis
+        including transcription, visual description, and thematic summary.
+        """
+        logger.info("[%s] Uploading video for analysis...", self.persona_name)
+        video_file = self.gemini.files.upload(file=video_path)
+
+        # Wait for processing
+        while video_file.state.name == "PROCESSING":
+            await asyncio.sleep(2)
+            video_file = self.gemini.files.get(name=video_file.name)
+
+        if video_file.state.name == "FAILED":
+            logger.warning("[%s] Video processing failed in Gemini", self.persona_name)
+            return {"error": "Video processing failed"}
+
+        prompt = """Analyze this video comprehensively. Provide:
+
+1. TRANSCRIPTION: Transcribe any spoken words, narration, or dialogue
+2. VISUAL: Describe what's shown — people, places, actions, text overlays, graphics
+3. TOPIC: What is this video about? What's the core message or narrative?
+4. TONE: Is it serious, funny, outrageous, educational, promotional, political, etc.?
+5. THEMES: List the key themes (e.g. workers' rights, environment, tech, humor, propaganda, corporate, military, indigenous rights, housing, etc.)
+
+Respond with ONLY valid JSON (no markdown, no code fences):
+{
+    "transcription": "What was said in the video",
+    "visual_description": "What was shown",
+    "topic": "Core topic/message in 1-2 sentences",
+    "tone": "serious|funny|outrageous|educational|promotional|political|emotional|neutral",
+    "themes": ["theme1", "theme2"],
+    "notable_claims": "Any specific claims, statistics, or assertions made"
+}"""
+
+        response = self.gemini.models.generate_content(
+            model=self.model_id,
+            contents=[video_file, prompt],
+        )
+
+        parsed = self._parse_json_response(response.text)
+        if parsed:
+            return parsed
+        logger.warning("[%s] Could not parse video analysis: %s", self.persona_name, response.text[:200])
+        return {"topic": response.text[:500], "themes": [], "tone": "unknown"}
+
+    async def _evaluate_and_engage_video(self, analysis: dict, app_name: str) -> None:
+        """
+        Given a video content analysis, evaluate it against DIRECTIVES.md and
+        decide whether to like, comment, share, or just move on.
+
+        Comments are only posted when the persona genuinely has something to say.
+        Shares/reshares happen when content aligns with core values.
+        """
+        name = self.persona_name
+        can_like = self.stats.likes < self._daily_like_cap
+        can_comment = self.stats.comments < self._daily_comment_cap
+
+        topic = analysis.get("topic", "unknown content")
+        themes = ", ".join(analysis.get("themes", []))
+        tone = analysis.get("tone", "unknown")
+        transcription = analysis.get("transcription", "")
+        notable = analysis.get("notable_claims", "")
+
+        prompt = f"""{self._persona_prompt}
+
+---
+
+You just watched a video on {app_name}. Here's what was in it:
+
+TOPIC: {topic}
+TONE: {tone}
+THEMES: {themes}
+WHAT WAS SAID: {transcription[:800]}
+NOTABLE CLAIMS: {notable[:300]}
+
+Based on who you are and the principles you follow, decide how to engage.
+
+Rules:
+- Only comment if you genuinely have something good, funny, or insightful to say
+- Keep comments SHORT — 1-2 sentences max, sound like a real person
+- Like the video if it resonates with you at all — low bar
+- Share/reshare ONLY if the content strongly aligns with your core values (anti-imperialism, workers' rights, indigenous sovereignty, environmental justice, tech ethics, data sovereignty)
+- If the content is corporate propaganda, military glorification, or extractivist cheerleading, just scroll past — don't engage negatively
+- If it's just neutral/boring content, scroll past
+- {"You can like, comment, and share." if can_like and can_comment else "You can only like." if can_like else "You've hit your limits — just scroll."}
+
+Respond with ONLY valid JSON (no markdown, no code fences):
+{{
+    "action": "scroll|like|comment|like_and_comment|share|like_and_share",
+    "comment_text": "Only if commenting — what {name} would say (1-2 sentences, casual)",
+    "reasoning": "Brief reason",
+    "values_alignment": "none|low|medium|high"
+}}"""
+
+        response = self.gemini.models.generate_content(
+            model=self.model_id,
+            contents=[prompt],
+        )
+
+        parsed = self._parse_json_response(response.text)
+        if not parsed:
+            logger.warning("[%s] Could not parse video engagement decision", name)
+            return
+
+        action = parsed.get("action", "scroll")
+        alignment = parsed.get("values_alignment", "none")
+        logger.info(
+            "[%s] Video verdict: %s (alignment=%s) — %s",
+            name, action, alignment, parsed.get("reasoning", "")[:80],
+        )
+
+        # Execute the engagement
+        should_like = action in ("like", "like_and_comment", "like_and_share")
+        should_comment = action in ("comment", "like_and_comment")
+        should_share = action in ("share", "like_and_share")
+
+        if should_like and can_like:
+            logger.info("[%s] Liking video: %s", name, topic[:60])
+            result = await self.agent.execute_custom(
+                "",
+                "Find and tap the Like/Heart/Thumbs-up button on the post currently visible. "
+                "If already liked, just use 'done'. Once liked, use 'done'.",
+            )
+            if result.success:
+                self.stats.likes += 1
+
+        if should_comment and can_comment:
+            comment = parsed.get("comment_text", "")
+            if comment:
+                logger.info("[%s] Commenting on video: %s", name, comment[:80])
+                result = await self.agent.execute_custom(
+                    "",
+                    f"Tap the comment button/icon on the post currently visible. "
+                    f"Tap the comment input field, type this comment, then tap Post/Send:\n\n"
+                    f"\"{comment}\"\n\n"
+                    f"Once posted, press back to return to the feed and use 'done'.",
+                )
+                if result.success:
+                    self.stats.comments += 1
+
+        if should_share:
+            logger.info("[%s] Sharing values-aligned video: %s", name, topic[:60])
+            result = await self.agent.execute_custom(
+                "",
+                "Find and tap the Share/Repost button on the post currently visible. "
+                "If a share dialog appears, tap 'Share to Feed' or 'Repost' or the equivalent. "
+                "Once shared, use 'done'. If sharing isn't possible, use 'done' anyway.",
+            )
+            if result.success:
+                self.stats.shares += 1
+
+    async def _execute_interaction(self, decision: dict, app_name: str = ""):
         """Execute the decided interaction on the current screen."""
         action = decision.get("action", "scroll")
         name = self.persona_name
@@ -258,7 +552,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             )
             if result.success:
                 self.stats.likes += 1
-            return  # don't scroll after liking — stay on the post briefly
+            return
 
         elif action == "comment" and self.stats.comments < self._daily_comment_cap:
             comment = decision.get("comment_text", "")
@@ -287,23 +581,40 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 self.stats.shares += 1
             return
 
-        elif action == "watch":
-            logger.info("[%s] Watching video: %s", name, decision.get("post_summary", "")[:60])
-            # Tap the center of the screen to play, then wait
-            w, h = await self.adb.get_screen_size()
-            await self.adb.tap(w // 2, h // 2)
-            watch_time = random.uniform(8, 25)
-            logger.info("[%s] Watching for %.0f seconds", name, watch_time)
-            await asyncio.sleep(watch_time)
-            # After watching, there's a good chance we like it
-            if random.random() < 0.6 and self.stats.likes < self._daily_like_cap:
-                logger.info("[%s] Liked after watching", name)
-                await self.agent.execute_custom(
-                    "",
-                    "Find and tap the Like/Heart/Thumbs-up button on the post currently visible. "
-                    "If already liked, just use 'done'. Once liked, use 'done'.",
+        elif action in ("watch_video", "watch"):
+            logger.info("[%s] Video detected: %s", name, decision.get("post_summary", "")[:60])
+            # Capture the video playing on screen
+            capture_duration = random.randint(12, 20)
+            video_path = await self._capture_video(duration=capture_duration)
+
+            if video_path:
+                # Analyze the video content with Gemini multimodal
+                analysis = await self._analyze_video_content(video_path)
+                logger.info(
+                    "[%s] Video analysis — topic: %s, themes: %s",
+                    name,
+                    analysis.get("topic", "?")[:60],
+                    ", ".join(analysis.get("themes", []))[:60],
                 )
-                self.stats.likes += 1
+                # Evaluate against directives and engage if warranted
+                await self._evaluate_and_engage_video(analysis, app_name)
+                # Clean up capture file
+                try:
+                    Path(video_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            else:
+                # Fallback: couldn't capture, just watch briefly and maybe like
+                watch_time = random.uniform(8, 20)
+                logger.info("[%s] Capture failed, watching for %.0fs", name, watch_time)
+                await asyncio.sleep(watch_time)
+                if random.random() < 0.4 and self.stats.likes < self._daily_like_cap:
+                    await self.agent.execute_custom(
+                        "",
+                        "Find and tap the Like/Heart/Thumbs-up button on the post currently visible. "
+                        "If already liked, just use 'done'. Once liked, use 'done'.",
+                    )
+                    self.stats.likes += 1
             return
 
         # Default: scroll to next post
@@ -349,7 +660,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                     decision.get("action", "scroll"),
                 )
 
-                await self._execute_interaction(decision)
+                await self._execute_interaction(decision, app_name=app["name"])
 
                 # Occasional longer pause (reading comments, watching a video, etc.)
                 if random.random() < 0.25:
