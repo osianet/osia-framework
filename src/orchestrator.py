@@ -607,7 +607,33 @@ class OsiaOrchestrator:
             if not hf_ready:
                 logger.warning("HF endpoint for '%s' not ready — proceeding with existing desk config", assigned_desk)
 
-            analysis = await self.desk_client.send_task(assigned_desk, query)
+            try:
+                analysis = await self.desk_client.send_task(assigned_desk, query)
+            except Exception as desk_err:
+                logger.warning(
+                    "Desk '%s' failed (%s), falling back to Gemini direct analysis",
+                    assigned_desk, desk_err,
+                )
+                # Load the desk-specific prompt template if available
+                desk_prompt_path = self.base_dir / "templates" / "prompts" / f"{assigned_desk}.txt"
+                desk_persona = ""
+                if desk_prompt_path.exists():
+                    desk_persona = desk_prompt_path.read_text()
+
+                fallback_prompt = (
+                    f"{mandate}\n\n"
+                    f"--- DESK PERSONA ---\n{desk_persona}\n\n" if desk_persona else f"{mandate}\n\n"
+                ) + (
+                    f"You are acting as the {assigned_desk} for OSIA. "
+                    f"Analyze the following intelligence request and provide a thorough report.\n\n"
+                    f"{query}"
+                )
+                fallback_res = self.client.models.generate_content(
+                    model=self.model_id, contents=fallback_prompt
+                )
+                analysis = fallback_res.text
+                logger.info("Gemini fallback analysis complete (desk '%s' was bypassed).", assigned_desk)
+
             logger.info("Intelligence synthesis complete.")
 
             if source.startswith("signal:"):
