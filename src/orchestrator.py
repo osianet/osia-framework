@@ -18,7 +18,10 @@ from src.agents.social_media_agent import SocialMediaAgent
 logger = logging.getLogger("osia.orchestrator")
 
 # Domains that trigger the ADB media-capture pipeline
-MEDIA_DOMAINS = ("instagram.com", "facebook.com", "tiktok.com", "youtube.com", "youtu.be")
+MEDIA_DOMAINS = ("instagram.com", "facebook.com", "tiktok.com")
+
+# YouTube domains get transcript extraction instead of ADB screen-record
+YOUTUBE_DOMAINS = ("youtube.com", "youtu.be")
 
 # Valid desk slugs the Chief of Staff can route to
 VALID_DESKS = {
@@ -438,7 +441,24 @@ class OsiaOrchestrator:
         url_match = re.search(r"(https?://[^\s]+)", query)
         if url_match:
             url = url_match.group(1)
-            if any(domain in url.lower() for domain in MEDIA_DOMAINS):
+            url_lower = url.lower()
+
+            # YouTube → transcript extraction (full-length support)
+            if any(domain in url_lower for domain in YOUTUBE_DOMAINS):
+                try:
+                    media_analysis = await self._extract_youtube_transcript(url)
+                    if media_analysis:
+                        await self.desk_client.ingest_raw_data(
+                            "collection-directorate",
+                            media_analysis,
+                            f"YouTube Transcript: {self._safe_title(url)}",
+                        )
+                        query = f"A YouTube transcript from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
+                except Exception as e:
+                    logger.error("YouTube transcript extraction failed: %s", e)
+
+            # Other social media → ADB screen-record capture
+            elif any(domain in url_lower for domain in MEDIA_DOMAINS):
                 try:
                     media_analysis = await self.process_media_link(url)
                     await self.desk_client.ingest_raw_data(
