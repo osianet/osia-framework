@@ -33,6 +33,29 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
         raise HTTPException(status_code=403, detail="Invalid token")
 
 
+@app.get("/health")
+async def health_check():
+    """Unauthenticated health check — reports bridge and phone status."""
+    phone_connected = False
+    device_id = adb.device_id
+    try:
+        devices = await asyncio.to_thread(adb.get_devices)
+        if device_id:
+            phone_connected = device_id in devices
+        else:
+            phone_connected = len(devices) > 0
+            device_id = devices[0] if devices else None
+    except Exception as e:
+        logger.warning("Health check ADB probe failed: %s", e)
+
+    return {
+        "status": "ok",
+        "phone_connected": phone_connected,
+        "device_id": device_id,
+        "bridge_configured": bool(PHONE_BRIDGE_TOKEN),
+    }
+
+
 class Command(BaseModel):
     action: str  # "screenshot" or "record"
     url: str | None = None
