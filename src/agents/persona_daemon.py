@@ -756,14 +756,38 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
         if action == "like" and self.stats.likes < self._daily_like_cap:
             logger.info("[%s] Liking: %s", name, decision.get("post_summary", "")[:60])
-            result = await self.agent.execute_custom(
-                "",
-                "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
-                "Look for the interaction bar (like, comment, share) below the image or text. "
-                "DO NOT tap the center of an image or video, as this will full-screen it and hide the buttons. "
-                "If already liked, just use 'done'. Once liked, use 'done'.",
-            )
-            if result.success:
+
+            # --- Accessibility tree approach (fast, no vision cost) ---
+            liked = False
+            try:
+                nodes = await self.adb.dump_ui_tree()
+                # Try known content-desc patterns across Instagram, TikTok, Facebook
+                for desc in ("like", "like this", "likes", "heart", "thumbs up"):
+                    if await self.adb.tap_element(nodes, content_desc=desc):
+                        liked = True
+                        break
+                # Instagram resource-id fallback
+                if not liked:
+                    for rid in ("row_feed_button_like", "like_button", "btn_like"):
+                        if await self.adb.tap_element(nodes, resource_id=rid):
+                            liked = True
+                            break
+            except Exception as e:
+                logger.warning("[%s] UI tree like failed: %s", name, e)
+
+            # --- Vision fallback ---
+            if not liked:
+                logger.info("[%s] Accessibility like failed, falling back to vision", name)
+                result = await self.agent.execute_custom(
+                    "",
+                    "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
+                    "Look for the interaction bar (like, comment, share) below the image or text. "
+                    "DO NOT tap the center of an image or video, as this will full-screen it and hide the buttons. "
+                    "If already liked, just use 'done'. Once liked, use 'done'.",
+                )
+                liked = result.success
+
+            if liked:
                 self.stats.likes += 1
             else:
                 logger.info("[%s] Like failed, pressing back", name)
@@ -774,23 +798,79 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             comment = decision.get("comment_text", "")
             if comment:
                 logger.info("[%s] Commenting: %s", name, comment[:80])
-                result = await self.agent.execute_custom(
-                    "",
-                    f"You are looking at a social media post. Follow these steps exactly:\n\n"
-                    f"1. Find the comment icon/button (speech bubble icon, usually in the row of "
-                    f"   like/comment/share icons BELOW the post content). Tap it.\n"
-                    f"2. Wait for the comments section to open. A text input field will appear "
-                    f"   near the BOTTOM of the screen.\n"
-                    f"3. Use 'tap_and_type' to tap the CENTER of that input field and type "
-                    f"   this comment exactly:\n\n"
-                    f"   \"{comment}\"\n\n"
-                    f"4. Tap the Post/Send button (usually to the right of the input field or "
-                    f"   on the keyboard) to submit.\n"
-                    f"5. Once the comment appears in the list, use 'done'.\n\n"
-                    f"IMPORTANT: Do NOT tap anywhere on the post image or video — only tap the "
-                    f"comment icon in the action bar, then the input field at the bottom.",
-                )
-                if result.success:
+                commented = False
+
+                # --- Accessibility tree approach ---
+                try:
+                    nodes = await self.adb.dump_ui_tree()
+                    # Step 1: tap the comment button
+                    comment_tapped = False
+                    for desc in ("comment", "comments", "add a comment"):
+                        if await self.adb.tap_element(nodes, content_desc=desc):
+                            comment_tapped = True
+                            break
+                    if not comment_tapped:
+                        for rid in ("row_feed_button_comment", "comment_button", "btn_comment"):
+                            if await self.adb.tap_element(nodes, resource_id=rid):
+                                comment_tapped = True
+                                break
+
+                    if comment_tapped:
+                        await asyncio.sleep(1.5)  # wait for comment sheet to open
+                        # Step 2: find the text input and type
+                        nodes = await self.adb.dump_ui_tree()
+                        input_tapped = False
+                        for desc in ("add a comment", "write a comment", "comment…", "comment..."):
+                            if await self.adb.tap_element(nodes, content_desc=desc, clickable_only=False):
+                                input_tapped = True
+                                break
+                        if not input_tapped:
+                            # Fall back to any EditText on screen
+                            for node in nodes:
+                                if "EditText" in node["class_name"]:
+                                    await self.adb.tap(node["cx"], node["cy"])
+                                    input_tapped = True
+                                    break
+                        if input_tapped:
+                            await asyncio.sleep(0.5)
+                            await self.adb.type_text(comment)
+                            await asyncio.sleep(0.5)
+                            # Step 3: tap Post/Send
+                            nodes = await self.adb.dump_ui_tree()
+                            for desc in ("post", "send", "share"):
+                                if await self.adb.tap_element(nodes, content_desc=desc):
+                                    commented = True
+                                    break
+                            if not commented:
+                                for txt in ("post", "send", "share"):
+                                    if await self.adb.tap_element(nodes, text=txt):
+                                        commented = True
+                                        break
+                except Exception as e:
+                    logger.warning("[%s] UI tree comment failed: %s", name, e)
+
+                # --- Vision fallback ---
+                if not commented:
+                    logger.info("[%s] Accessibility comment failed, falling back to vision", name)
+                    result = await self.agent.execute_custom(
+                        "",
+                        f"You are looking at a social media post. Follow these steps exactly:\n\n"
+                        f"1. Find the comment icon/button (speech bubble icon, usually in the row of "
+                        f"   like/comment/share icons BELOW the post content). Tap it.\n"
+                        f"2. Wait for the comments section to open. A text input field will appear "
+                        f"   near the BOTTOM of the screen.\n"
+                        f"3. Use 'tap_and_type' to tap the CENTER of that input field and type "
+                        f"   this comment exactly:\n\n"
+                        f"   \"{comment}\"\n\n"
+                        f"4. Tap the Post/Send button (usually to the right of the input field or "
+                        f"   on the keyboard) to submit.\n"
+                        f"5. Once the comment appears in the list, use 'done'.\n\n"
+                        f"IMPORTANT: Do NOT tap anywhere on the post image or video — only tap the "
+                        f"comment icon in the action bar, then the input field at the bottom.",
+                    )
+                    commented = result.success
+
+                if commented:
                     self.stats.comments += 1
                 else:
                     logger.info("[%s] Comment failed, pressing back", name)
@@ -841,14 +921,25 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 logger.info("[%s] Capture failed, watching for %.0fs", name, watch_time)
                 await asyncio.sleep(watch_time)
                 if random.random() < 0.4 and self.stats.likes < self._daily_like_cap:
-                    result = await self.agent.execute_custom(
-                        "",
-                        "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
-                        "Look for the interaction bar (like, comment, share) below the image or text. "
-                        "DO NOT tap the center of an image or video, as this will full-screen it and hide the buttons. "
-                        "If already liked, just use 'done'. Once liked, use 'done'.",
-                    )
-                    if result.success:
+                    liked = False
+                    try:
+                        nodes = await self.adb.dump_ui_tree()
+                        for desc in ("like", "like this", "heart", "thumbs up"):
+                            if await self.adb.tap_element(nodes, content_desc=desc):
+                                liked = True
+                                break
+                    except Exception:
+                        pass
+                    if not liked:
+                        result = await self.agent.execute_custom(
+                            "",
+                            "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
+                            "Look for the interaction bar (like, comment, share) below the image or text. "
+                            "DO NOT tap the center of an image or video, as this will full-screen it and hide the buttons. "
+                            "If already liked, just use 'done'. Once liked, use 'done'.",
+                        )
+                        liked = result.success
+                    if liked:
                         self.stats.likes += 1
                     else:
                         logger.info("[%s] Like failed, pressing back", name)

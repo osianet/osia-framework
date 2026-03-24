@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import subprocess
+import xml.etree.ElementTree as ET
 
 logger = logging.getLogger("osia.adb")
 
@@ -146,6 +147,117 @@ class ADBDevice:
         if match:
             return match.group(1)
         return ""
+
+    async def dump_ui_tree(self) -> list[dict]:
+        """
+        Dump the current UI accessibility tree via uiautomator and return a flat
+        list of all nodes that have non-empty bounds.
+
+        Each node dict contains:
+            text, content_desc, resource_id, class_name,
+            clickable, bounds (raw string), cx, cy (center coords)
+        """
+        # Stream the XML directly — avoids a pull step and sdcard permission issues
+        result = await self._run(["exec-out", "uiautomator", "dump", "/dev/tty"])
+        xml_text = result.stdout.strip()
+        if not xml_text:
+            logger.warning("uiautomator dump returned empty output")
+            return []
+
+        # Strip any trailing garbage after the closing tag
+        end = xml_text.rfind(">")
+        if end != -1:
+            xml_text = xml_text[: end + 1]
+
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError as e:
+            logger.warning("Failed to parse uiautomator XML: %s", e)
+            return []
+
+        nodes = []
+        for node in root.iter("node"):
+            bounds_str = node.get("bounds", "")
+            # bounds format: [x1,y1][x2,y2]
+            m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", bounds_str)
+            if not m:
+                continue
+            x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            if x1 == 0 and y1 == 0 and x2 == 0 and y2 == 0:
+                continue  # invisible / unmeasured element
+            nodes.append({
+                "text": node.get("text", ""),
+                "content_desc": node.get("content-desc", ""),
+                "resource_id": node.get("resource-id", ""),
+                "class_name": node.get("class", ""),
+                "clickable": node.get("clickable", "false") == "true",
+                "bounds": bounds_str,
+                "cx": (x1 + x2) // 2,
+                "cy": (y1 + y2) // 2,
+            })
+        return nodes
+
+    def find_element(
+        self,
+        nodes: list[dict],
+        *,
+        content_desc: str | None = None,
+        resource_id: str | None = None,
+        text: str | None = None,
+        clickable_only: bool = True,
+        fuzzy: bool = True,
+    ) -> dict | None:
+        """
+        Search a node list (from dump_ui_tree) for the first matching element.
+
+        Matching is case-insensitive. With fuzzy=True, a substring match is used;
+        with fuzzy=False, an exact match is required.
+        """
+        def _match(value: str, target: str) -> bool:
+            v, t = value.lower(), target.lower()
+            return t in v if fuzzy else v == t
+
+        for node in nodes:
+            if clickable_only and not node["clickable"]:
+                continue
+            if content_desc and _match(node["content_desc"], content_desc):
+                return node
+            if resource_id and _match(node["resource_id"], resource_id):
+                return node
+            if text and _match(node["text"], text):
+                return node
+        return None
+
+    async def tap_element(
+        self,
+        nodes: list[dict],
+        *,
+        content_desc: str | None = None,
+        resource_id: str | None = None,
+        text: str | None = None,
+        clickable_only: bool = True,
+        fuzzy: bool = True,
+    ) -> bool:
+        """
+        Find an element in the UI tree and tap its center.
+        Returns True if found and tapped, False otherwise.
+        """
+        node = self.find_element(
+            nodes,
+            content_desc=content_desc,
+            resource_id=resource_id,
+            text=text,
+            clickable_only=clickable_only,
+            fuzzy=fuzzy,
+        )
+        if node is None:
+            return False
+        logger.debug(
+            "Tapping element '%s' / '%s' at (%d, %d)",
+            node["content_desc"], node["resource_id"], node["cx"], node["cy"],
+        )
+        await self.tap(node["cx"], node["cy"])
+        return True
 
     async def pull_file(self, remote_path: str, local_path: str):
         logger.info("Pulling %s to %s...", remote_path, local_path)
