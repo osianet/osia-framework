@@ -280,7 +280,7 @@ class OsiaOrchestrator:
                 model=self.model_id,
                 contents=brief_prompt,
             )
-            image_prompt = brief_res.text.strip()
+            image_prompt = (brief_res.text or "").strip()
             logger.info("Infographic brief generated (%d chars).", len(image_prompt))
         except Exception as e:
             logger.error("Failed to generate infographic brief: %s", e)
