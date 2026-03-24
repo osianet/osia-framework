@@ -52,27 +52,27 @@ def main():
     desk_configs = {
         "cyber-intelligence-and-warfare-desk": {
             "chatProvider": "anthropic",
-            "chatModel": "claude-3-5-sonnet-20241022",
+            "chatModel": "claude-sonnet-4-6",
             "agentProvider": "anthropic",
-            "agentModel": "claude-3-5-sonnet-20241022"
+            "agentModel": "claude-sonnet-4-6"
         },
         "geopolitical-and-security-desk": {
             "chatProvider": "gemini",
-            "chatModel": "gemini-2.5-flash",
+            "chatModel": "gemini-3-flash",
             "agentProvider": "gemini",
-            "agentModel": "gemini-2.5-flash"
+            "agentModel": "gemini-3-flash"
         },
         "finance-and-economics-directorate": {
             "chatProvider": "openai",
-            "chatModel": "gpt-4o",
+            "chatModel": "gpt-5.4-mini",
             "agentProvider": "openai",
-            "agentModel": "gpt-4o"
+            "agentModel": "gpt-5.4-mini"
         },
         "the-watch-floor": {
             "chatProvider": "gemini",
-            "chatModel": "gemini-2.5-pro",
+            "chatModel": "gemini-3.1-pro-preview",
             "agentProvider": "gemini",
-            "agentModel": "gemini-2.5-pro"
+            "agentModel": "gemini-3.1-pro-preview"
         }
     }
 

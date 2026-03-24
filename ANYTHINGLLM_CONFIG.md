@@ -20,7 +20,7 @@ This document provides a summary of the current system and workspace configurati
 
 ### Global LLM Providers
 *   **Default LLM Provider:** Gemini
-*   **Default LLM Model:** `gemini-2.5-flash`
+*   **Default LLM Model:** `gemini-3-flash`
 *   **Ollama Endpoint:** `http://ollama.osia.dev:11434`
 *   **Generic OpenAI Base Path (NPU):** `https://rkllm.osia.dev/v1`
 *   **Configured API Key Integrations:** OpenAI, Gemini, Anthropic, HuggingFace, Tavily (Agent)
@@ -41,17 +41,17 @@ This document provides a summary of the current system and workspace configurati
 ### 3. Geopolitical & Security Desk
 *   **Slug:** `geopolitical-and-security-desk`
 *   **Vector Tag:** `geopolitical_intel`
-*   **Chat Provider:** Gemini (`gemini-2.5-flash`)
+*   **Chat Provider:** Gemini (`gemini-3-flash`)
 
 ### 4. Cultural & Theological Intelligence Desk
 *   **Slug:** `cultural-and-theological-intelligence-desk`
 *   **Vector Tag:** `cultural_intel`
-*   **Chat Provider:** Gemini (`gemini-2.5-flash`)
+*   **Chat Provider:** Gemini (`gemini-3-flash`)
 
 ### 5. Science, Technology & Commercial Desk
 *   **Slug:** `science-technology-and-commercial-desk`
 *   **Vector Tag:** `science_intel`
-*   **Chat Provider:** Anthropic (`claude-3-5-sonnet-20240620`)
+*   **Chat Provider:** Anthropic (`claude-sonnet-4-6`)
 
 ### 6. Human Intelligence & Profiling Desk
 *   **Slug:** `human-intelligence-and-profiling-desk`
@@ -61,17 +61,17 @@ This document provides a summary of the current system and workspace configurati
 ### 7. The Watch Floor
 *   **Slug:** `the-watch-floor`
 *   **Vector Tag:** `watch_floor`
-*   **Chat Provider:** Gemini (`gemini-2.5-pro`)
+*   **Chat Provider:** Gemini (`gemini-3.1-pro-preview`)
 
 ### 8. Finance & Economics Directorate
 *   **Slug:** `finance-and-economics-directorate`
 *   **Vector Tag:** `finance_intel`
-*   **Chat Provider:** OpenAI (`gpt-4o`)
+*   **Chat Provider:** OpenAI (`gpt-5.4-mini`)
 
 ### 9. Cyber Intelligence & Warfare Desk
 *   **Slug:** `cyber-intelligence-and-warfare-desk`
 *   **Vector Tag:** `cyber_intel`
-*   **Chat Provider:** Anthropic (`claude-3-5-sonnet-20240620`)
+*   **Chat Provider:** Anthropic (`claude-sonnet-4-6`)
 
 ---
 

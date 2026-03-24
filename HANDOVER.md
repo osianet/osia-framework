@@ -7,11 +7,11 @@ OSIA (Open Source Intelligence Agency) is a principled, counter-hegemonic intell
 - **Collection Directorate:** (NPU) Raw data dump and ingestion. Qdrant Tag: `collection_raw`.
 - **Geopolitical & Security Desk:** (Cloud) Strategic forecasting and conflict analysis. Qdrant Tag: `geopolitical_intel`.
 - **Cultural & Theological Desk:** (Cloud) Sociological and religious drivers. Qdrant Tag: `cultural_intel`.
-- **Science & Tech Desk:** (Claude 3.5 Sonnet) Technical accuracy and breakthroughs. Qdrant Tag: `science_intel`.
+- **Science & Tech Desk:** (Claude Sonnet 4.6) Technical accuracy and breakthroughs. Qdrant Tag: `science_intel`.
 - **Human Intelligence Desk:** (Ollama - Dolphin) Uncensored behavioral profiling. Qdrant Tag: `human_intel`.
-- **Finance & Economics Desk:** (GPT-4o) Market dynamics and internal auditing. Qdrant Tag: `finance_intel`.
-- **Cyber Intelligence & Warfare Desk:** (Claude 3.5 Sonnet) Digital infrastructure and threat analysis. Qdrant Tag: `cyber_intel`.
-- **The Watch Floor:** (Gemini 2.5 Pro) Final INTSUM synthesis and dispatch. Qdrant Tag: `watch_floor`.
+- **Finance & Economics Desk:** (GPT-5.4-mini) Market dynamics and internal auditing. Qdrant Tag: `finance_intel`.
+- **Cyber Intelligence & Warfare Desk:** (Claude Sonnet 4.6) Digital infrastructure and threat analysis. Qdrant Tag: `cyber_intel`.
+- **The Watch Floor:** (Gemini 3.1 Pro) Final INTSUM synthesis and dispatch. Qdrant Tag: `watch_floor`.
 
 ## 📡 Technical Architecture
 - **Hardware:** Orange Pi 5 Plus (Master), Moto g06 (Android Gateway), RTX 3080 Ti (Local GPU).

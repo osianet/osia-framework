@@ -48,9 +48,9 @@ DESK_MODELS = {
     },
     "geopolitical-and-security-desk": {
         "chatProvider": "gemini",
-        "chatModel": "gemini-2.5-flash",
+        "chatModel": "gemini-3-flash",
         "agentProvider": "gemini",
-        "agentModel": "gemini-2.5-flash",
+        "agentModel": "gemini-3-flash",
         "vectorTag": "geopolitical_intel"
     },
     "cultural-and-theological-intelligence-desk": {
@@ -61,9 +61,9 @@ DESK_MODELS = {
         "vectorTag": "cultural_intel"
     } if os.getenv("HF_ENDPOINT_DOLPHIN_8B") else {
         "chatProvider": "gemini",
-        "chatModel": "gemini-2.5-flash",
+        "chatModel": "gemini-3-flash",
         "agentProvider": "gemini",
-        "agentModel": "gemini-2.5-flash",
+        "agentModel": "gemini-3-flash",
         "vectorTag": "cultural_intel"
     },
     "science-technology-and-commercial-desk": {
@@ -88,9 +88,9 @@ DESK_MODELS = {
     },
     "finance-and-economics-directorate": {
         "chatProvider": "openai",
-        "chatModel": "gpt-4o",
+        "chatModel": "gpt-5.4-mini",
         "agentProvider": "openai",
-        "agentModel": "gpt-4o",
+        "agentModel": "gpt-5.4-mini",
         "vectorTag": "finance_intel"
     },
     "the-watch-floor": {

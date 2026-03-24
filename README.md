@@ -33,13 +33,13 @@ OSIA utilizes **AnythingLLM**'s isolated Workspaces to act as specialized "Desks
 
 ### 💼 Analytical Directorates
 *   **Collection Directorate:** (Local NPU / `Pleias-RAG-350M`) - Pure data acquisition. Gathers raw data and transcripts via MCP tools.
-*   **Geopolitical & Security Desk:** (Cloud / `gemini-2.5-flash`) - Analyzes statecraft, military capabilities, and international relations.
-*   **Cultural & Theological Desk:** (Cloud / `gemini-2.5-flash`) - Examines sociological, religious, and philosophical drivers of conflict.
-*   **Science & Tech Desk:** (Cloud / `claude-3-5-sonnet`) - Evaluates technical accuracy and engineering breakthroughs.
+*   **Geopolitical & Security Desk:** (Cloud / `gemini-3-flash`) - Analyzes statecraft, military capabilities, and international relations.
+*   **Cultural & Theological Desk:** (Cloud / `gemini-3-flash`) - Examines sociological, religious, and philosophical drivers of conflict.
+*   **Science & Tech Desk:** (Cloud / `claude-sonnet-4-6`) - Evaluates technical accuracy and engineering breakthroughs.
 *   **Human Intelligence Desk:** (Local GPU / `dolphin3.0-llama3`) - Uncensored behavioral profiling and network mapping.
-*   **Finance & Economics Desk:** (Cloud / `gpt-4o`) - Market dynamics, sanctions, and internal agency auditing.
-*   **Cyber Intelligence & Warfare Desk:** (Cloud / `claude-3-5-sonnet`) - Specialized analysis of nation-state cyber operations, digital sovereignty, and global cyber-crime.
-*   **The Watch Floor:** (Cloud / `gemini-2.5-flash`) - Synthesis of multi-desk reports into final **INTSUM** (Intelligence Summary) documents.
+*   **Finance & Economics Desk:** (Cloud / `gpt-5.4-mini`) - Market dynamics, sanctions, and internal agency auditing.
+*   **Cyber Intelligence & Warfare Desk:** (Cloud / `claude-sonnet-4-6`) - Specialized analysis of nation-state cyber operations, digital sovereignty, and global cyber-crime.
+*   **The Watch Floor:** (Cloud / `gemini-3.1-pro-preview`) - Synthesis of multi-desk reports into final **INTSUM** (Intelligence Summary) documents.
 
 ---
 
@@ -54,11 +54,11 @@ graph TD
     D --> F[(Collection Directorate / Qdrant Vector DB)]
     E --> F
     F -->|RAG Context| G[Specialized Intelligence Desks]
-    G -->|Science/Cyber: Claude 3.5| H(The Watch Floor)
-    G -->|Geo/Cultural: Gemini 2.5| H
-    G -->|Finance: GPT-4o| H
+    G -->|Science/Cyber: Claude Sonnet 4.6| H(The Watch Floor)
+    G -->|Geo/Cultural: Gemini 3 Flash| H
+    G -->|Finance: GPT-5.4-mini| H
     G -->|Human Intel: Dolphin 3.0| H
-    H -->|Synthesis / INTSUM: Gemini 2.5| I[Signal Gateway / OSIA Briefings]
+    H -->|Synthesis / INTSUM: Gemini 3.1 Pro| I[Signal Gateway / OSIA Briefings]
 ```
 
 OSIA is built on a decoupled, microservice-based architecture centered around a **Redis Task Queue**.
@@ -82,5 +82,5 @@ OSIA is built on a decoupled, microservice-based architecture centered around a 
 ## 🛠️ Tech Stack
 - **Hardware:** Orange Pi 5 Plus (ARM64), Moto g06 (Android Gateway), RTX 3080 Ti (Local Compute).
 - **Software:** Linux, Python 3.12 (`uv`), Docker, Redis.
-- **Intelligence:** Google Gemini 2.5, OpenAI GPT-4o, Llama 3.1, Dolphin 3.0.
+- **Intelligence:** Google Gemini 3.1 Pro, Gemini 3 Flash, OpenAI GPT-5.4, Anthropic Claude Sonnet 4.6, Dolphin 3.0.
 - **Protocol:** Signal (E2EE), ADB, AnythingLLM API, Qdrant.

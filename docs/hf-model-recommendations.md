@@ -18,7 +18,7 @@ Not every desk needs an uncensored or self-hosted model. The key questions are:
 4. **Is the current cloud API model already doing a good job?**
 
 If the answer to #1 is no and #4 is yes, there's no reason to move off the current provider.
-Cloud APIs (Gemini, Claude, GPT-4o) are cheaper per-token than dedicated GPU endpoints for
+Cloud APIs (Gemini, Claude, GPT-5.4) are cheaper per-token than dedicated GPU endpoints for
 desks that don't need uncensored output.
 
 ---
@@ -76,7 +76,7 @@ offensive tooling analysis, and some reconnaissance methodologies.
 
 ### 3. Cultural & Theological Intelligence Desk
 
-**Current:** Gemini — `gemini-2.5-flash`
+**Current:** Gemini — `gemini-3-flash` (fallback when HF endpoint unavailable)
 **Requirement:** Analyze religious movements, cultural narratives, sociological drivers.
 Topics like religious extremism, sectarian violence, and cultural propaganda hit
 guardrails on censored models that try to be "balanced" rather than analytical.
@@ -98,13 +98,15 @@ guardrails on censored models that try to be "balanced" rather than analytical.
 
 ### 4. Finance & Economics Directorate
 
-**Current:** OpenAI — `gpt-4o`
-**Recommendation:** Keep GPT-4o.
+**Current:** OpenAI — `gpt-5.4-mini`
+**Recommendation:** Keep GPT-5.4-mini.
 
-GPT-4o is excellent at financial analysis, numerical reasoning, and structured data
-interpretation. The Finance desk's work (market dynamics, sanctions analysis, labor
-economics) doesn't typically hit censorship walls — it's analytical rather than
-sensitive. The Stock Market Intel tool works well with GPT-4o's function calling.
+GPT-4o was deprecated from ChatGPT on Feb 13, 2026 and is being retired from the API.
+GPT-5.4 (released March 5, 2026) is the current flagship, with GPT-5.4-mini as the
+cost-effective variant. We use `gpt-5.4-mini` for the Finance desk — it retains strong
+financial analysis, numerical reasoning, and structured data interpretation at a lower
+per-token cost than the full GPT-5.4. The Stock Market Intel tool works reliably with
+its function calling.
 
 If you wanted to move off OpenAI for cost or sovereignty reasons, the best open
 alternative would be `Qwen/Qwen3-32B`:
@@ -113,20 +115,22 @@ alternative would be `Qwen/Qwen3-32B`:
 - 32B fits on a single A100 80GB ($2.50/hr) or L40S 48GB ($1.80/hr).
 - Apache 2.0 licensed.
 
-But honestly, GPT-4o at ~$2.50/M input tokens is probably cheaper than running a
-dedicated GPU endpoint for the volume of finance queries OSIA handles.
+But GPT-5.4-mini is probably cheaper than running a dedicated GPU endpoint for the
+volume of finance queries OSIA handles.
 
 ---
 
 ### 5. Geopolitical & Security Desk
 
-**Current:** Gemini — `gemini-2.5-flash`
-**Recommendation:** Keep Gemini 2.5 Flash.
+**Current:** Gemini — `gemini-3-flash`
+**Recommendation:** Keep Gemini 3 Flash.
 
-Geopolitical analysis is Gemini's sweet spot — large context window, strong reasoning,
-good at synthesizing multiple sources. The desk's Country Intel tool works reliably
-with Gemini's function calling. Geopolitical topics rarely hit hard censorship walls
-(models will discuss wars, coups, and power dynamics freely).
+Gemini 2.5 Flash is scheduled for deprecation on June 17, 2026, so we've moved to
+`gemini-3-flash`. Geopolitical analysis is Gemini's sweet spot — large context window,
+strong reasoning, good at synthesizing multiple sources. Gemini 3 Flash improves on
+2.5 Flash with better reasoning and tool-calling reliability. The desk's Country Intel
+tool works well with it. Geopolitical topics rarely hit hard censorship walls (models
+will discuss wars, coups, and power dynamics freely).
 
 If you wanted a self-hosted option for data sovereignty, consider
 `perplexity-ai/r1-1776-distill-llama-70b`:
@@ -218,7 +222,7 @@ inference per query, and the 10-minute scale-to-zero timeout:
 Compare to current cloud API costs for those same desks:
 - HUMINT (Ollama/local): $0 but limited by RTX 3080 Ti VRAM (12GB, small models only)
 - Cyber (Claude Sonnet): ~$3/M input + $15/M output tokens
-- Cultural (Gemini Flash): ~$0.15/M input tokens
+- Cultural (Gemini 3 Flash): ~$0.15/M input tokens
 
 The HF endpoints are more expensive in raw dollars but give you uncensored output,
 data sovereignty, and no rate limits. The local Ollama setup remains as a free
