@@ -1,5 +1,5 @@
 """
-David Thorne Persona Daemon
+Persona 1 Daemon
 
 A long-running service that periodically wakes the phone, opens a social media
 app, scrolls the feed like a human, and occasionally interacts with posts
@@ -72,7 +72,7 @@ class SessionStats:
 
 class PersonaDaemon:
     """
-    Runs David Thorne's social media persona as a background service.
+    Runs a social media persona as a background service.
 
     Each session:
     1. Pick a random app (weighted)
@@ -85,7 +85,7 @@ class PersonaDaemon:
     def __init__(self):
         load_dotenv()
         self.base_dir = Path(os.getenv("OSIA_BASE_DIR", Path(__file__).resolve().parent.parent.parent))
-        self.adb = ADBDevice(device_id=os.getenv("ADB_DEVICE_DAVID_THORNE"))
+        self.adb = ADBDevice(device_id=os.getenv("ADB_DEVICE_PERSONA_1"))
         self.gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
         self.agent = SocialMediaAgent(
@@ -107,7 +107,8 @@ class PersonaDaemon:
         return ""
 
     def _build_persona(self) -> str:
-        return """You are David Thorne, a 34-year-old Australian bloke from Perth.
+        persona_name = os.getenv("PERSONA_1_NAME", "A generic persona")
+        return f"""You are {persona_name}, a 34-year-old Australian bloke from Perth.
 You work in IT infrastructure and have a dry, sardonic sense of humor.
 You're politically engaged but not preachy — you care about workers' rights,
 housing affordability, and tech ethics. You follow news, science, and memes.
@@ -159,7 +160,7 @@ When deciding whether to engage with a post, consider the OSIA directives:
 ---
 
 You are scrolling through your social media feed on your phone.
-Look at this screenshot and decide what David Thorne would naturally do.
+Look at this screenshot and decide what {persona_name} would naturally do.
 
 Consider:
 - Is this post interesting enough to engage with?
@@ -290,7 +291,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
     async def run_forever(self):
         """Main daemon loop — run sessions with randomized gaps."""
-        logger.info("David Thorne persona daemon starting...")
+        logger.info(f"Persona daemon starting for: {os.getenv('PERSONA_1_NAME', 'Persona 1')}")
 
         while True:
             try:

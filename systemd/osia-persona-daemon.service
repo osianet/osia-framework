@@ -1,5 +1,5 @@
 [Unit]
-Description=OSIA David Thorne Persona Daemon
+Description=OSIA Persona 1 Daemon
 After=network.target docker.service
 Requires=docker.service
 
