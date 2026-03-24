@@ -565,14 +565,28 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
         if should_like and can_like:
             logger.info("[%s] Liking video: %s", name, topic[:60])
-            result = await self.agent.execute_custom(
-                "",
-                "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
-                "Look for the interaction bar (like, comment, share) below the image or text. "
-                "DO NOT tap the center of an image or video, as this will full-screen it and hide the buttons. "
-                "If already liked, just use 'done'. Once liked, use 'done'.",
-            )
-            if result.success:
+            liked = False
+            try:
+                nodes = await self.adb.dump_ui_tree()
+                for desc in ("like", "like this", "likes", "heart", "thumbs up"):
+                    if await self.adb.tap_element(nodes, content_desc=desc):
+                        liked = True
+                        break
+                if not liked:
+                    for rid in ("like_button", "btn_like", "row_feed_button_like"):
+                        if await self.adb.tap_element(nodes, resource_id=rid):
+                            liked = True
+                            break
+            except Exception as e:
+                logger.warning("[%s] UI tree like failed: %s", name, e)
+            if not liked:
+                result = await self.agent.execute_custom(
+                    "",
+                    "Find and tap the Like/Thumbs-up button for this video. "
+                    "If already liked, use 'done'. Once liked, use 'done'.",
+                )
+                liked = result.success
+            if liked:
                 self.stats.likes += 1
             else:
                 logger.info("[%s] Like failed, pressing back", name)
@@ -582,23 +596,59 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             comment = parsed.get("comment_text", "")
             if comment:
                 logger.info("[%s] Commenting on video: %s", name, comment[:80])
-                result = await self.agent.execute_custom(
-                    "",
-                    f"You are looking at a social media post. Follow these steps exactly:\n\n"
-                    f"1. Find the comment icon/button (speech bubble icon, usually in the row of "
-                    f"   like/comment/share icons BELOW the post content). Tap it.\n"
-                    f"2. Wait for the comments section to open. A text input field will appear "
-                    f"   near the BOTTOM of the screen.\n"
-                    f"3. Use 'tap_and_type' to tap the CENTER of that input field and type "
-                    f"   this comment exactly:\n\n"
-                    f"   \"{comment}\"\n\n"
-                    f"4. Tap the Post/Send button (usually to the right of the input field or "
-                    f"   on the keyboard) to submit.\n"
-                    f"5. Once the comment appears in the list, use 'done'.\n\n"
-                    f"IMPORTANT: Do NOT tap anywhere on the post image or video — only tap the "
-                    f"comment icon in the action bar, then the input field at the bottom.",
-                )
-                if result.success:
+                commented = False
+                try:
+                    nodes = await self.adb.dump_ui_tree()
+                    comment_tapped = False
+                    for desc in ("comment", "comments", "add a comment"):
+                        if await self.adb.tap_element(nodes, content_desc=desc):
+                            comment_tapped = True
+                            break
+                    if not comment_tapped:
+                        for rid in ("comment_button", "btn_comment", "row_feed_button_comment"):
+                            if await self.adb.tap_element(nodes, resource_id=rid):
+                                comment_tapped = True
+                                break
+                    if comment_tapped:
+                        await asyncio.sleep(1.5)
+                        nodes = await self.adb.dump_ui_tree()
+                        input_tapped = False
+                        for desc in ("add a comment", "write a comment", "comment…", "comment..."):
+                            if await self.adb.tap_element(nodes, content_desc=desc, clickable_only=False):
+                                input_tapped = True
+                                break
+                        if not input_tapped:
+                            for node in nodes:
+                                if "EditText" in node["class_name"]:
+                                    await self.adb.tap(node["cx"], node["cy"])
+                                    input_tapped = True
+                                    break
+                        if input_tapped:
+                            await asyncio.sleep(0.5)
+                            await self.adb.type_text(comment)
+                            await asyncio.sleep(0.8)
+                            nodes = await self.adb.dump_ui_tree()
+                            for desc in ("post", "send", "share"):
+                                if await self.adb.tap_element(nodes, content_desc=desc):
+                                    commented = True
+                                    break
+                            if not commented:
+                                for txt in ("post", "send", "share"):
+                                    if await self.adb.tap_element(nodes, text=txt):
+                                        commented = True
+                                        break
+                            if not commented:
+                                await self.adb.press_enter()
+                                commented = True
+                except Exception as e:
+                    logger.warning("[%s] UI tree comment failed: %s", name, e)
+                if not commented:
+                    result = await self.agent.execute_custom(
+                        "",
+                        f"Tap the comment button, type this comment in the input field, then submit it:\n\"{comment}\"",
+                    )
+                    commented = result.success
+                if commented:
                     self.stats.comments += 1
                 else:
                     logger.info("[%s] Comment failed, pressing back", name)
@@ -606,13 +656,24 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
         if should_share:
             logger.info("[%s] Sharing values-aligned video: %s", name, topic[:60])
-            result = await self.agent.execute_custom(
-                "",
-                "Find and tap the Share/Send/Repost button (often an arrow, paper plane, or circular arrows). "
-                "When the share menu opens, tap 'Add to story', 'Repost', 'Share', or 'Copy link'. "
-                "Once the share action is complete, use 'done'. If you cannot find a way to share after opening the menu, use 'fail'.",
-            )
-            if result.success:
+            shared = False
+            try:
+                nodes = await self.adb.dump_ui_tree()
+                for desc in ("share", "send", "repost", "forward"):
+                    if await self.adb.tap_element(nodes, content_desc=desc):
+                        shared = True
+                        break
+            except Exception as e:
+                logger.warning("[%s] UI tree share failed: %s", name, e)
+            if not shared:
+                result = await self.agent.execute_custom(
+                    "",
+                    "Find and tap the Share/Send/Repost button. "
+                    "When the share menu opens, tap 'Repost', 'Share', or 'Copy link'. "
+                    "Once done, use 'done'.",
+                )
+                shared = result.success
+            if shared:
                 self.stats.shares += 1
             else:
                 logger.info("[%s] Share failed, pressing back", name)
