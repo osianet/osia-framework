@@ -1,5 +1,5 @@
 [Unit]
-Description=OSIA Persona 1 Daemon
+Description=OSIA Persona Daemon (Persona 1)
 After=network.target docker.service
 Requires=docker.service
 
@@ -7,7 +7,7 @@ Requires=docker.service
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/osia-framework
-ExecStart=/home/ubuntu/osia-framework/.venv/bin/python -m src.agents.persona_daemon
+ExecStart=/home/ubuntu/osia-framework/.venv/bin/python -m src.agents.persona_daemon --persona 1
 Restart=always
 RestartSec=30
 EnvironmentFile=/home/ubuntu/osia-framework/.env
