@@ -259,7 +259,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
     "post_summary": "Brief description of what the post is about",
     "is_video": true/false,
     "action": "scroll|like|comment|share|watch_video",
-    "comment_text": "Only if action is comment — what {self.persona_name} would say",
+    "comment_text": "Only if action is comment — what {self.persona_name} would say. Must be specific to THIS post — reference something concrete from it. 1-2 sentences, casual and natural, no hashtags, no emojis unless it really fits. Sound like a real person, not a bot.",
     "reasoning": "Brief reason for the choice"
 }}
 """
@@ -487,7 +487,7 @@ Rules:
 Respond with ONLY valid JSON (no markdown, no code fences):
 {{
     "action": "scroll|like|comment|like_and_comment|share|like_and_share",
-    "comment_text": "Only if commenting — what {name} would say (1-2 sentences, casual)",
+    "comment_text": "Only if commenting — what {name} would say. Must reference something specific from the video — a claim, a moment, something said. 1-2 sentences, casual, no hashtags. Sound like a real person.",
     "reasoning": "Brief reason",
     "values_alignment": "none|low|medium|high"
 }}"""
@@ -535,10 +535,19 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 logger.info("[%s] Commenting on video: %s", name, comment[:80])
                 result = await self.agent.execute_custom(
                     "",
-                    f"Tap the comment button/icon on the post currently visible. "
-                    f"Tap the comment input field, type this comment, then tap Post/Send:\n\n"
-                    f"\"{comment}\"\n\n"
-                    f"Once posted, press back to return to the feed and use 'done'.",
+                    f"You are looking at a social media post. Follow these steps exactly:\n\n"
+                    f"1. Find the comment icon/button (speech bubble icon, usually in the row of "
+                    f"   like/comment/share icons BELOW the post content). Tap it.\n"
+                    f"2. Wait for the comments section to open. A text input field will appear "
+                    f"   near the BOTTOM of the screen.\n"
+                    f"3. Use 'tap_and_type' to tap the CENTER of that input field and type "
+                    f"   this comment exactly:\n\n"
+                    f"   \"{comment}\"\n\n"
+                    f"4. Tap the Post/Send button (usually to the right of the input field or "
+                    f"   on the keyboard) to submit.\n"
+                    f"5. Once the comment appears in the list, use 'done'.\n\n"
+                    f"IMPORTANT: Do NOT tap anywhere on the post image or video — only tap the "
+                    f"comment icon in the action bar, then the input field at the bottom.",
                 )
                 if result.success:
                     self.stats.comments += 1
