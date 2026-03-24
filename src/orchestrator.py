@@ -3,6 +3,7 @@ import json
 import re
 import asyncio
 import logging
+import subprocess
 from pathlib import Path
 import httpx
 import redis.asyncio as redis
@@ -567,65 +568,50 @@ class OsiaOrchestrator:
     # ADB media capture
     # ------------------------------------------------------------------
 
-    async def _detect_video_duration(self, screenshot_path: str) -> int | None:
+    async def _detect_video_duration(self, url: str) -> int | None:
         """
-        Ask Gemini Vision to read the video duration from a player UI screenshot.
-        Returns duration in seconds, or None if it cannot be determined.
+        Use yt-dlp --dump-json to fetch video metadata without downloading.
+        Returns duration in seconds, or None if unavailable.
+        Much more reliable than trying to read a timestamp from a screenshot.
         """
+        yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
+        if not yt_dlp_bin.exists():
+            yt_dlp_bin = Path("yt-dlp")  # fall back to system PATH
+
+        cmd = [str(yt_dlp_bin), "--dump-json", "--no-playlist", url]
         try:
-            screen_file = self.client.files.upload(file=screenshot_path)
-            response = self.client.models.generate_content(
-                model=self.model_id,
-                contents=[
-                    screen_file,
-                    (
-                        "Look at this screenshot of a video player (Instagram Reel, TikTok, "
-                        "YouTube Short, Facebook Reel, etc.). "
-                        "Find the total video duration shown in the player UI — it may appear "
-                        "as a timestamp like '0:45', '1:23', or in a progress bar label. "
-                        "Reply with ONLY the total duration in seconds as a plain integer "
-                        "(e.g. 45, 83, 120). "
-                        "If you cannot see a duration, reply with the single word: unknown"
-                    ),
-                ],
+            proc = await asyncio.to_thread(
+                subprocess.run, cmd,
+                capture_output=True, text=True, timeout=15,
             )
-            text = response.text.strip().lower()
-            if text == "unknown" or not text:
-                return None
-            # Handle MM:SS format in case the model ignores the instruction
-            if ":" in text:
-                parts = text.split(":")
-                return int(parts[0]) * 60 + int(parts[1])
-            return int(text)
-        except Exception as e:
-            logger.warning("Duration detection failed: %s", e)
-            return None
+            if proc.returncode == 0 and proc.stdout.strip():
+                data = json.loads(proc.stdout)
+                duration = data.get("duration")
+                if duration:
+                    return int(duration)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
+            logger.warning("yt-dlp duration probe failed: %s", e)
+        return None
 
     async def process_media_link(self, url: str) -> str:
         """Uses ADB to capture media from a URL, then analyzes it with Gemini."""
         logger.info("Triggering ADB capture for URL: %s", url)
 
-        # Detect actual video duration so we record exactly as long as needed.
-        # We open the URL first, let it load, screenshot, then ask Gemini to read
-        # the player timestamp. Fall back to 180s if detection fails.
-        _FALLBACK_DURATION = 180
-        _BUFFER_SECS = 3  # small buffer so we don't cut off the last frame
+        _FALLBACK_DURATION = 60  # sane fallback for short-form content
+        _MAX_DURATION = 180      # hard cap — no point recording more than 3 min
+        _BUFFER_SECS = 3
 
-        await self.adb.open_url(url)
-        await asyncio.sleep(5)  # wait for player to render
-
-        tmp_dir = self.base_dir / "tmp"
-        tmp_dir.mkdir(exist_ok=True)
-        duration_screenshot = str(tmp_dir / "duration_probe.png")
-        await self.adb.take_screenshot(duration_screenshot)
-
-        detected = await self._detect_video_duration(duration_screenshot)
-        if detected and 3 <= detected <= 600:
-            record_duration = detected + _BUFFER_SECS
+        # Probe duration via yt-dlp metadata before touching the phone
+        detected = await self._detect_video_duration(url)
+        if detected and 3 <= detected <= _MAX_DURATION:
+            record_duration = min(detected + _BUFFER_SECS, _MAX_DURATION)
             logger.info("Detected video duration: %ds — recording for %ds", detected, record_duration)
         else:
             record_duration = _FALLBACK_DURATION
             logger.info("Could not detect duration (got %r) — using fallback %ds", detected, record_duration)
+
+        await self.adb.open_url(url)
+        await asyncio.sleep(5)  # wait for player to render
 
         # TTL covers the full record window plus upload headroom.
         lock_ttl = record_duration + 120
