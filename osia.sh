@@ -367,32 +367,66 @@ case $command in
         QDRANT_API_KEY=$(grep -E '^QDRANT_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
         qdrant_auth=()
         [ -n "$QDRANT_API_KEY" ] && qdrant_auth=(-H "api-key: $QDRANT_API_KEY")
+
+        # Expected desk collections (vectorTag → display name)
+        declare -A QDRANT_DESKS=(
+            ["collection-directorate"]="Collection Directorate"
+            ["geopolitical-and-security-desk"]="Geopolitical & Security"
+            ["cultural-and-theological-intelligence-desk"]="Cultural & Theological"
+            ["science-technology-and-commercial-desk"]="Science & Tech"
+            ["human-intelligence-and-profiling-desk"]="Human Intelligence"
+            ["finance-and-economics-directorate"]="Finance & Economics"
+            ["cyber-intelligence-and-warfare-desk"]="Cyber Intelligence"
+            ["the-watch-floor"]="The Watch Floor"
+        )
+
         qdrant_collections=$(curl -s --connect-timeout 3 "${qdrant_auth[@]}" http://localhost:6333/collections 2>/dev/null)
         if [ -n "$qdrant_collections" ] && echo "$qdrant_collections" | grep -q '"status":"ok"'; then
+            # Build a set of existing collection names
+            existing_names=$(echo "$qdrant_collections" | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
+
             total_points=0
-            collection_names=$(echo "$qdrant_collections" | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
-            if [ -z "$collection_names" ]; then
-                echo -e "  ${DIM}No collections found${NC}"
-            else
-                while IFS= read -r cname; do
+            active_count=0
+            empty_count=0
+
+            for tag in $(echo "${!QDRANT_DESKS[@]}" | tr ' ' '\n' | sort); do
+                desk_label="${QDRANT_DESKS[$tag]}"
+                if echo "$existing_names" | grep -qx "$tag"; then
+                    cinfo=$(curl -s --connect-timeout 3 "${qdrant_auth[@]}" "http://localhost:6333/collections/${tag}" 2>/dev/null)
+                    points=$(echo "$cinfo" | grep -o '"points_count":[0-9]*' | head -1 | cut -d: -f2)
+                    vectors=$(echo "$cinfo" | grep -o '"vectors_count":[0-9]*' | head -1 | cut -d: -f2)
+                    segments=$(echo "$cinfo" | grep -o '"segments_count":[0-9]*' | head -1 | cut -d: -f2)
+
+                    points=${points:-0}
+                    total_points=$((total_points + points))
+                    active_count=$((active_count + 1))
+
+                    echo -e "  ${GREEN}●${NC} ${desk_label}: ${BOLD}${points}${NC} points ${DIM}(vectors: ${vectors:-0}, segments: ${segments:-0})${NC}"
+                else
+                    empty_count=$((empty_count + 1))
+                    echo -e "  ${DIM}○ ${desk_label}: no collection yet${NC}"
+                fi
+            done
+
+            # Show any extra collections not in our expected list
+            while IFS= read -r cname; do
+                [ -z "$cname" ] && continue
+                if [ -z "${QDRANT_DESKS[$cname]+x}" ]; then
                     cinfo=$(curl -s --connect-timeout 3 "${qdrant_auth[@]}" "http://localhost:6333/collections/${cname}" 2>/dev/null)
                     points=$(echo "$cinfo" | grep -o '"points_count":[0-9]*' | head -1 | cut -d: -f2)
                     vectors=$(echo "$cinfo" | grep -o '"vectors_count":[0-9]*' | head -1 | cut -d: -f2)
                     segments=$(echo "$cinfo" | grep -o '"segments_count":[0-9]*' | head -1 | cut -d: -f2)
-                    status=$(echo "$cinfo" | grep -o '"optimizer_status":{"ok":[^}]*}' | grep -o '"ok":[^,}]*' | cut -d: -f2 | tr -d ' "')
 
                     points=${points:-0}
                     total_points=$((total_points + points))
+                    active_count=$((active_count + 1))
 
-                    status_color="$GREEN"
-                    [ "$status" != "true" ] && status_color="$YELLOW"
+                    echo -e "  ${CYAN}●${NC} ${cname}: ${BOLD}${points}${NC} points ${DIM}(vectors: ${vectors:-0}, segments: ${segments:-0})${NC}"
+                fi
+            done <<< "$existing_names"
 
-                    echo -e "  ${status_color}●${NC} ${cname}: ${BOLD}${points}${NC} points ${DIM}(vectors: ${vectors:-0}, segments: ${segments:-0})${NC}"
-                done <<< "$collection_names"
-                col_count=$(echo "$collection_names" | wc -l | tr -d ' ')
-                echo -e "  ${DIM}─────────────────────────────────${NC}"
-                echo -e "  Total: ${BOLD}${col_count}${NC} collections, ${BOLD}${total_points}${NC} points"
-            fi
+            echo -e "  ${DIM}─────────────────────────────────────────────${NC}"
+            echo -e "  Total: ${BOLD}${active_count}${NC}/${#QDRANT_DESKS[@]} desks active, ${BOLD}${total_points}${NC} points indexed"
         else
             echo -e "  ${DIM}Qdrant unavailable — cannot query collections${NC}"
         fi
