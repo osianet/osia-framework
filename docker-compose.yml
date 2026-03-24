@@ -16,3 +16,14 @@ services:
     volumes:
       - ./signal-data:/home/signalapi/.local/share/signal-cli
     restart: always
+
+  kali-sandbox:
+    image: kalilinux/kali-rolling
+    container_name: osia-kali
+    tty: true
+    stdin_open: true
+    restart: always
+    command: >
+      sh -c "apt-get update && 
+             apt-get install -y nmap whois dnsutils iputils-ping curl && 
+             tail -f /dev/null"

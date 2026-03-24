@@ -25,6 +25,7 @@ SERVICES=(
     "osia-mcp-tavily-bridge.service"
     "osia-mcp-time-bridge.service"
     "osia-mcp-wikipedia-bridge.service"
+    "osia-cyber-bridge.service"
 )
 
 TIMERS=(
@@ -38,6 +39,7 @@ CONTAINERS=(
     "osia-redis"
     "osia-signal"
     "mailserver"
+    "osia-kali"
 )
 
 # --- Helper Functions ---

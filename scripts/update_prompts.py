@@ -128,9 +128,14 @@ def activate_global_skills():
         cursor = conn.cursor()
         
         # This exact JSON array defines the default enabled skills across all agents
-        skills_json = '["web-browsing","save-file-to-browser","create-chart","web-scraping","osia-cyber-ip-intel","osia-finance-stock-intel","osia-stash-writer"]'
+        # We REMOVE "web-scraping" because AnythingLLM sometimes injects it twice, causing Claude tool errors.
+        skills_json = '["web-browsing","save-file-to-browser","create-chart","osia-cyber-ip-intel","osia-finance-stock-intel","osia-stash-writer","osia-geopol-country-intel","osia-social-username-recon","osia-culture-observatory","osia-github-repo-intel","osia-report-broadcast","osia-cyber-kali-tools"]'
         
         cursor.execute("UPDATE system_settings SET value = ? WHERE label = 'default_agent_skills';", (skills_json,))
+        
+        # Explicitly disable web-scraping to ensure it doesn't appear twice
+        cursor.execute("UPDATE system_settings SET value = '[\"web-scraping\"]' WHERE label = 'disabled_agent_skills';")
+        
         conn.commit()
         conn.close()
         logger.info("Successfully activated all OSIA custom skills globally in the database.")
