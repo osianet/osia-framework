@@ -108,18 +108,19 @@ Analyze this screenshot and decide the SINGLE next action to take.
 Respond with ONLY valid JSON (no markdown, no code fences):
 {{
     "description": "Brief description of what's currently on screen",
-    "action": "tap|swipe_down|swipe_up|type|back|done|fail",
+    "action": "tap|swipe_down|swipe_up|type|tap_and_type|back|done|fail",
     "coordinates": {{"x": 540, "y": 1200}},
     "swipe": {{"x1": 540, "y1": 1500, "x2": 540, "y2": 500}},
-    "text": "text to type if action is type",
+    "text": "text to type if action is type or tap_and_type",
     "data": "any extracted data relevant to the goal (e.g. comments text, post content)",
     "reasoning": "why you chose this action"
 }}
 
 Rules:
-- "coordinates" is required when action is "tap" — tap the exact center of the UI element.
+- "coordinates" is required when action is "tap" or "tap_and_type" — tap the exact center of the UI element.
 - "swipe" is required when action is "swipe_down" or "swipe_up".
-- "text" is required when action is "type".
+- "text" is required when action is "type" or "tap_and_type".
+- "tap_and_type" should be used when you need to select an input field and immediately type into it.
 - Use "done" when the goal has been achieved. Put the final result in "data".
 - Use "fail" if the goal cannot be achieved from the current state.
 - If you need to scroll to see more content, use "swipe_down" or "swipe_up".
@@ -179,6 +180,15 @@ Rules:
         elif act == "type":
             text = action.get("text", "")
             logger.info("Typing: %s", text[:50])
+            await self.adb.type_text(text)
+
+        elif act == "tap_and_type":
+            coords = action.get("coordinates", {})
+            x, y = coords.get("x", 0), coords.get("y", 0)
+            text = action.get("text", "")
+            logger.info("Tapping (%d, %d) and typing: %s", x, y, text[:50])
+            await self.adb.tap(x, y)
+            await asyncio.sleep(1.0)  # Wait for keyboard/focus
             await self.adb.type_text(text)
 
         elif act == "back":

@@ -518,11 +518,16 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             logger.info("[%s] Liking video: %s", name, topic[:60])
             result = await self.agent.execute_custom(
                 "",
-                "Find and tap the Like/Heart/Thumbs-up button on the post currently visible. "
+                "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
+                "Look for the interaction bar (like, comment, share) below the image or text. "
+                "DO NOT tap the center of an image or video, as this will full-screen it and hide the buttons. "
                 "If already liked, just use 'done'. Once liked, use 'done'.",
             )
             if result.success:
                 self.stats.likes += 1
+            else:
+                logger.info("[%s] Like failed, pressing back", name)
+                await self.adb.press_back()
 
         if should_comment and can_comment:
             comment = parsed.get("comment_text", "")
@@ -537,17 +542,23 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 )
                 if result.success:
                     self.stats.comments += 1
+                else:
+                    logger.info("[%s] Comment failed, pressing back", name)
+                    await self.adb.press_back()
 
         if should_share:
             logger.info("[%s] Sharing values-aligned video: %s", name, topic[:60])
             result = await self.agent.execute_custom(
                 "",
-                "Find and tap the Share/Repost button on the post currently visible. "
-                "If a share dialog appears, tap 'Share to Feed' or 'Repost' or the equivalent. "
-                "Once shared, use 'done'. If sharing isn't possible, use 'done' anyway.",
+                "Find and tap the Share/Send/Repost button (often an arrow, paper plane, or circular arrows). "
+                "When the share menu opens, tap 'Add to story', 'Repost', 'Share', or 'Copy link'. "
+                "Once the share action is complete, use 'done'. If you cannot find a way to share after opening the menu, use 'fail'.",
             )
             if result.success:
                 self.stats.shares += 1
+            else:
+                logger.info("[%s] Share failed, pressing back", name)
+                await self.adb.press_back()
 
     # ------------------------------------------------------------------
     # Original content creation
@@ -721,11 +732,16 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             logger.info("[%s] Liking: %s", name, decision.get("post_summary", "")[:60])
             result = await self.agent.execute_custom(
                 "",
-                "Find and tap the Like/Heart/Thumbs-up button on the post currently visible on screen. "
+                "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
+                "Look for the interaction bar (like, comment, share) below the image or text. "
+                "DO NOT tap the center of an image or video, as this will full-screen it and hide the buttons. "
                 "If already liked, just use 'done'. Once liked, use 'done'.",
             )
             if result.success:
                 self.stats.likes += 1
+            else:
+                logger.info("[%s] Like failed, pressing back", name)
+                await self.adb.press_back()
             return
 
         elif action == "comment" and self.stats.comments < self._daily_comment_cap:
@@ -741,18 +757,24 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 )
                 if result.success:
                     self.stats.comments += 1
+                else:
+                    logger.info("[%s] Comment failed, pressing back", name)
+                    await self.adb.press_back()
                 return
 
         elif action == "share":
             logger.info("[%s] Sharing: %s", name, decision.get("post_summary", "")[:60])
             result = await self.agent.execute_custom(
                 "",
-                "Find and tap the Share/Repost button on the post currently visible. "
-                "If a share dialog appears, tap 'Share to Feed' or 'Repost' or the equivalent. "
-                "Once shared, use 'done'. If sharing isn't possible, use 'done' anyway.",
+                "Find and tap the Share/Send/Repost button (often an arrow, paper plane, or circular arrows). "
+                "When the share menu opens, tap 'Add to story', 'Repost', 'Share', or 'Copy link'. "
+                "Once the share action is complete, use 'done'. If you cannot find a way to share after opening the menu, use 'fail'.",
             )
             if result.success:
                 self.stats.shares += 1
+            else:
+                logger.info("[%s] Share failed, pressing back", name)
+                await self.adb.press_back()
             return
 
         elif action in ("watch_video", "watch"):
@@ -783,12 +805,18 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 logger.info("[%s] Capture failed, watching for %.0fs", name, watch_time)
                 await asyncio.sleep(watch_time)
                 if random.random() < 0.4 and self.stats.likes < self._daily_like_cap:
-                    await self.agent.execute_custom(
+                    result = await self.agent.execute_custom(
                         "",
-                        "Find and tap the Like/Heart/Thumbs-up button on the post currently visible. "
+                        "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
+                        "Look for the interaction bar (like, comment, share) below the image or text. "
+                        "DO NOT tap the center of an image or video, as this will full-screen it and hide the buttons. "
                         "If already liked, just use 'done'. Once liked, use 'done'.",
                     )
-                    self.stats.likes += 1
+                    if result.success:
+                        self.stats.likes += 1
+                    else:
+                        logger.info("[%s] Like failed, pressing back", name)
+                        await self.adb.press_back()
             return
 
         # Default: scroll to next post
