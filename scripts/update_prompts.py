@@ -35,11 +35,11 @@ TEMPLATES_DIR = BASE_DIR / "templates" / "prompts"
 DESK_MODELS = {
     "cyber-intelligence-and-warfare-desk": {
         "chatProvider": "generic-openai",
-        "chatModel": "Dolphin-3.0-70B",
+        "chatModel": "NousResearch/Hermes-3-Llama-3.1-70B",
         "agentProvider": "generic-openai",
-        "agentModel": "Dolphin-3.0-70B",
+        "agentModel": "NousResearch/Hermes-3-Llama-3.1-70B",
         "vectorTag": "cyber_intel"
-    } if os.getenv("HF_ENDPOINT_DOLPHIN_70B") else {
+    } if os.getenv("HF_ENDPOINT_HERMES_70B") else {
         "chatProvider": "anthropic",
         "chatModel": "claude-sonnet-4-6",
         "agentProvider": "anthropic",
@@ -55,11 +55,11 @@ DESK_MODELS = {
     },
     "cultural-and-theological-intelligence-desk": {
         "chatProvider": "generic-openai",
-        "chatModel": "Dolphin-3.0-8B",
+        "chatModel": "cognitivecomputations/Dolphin3.0-R1-Mistral-24B",
         "agentProvider": "generic-openai",
-        "agentModel": "Dolphin-3.0-8B",
+        "agentModel": "cognitivecomputations/Dolphin3.0-R1-Mistral-24B",
         "vectorTag": "cultural_intel"
-    } if os.getenv("HF_ENDPOINT_DOLPHIN_8B") else {
+    } if os.getenv("HF_ENDPOINT_DOLPHIN_24B") else {
         "chatProvider": "gemini",
         "chatModel": "gemini-3-flash",
         "agentProvider": "gemini",
@@ -75,11 +75,11 @@ DESK_MODELS = {
     },
     "human-intelligence-and-profiling-desk": {
         "chatProvider": "generic-openai",
-        "chatModel": "Dolphin-3.0-70B",
+        "chatModel": "cognitivecomputations/Dolphin3.0-R1-Mistral-24B",
         "agentProvider": "generic-openai",
-        "agentModel": "Dolphin-3.0-70B",
+        "agentModel": "cognitivecomputations/Dolphin3.0-R1-Mistral-24B",
         "vectorTag": "human_intel"
-    } if os.getenv("HF_ENDPOINT_DOLPHIN_70B") else {
+    } if os.getenv("HF_ENDPOINT_DOLPHIN_24B") else {
         "chatProvider": "ollama",
         "chatModel": "nchapman/dolphin3.0-llama3:latest",
         "agentProvider": "ollama",
@@ -110,13 +110,13 @@ DESK_MODELS = {
 }
 
 # Apply HF URLs if they exist
-if os.getenv("HF_ENDPOINT_DOLPHIN_70B"):
-    url = os.getenv("HF_ENDPOINT_DOLPHIN_70B").rstrip("/") + "/v1"
+if os.getenv("HF_ENDPOINT_HERMES_70B"):
+    url = os.getenv("HF_ENDPOINT_HERMES_70B").rstrip("/") + "/v1"
     DESK_MODELS["cyber-intelligence-and-warfare-desk"]["basePath"] = url
-    DESK_MODELS["human-intelligence-and-profiling-desk"]["basePath"] = url
 
-if os.getenv("HF_ENDPOINT_DOLPHIN_8B"):
-    url = os.getenv("HF_ENDPOINT_DOLPHIN_8B").rstrip("/") + "/v1"
+if os.getenv("HF_ENDPOINT_DOLPHIN_24B"):
+    url = os.getenv("HF_ENDPOINT_DOLPHIN_24B").rstrip("/") + "/v1"
+    DESK_MODELS["human-intelligence-and-profiling-desk"]["basePath"] = url
     DESK_MODELS["cultural-and-theological-intelligence-desk"]["basePath"] = url
 
 def generate_prompt(template: str, directives: str) -> str:

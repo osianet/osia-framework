@@ -17,9 +17,9 @@ logger = logging.getLogger("osia.hf_endpoints")
 # Map desk slugs → HF endpoint names. Only desks backed by HF endpoints
 # need entries here. All other desks are ignored (no-op).
 DESK_ENDPOINT_MAP: dict[str, str] = {
-    "human-intelligence-and-profiling-desk": "osia-dolphin-70b",
-    "cyber-intelligence-and-warfare-desk": "osia-dolphin-70b",
-    "cultural-and-theological-intelligence-desk": "osia-dolphin-8b",
+    "human-intelligence-and-profiling-desk": "osia-dolphin-r1-24b",
+    "cyber-intelligence-and-warfare-desk": "osia-hermes-70b",
+    "cultural-and-theological-intelligence-desk": "osia-dolphin-r1-24b",
 }
 
 # How long to wait for an endpoint to become ready before giving up

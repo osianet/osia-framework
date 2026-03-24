@@ -52,8 +52,8 @@ if not HF_TOKEN:
 
 ENDPOINTS = [
     {
-        "name": "osia-dolphin-8b",
-        "repository": "cognitivecomputations/Dolphin3.0-Llama3.1-8B",
+        "name": "osia-dolphin-r1-24b",
+        "repository": "cognitivecomputations/Dolphin3.0-R1-Mistral-24B",
         "task": "text-generation",
         "framework": "pytorch",
         "accelerator": "gpu",
@@ -64,7 +64,7 @@ ENDPOINTS = [
         "type": "protected",
         "min_replica": 0,
         "max_replica": 1,
-        "scale_to_zero_timeout": 10,  # minutes
+        "scale_to_zero_timeout": 15,  # minutes (min required by HF)
         "custom_image": {
             "health_route": "/health",
             "url": "ghcr.io/huggingface/text-generation-inference:latest",
@@ -75,11 +75,11 @@ ENDPOINTS = [
                 "MAX_BATCH_PREFILL_TOKENS": "4096",
             },
         },
-        "description": "Dolphin 3.0 8B — uncensored general-purpose model for HUMINT desk fallback",
+        "description": "Dolphin 3.0 R1 24B — uncensored reasoning model for HUMINT/Cultural desks",
     },
     {
-        "name": "osia-dolphin-70b",
-        "repository": "cognitivecomputations/Dolphin3.0-Llama3.1-70B",
+        "name": "osia-hermes-70b",
+        "repository": "NousResearch/Hermes-3-Llama-3.1-70B",
         "task": "text-generation",
         "framework": "pytorch",
         "accelerator": "gpu",
@@ -90,7 +90,7 @@ ENDPOINTS = [
         "type": "protected",
         "min_replica": 0,
         "max_replica": 1,
-        "scale_to_zero_timeout": 10,
+        "scale_to_zero_timeout": 15,  # minutes (min required by HF)
         "custom_image": {
             "health_route": "/health",
             "url": "ghcr.io/huggingface/text-generation-inference:latest",
@@ -101,7 +101,7 @@ ENDPOINTS = [
                 "MAX_BATCH_PREFILL_TOKENS": "4096",
             },
         },
-        "description": "Dolphin 3.0 70B — primary uncensored model for HUMINT/Cyber/Cultural desks",
+        "description": "Hermes 3 70B — high-parameter agentic model for Cyber desk",
     },
 ]
 

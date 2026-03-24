@@ -340,7 +340,17 @@ case $command in
         # --- API & Component Health ---
         section_header "API HEALTH"
         check_api_health "AnythingLLM" "http://localhost:3001"
-        check_api_health "Qdrant" "http://localhost:6333"
+        QDRANT_API_KEY_HEALTH=$(grep -E '^QDRANT_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+        if [ -n "$QDRANT_API_KEY_HEALTH" ]; then
+            http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 -H "api-key: $QDRANT_API_KEY_HEALTH" http://localhost:6333/collections 2>/dev/null)
+            if [ "$http_code" -ge 200 ] && [ "$http_code" -lt 400 ] 2>/dev/null; then
+                echo -e "[${GREEN}OK${NC}]   Qdrant ${DIM}(http://localhost:6333 → HTTP $http_code)${NC}"
+            else
+                echo -e "[${RED}FAIL${NC}] Qdrant ${DIM}(http://localhost:6333 → ${http_code:-timeout})${NC}"
+            fi
+        else
+            check_api_health "Qdrant" "http://localhost:6333"
+        fi
         check_api_health "Signal API" "http://localhost:8081/v1/about"
 
         # Redis ping
@@ -354,26 +364,28 @@ case $command in
 
         # --- Qdrant Vector DB ---
         section_header "QDRANT KNOWLEDGE BASE"
-        qdrant_collections=$(curl -s --connect-timeout 3 http://localhost:6333/collections 2>/dev/null)
+        QDRANT_API_KEY=$(grep -E '^QDRANT_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+        qdrant_auth=()
+        [ -n "$QDRANT_API_KEY" ] && qdrant_auth=(-H "api-key: $QDRANT_API_KEY")
+        qdrant_collections=$(curl -s --connect-timeout 3 "${qdrant_auth[@]}" http://localhost:6333/collections 2>/dev/null)
         if [ -n "$qdrant_collections" ] && echo "$qdrant_collections" | grep -q '"status":"ok"'; then
             total_points=0
-            # Parse collection names from JSON
             collection_names=$(echo "$qdrant_collections" | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
             if [ -z "$collection_names" ]; then
                 echo -e "  ${DIM}No collections found${NC}"
             else
                 while IFS= read -r cname; do
-                    cinfo=$(curl -s --connect-timeout 3 "http://localhost:6333/collections/${cname}" 2>/dev/null)
+                    cinfo=$(curl -s --connect-timeout 3 "${qdrant_auth[@]}" "http://localhost:6333/collections/${cname}" 2>/dev/null)
                     points=$(echo "$cinfo" | grep -o '"points_count":[0-9]*' | head -1 | cut -d: -f2)
                     vectors=$(echo "$cinfo" | grep -o '"vectors_count":[0-9]*' | head -1 | cut -d: -f2)
                     segments=$(echo "$cinfo" | grep -o '"segments_count":[0-9]*' | head -1 | cut -d: -f2)
-                    status=$(echo "$cinfo" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+                    status=$(echo "$cinfo" | grep -o '"optimizer_status":{"ok":[^}]*}' | grep -o '"ok":[^,}]*' | cut -d: -f2 | tr -d ' "')
 
                     points=${points:-0}
                     total_points=$((total_points + points))
 
                     status_color="$GREEN"
-                    [ "$status" != "green" ] && status_color="$YELLOW"
+                    [ "$status" != "true" ] && status_color="$YELLOW"
 
                     echo -e "  ${status_color}●${NC} ${cname}: ${BOLD}${points}${NC} points ${DIM}(vectors: ${vectors:-0}, segments: ${segments:-0})${NC}"
                 done <<< "$collection_names"
