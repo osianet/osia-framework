@@ -619,7 +619,20 @@ class OsiaOrchestrator:
         try:
             remote_path = "/sdcard/osia_capture.mp4"
             local_path = str(self.base_dir / "osia_capture.mp4")
-            await self.adb.record_screen(remote_path=remote_path, time_limit=record_duration)
+
+            async def _press_back_after(delay: float):
+                """Press back just before recording ends to stop the video looping."""
+                await asyncio.sleep(delay)
+                logger.info("Pressing back to stop video playback.")
+                await self.adb.press_back()
+
+            # Run recording and the back-press concurrently.
+            # Back fires 1s before time_limit so the video stops before the
+            # recorder finishes — prevents the reel looping into a second play.
+            await asyncio.gather(
+                self.adb.record_screen(remote_path=remote_path, time_limit=record_duration),
+                _press_back_after(max(record_duration - 1, 1)),
+            )
             await self.adb.pull_file(remote_path, local_path)
         finally:
             await self.redis.delete("osia:adb:lock")
