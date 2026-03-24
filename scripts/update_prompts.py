@@ -34,6 +34,12 @@ TEMPLATES_DIR = BASE_DIR / "templates" / "prompts"
 # Configuration mapping defining exactly which agent and chat models should run each desk
 DESK_MODELS = {
     "cyber-intelligence-and-warfare-desk": {
+        "chatProvider": "generic-openai",
+        "chatModel": "Dolphin-3.0-70B",
+        "agentProvider": "generic-openai",
+        "agentModel": "Dolphin-3.0-70B",
+        "vectorTag": "cyber_intel"
+    } if os.getenv("HF_ENDPOINT_DOLPHIN_70B") else {
         "chatProvider": "anthropic",
         "chatModel": "claude-sonnet-4-6",
         "agentProvider": "anthropic",
@@ -48,6 +54,12 @@ DESK_MODELS = {
         "vectorTag": "geopolitical_intel"
     },
     "cultural-and-theological-intelligence-desk": {
+        "chatProvider": "generic-openai",
+        "chatModel": "Dolphin-3.0-8B",
+        "agentProvider": "generic-openai",
+        "agentModel": "Dolphin-3.0-8B",
+        "vectorTag": "cultural_intel"
+    } if os.getenv("HF_ENDPOINT_DOLPHIN_8B") else {
         "chatProvider": "gemini",
         "chatModel": "gemini-2.5-flash",
         "agentProvider": "gemini",
@@ -62,6 +74,12 @@ DESK_MODELS = {
         "vectorTag": "science_intel"
     },
     "human-intelligence-and-profiling-desk": {
+        "chatProvider": "generic-openai",
+        "chatModel": "Dolphin-3.0-70B",
+        "agentProvider": "generic-openai",
+        "agentModel": "Dolphin-3.0-70B",
+        "vectorTag": "human_intel"
+    } if os.getenv("HF_ENDPOINT_DOLPHIN_70B") else {
         "chatProvider": "ollama",
         "chatModel": "nchapman/dolphin3.0-llama3:latest",
         "agentProvider": "ollama",
@@ -90,6 +108,16 @@ DESK_MODELS = {
         "vectorTag": "collection_raw"
     }
 }
+
+# Apply HF URLs if they exist
+if os.getenv("HF_ENDPOINT_DOLPHIN_70B"):
+    url = os.getenv("HF_ENDPOINT_DOLPHIN_70B").rstrip("/") + "/v1"
+    DESK_MODELS["cyber-intelligence-and-warfare-desk"]["basePath"] = url
+    DESK_MODELS["human-intelligence-and-profiling-desk"]["basePath"] = url
+
+if os.getenv("HF_ENDPOINT_DOLPHIN_8B"):
+    url = os.getenv("HF_ENDPOINT_DOLPHIN_8B").rstrip("/") + "/v1"
+    DESK_MODELS["cultural-and-theological-intelligence-desk"]["basePath"] = url
 
 def generate_prompt(template: str, directives: str) -> str:
     prompt = f"""You are an expert system prompt engineer for an AI system called OSIA. 

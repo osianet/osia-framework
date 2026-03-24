@@ -209,34 +209,31 @@ case $command in
 
         # CPU temp (common on ARM SBCs like Orange Pi)
         if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
-            local cpu_temp=$(( $(cat /sys/class/thermal/thermal_zone0/temp) / 1000 ))
-            local temp_color="$GREEN"
+            cpu_temp=$(( $(cat /sys/class/thermal/thermal_zone0/temp) / 1000 ))
+            temp_color="$GREEN"
             [ "$cpu_temp" -ge 70 ] && temp_color="$YELLOW"
             [ "$cpu_temp" -ge 85 ] && temp_color="$RED"
             echo -e "  CPU Temp:  ${temp_color}${cpu_temp}°C${NC}"
         fi
 
         # Memory
-        local mem_total mem_used mem_pct
         mem_total=$(free -m | awk '/^Mem:/{print $2}')
         mem_used=$(free -m | awk '/^Mem:/{print $3}')
         if [ -n "$mem_total" ] && [ "$mem_total" -gt 0 ] 2>/dev/null; then
             mem_pct=$(( mem_used * 100 / mem_total ))
-            local mem_color="$GREEN"
+            mem_color="$GREEN"
             [ "$mem_pct" -ge 75 ] && mem_color="$YELLOW"
             [ "$mem_pct" -ge 90 ] && mem_color="$RED"
             echo -e "  Memory:    ${mem_color}${mem_used}MB / ${mem_total}MB (${mem_pct}%)${NC}"
         fi
 
         # Disk usage for project root
-        local disk_info
         disk_info=$(df -h "$SCRIPT_DIR" 2>/dev/null | tail -1)
         if [ -n "$disk_info" ]; then
-            local disk_use disk_avail disk_pct
             disk_use=$(echo "$disk_info" | awk '{print $3}')
             disk_avail=$(echo "$disk_info" | awk '{print $4}')
             disk_pct=$(echo "$disk_info" | awk '{print $5}' | tr -d '%')
-            local disk_color="$GREEN"
+            disk_color="$GREEN"
             [ "$disk_pct" -ge 80 ] && disk_color="$YELLOW"
             [ "$disk_pct" -ge 95 ] && disk_color="$RED"
             echo -e "  Disk:      ${disk_color}${disk_use} used, ${disk_avail} free (${disk_pct}%)${NC}"
@@ -244,10 +241,8 @@ case $command in
 
         # GPU (nvidia-smi if available)
         if command -v nvidia-smi &>/dev/null; then
-            local gpu_info
             gpu_info=$(nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null)
             if [ -n "$gpu_info" ]; then
-                local gpu_name gpu_temp gpu_util gpu_mem_used gpu_mem_total
                 IFS=',' read -r gpu_name gpu_temp gpu_util gpu_mem_used gpu_mem_total <<< "$gpu_info"
                 gpu_name=$(echo "$gpu_name" | xargs)
                 gpu_temp=$(echo "$gpu_temp" | xargs)
@@ -264,13 +259,22 @@ case $command in
             echo -e "[${GREEN}OK${NC}]   .env file exists"
 
             # Check critical env vars are set (non-empty)
-            local missing_vars=()
-            local required_vars=("GEMINI_API_KEY" "SIGNAL_SENDER_NUMBER" "ANYTHINGLLM_API_KEY")
+            missing_vars=()
+            required_vars=("GEMINI_API_KEY" "SIGNAL_SENDER_NUMBER" "ANYTHINGLLM_API_KEY")
             for var in "${required_vars[@]}"; do
-                local val
                 val=$(grep -E "^${var}=" "$SCRIPT_DIR/.env" 2>/dev/null | head -1 | cut -d'=' -f2-)
                 if [ -z "$val" ] || [[ "$val" == *"your_"*"_here"* ]]; then
                     missing_vars+=("$var")
+                fi
+            done
+
+            # Optional but recommended (HuggingFace)
+            hf_vars=("HF_TOKEN" "HF_NAMESPACE")
+            missing_hf=()
+            for var in "${hf_vars[@]}"; do
+                val=$(grep -E "^${var}=" "$SCRIPT_DIR/.env" 2>/dev/null | head -1 | cut -d'=' -f2-)
+                if [ -z "$val" ] || [[ "$val" == *"your_"*"_here"* ]]; then
+                    missing_hf+=("$var")
                 fi
             done
 
@@ -279,12 +283,17 @@ case $command in
             else
                 echo -e "[${RED}FAIL${NC}] Missing or placeholder env vars: ${missing_vars[*]}"
             fi
+
+            if [ ${#missing_hf[@]} -eq 0 ]; then
+                echo -e "[${GREEN}OK${NC}]   HuggingFace config set"
+            else
+                echo -e "[${YELLOW}WARN${NC}] HF Endpoints not configured (missing: ${missing_hf[*]})"
+            fi
         else
             echo -e "[${RED}FAIL${NC}] .env file not found — copy .env.example and configure it"
         fi
 
         if [ -f "$SCRIPT_DIR/config/feeds.txt" ]; then
-            local feed_count
             feed_count=$(grep -cve '^\s*$' "$SCRIPT_DIR/config/feeds.txt" 2>/dev/null || echo 0)
             echo -e "[${GREEN}OK${NC}]   RSS feeds config: ${feed_count} feeds"
         else
@@ -315,6 +324,19 @@ case $command in
             check_timer "$t"
         done
 
+        # --- HuggingFace Endpoints ---
+        section_header "HUGGINGFACE ENDPOINTS"
+        if [ -f "$SCRIPT_DIR/scripts/provision_hf_endpoints.py" ]; then
+            if [ -n "$(grep "HF_TOKEN=" "$SCRIPT_DIR/.env" | cut -d'=' -f2)" ]; then
+                # Run status check via python script
+                $SCRIPT_DIR/.venv/bin/python "$SCRIPT_DIR/scripts/provision_hf_endpoints.py" --status | sed 's/^/  /'
+            else
+                echo -e "[${YELLOW}SKIP${NC}] HF_TOKEN not set — cannot check status"
+            fi
+        else
+            echo -e "[${YELLOW}SKIP${NC}] provision_hf_endpoints.py not found"
+        fi
+
         # --- API & Component Health ---
         section_header "API HEALTH"
         check_api_health "AnythingLLM" "http://localhost:3001"
@@ -324,22 +346,27 @@ case $command in
         # Redis ping
         if docker exec osia-redis redis-cli ping 2>/dev/null | grep -q PONG; then
             # Also grab queue depth
-            local queue_len
             queue_len=$(docker exec osia-redis redis-cli LLEN osia:task_queue 2>/dev/null | tr -d '\r')
             echo -e "[${GREEN}OK${NC}]   Redis PONG ${DIM}(task queue depth: ${queue_len:-0})${NC}"
         else
             echo -e "[${RED}FAIL${NC}] Redis is unresponsive"
         fi
 
-        # MCP bridges (check if any are listening)
-        for port_name in "8090:ArXiv MCP" "8091:Wikipedia MCP" "8092:Tavily MCP" "8093:Semantic Scholar MCP" "8094:Time MCP"; do
-            local port="${port_name%%:*}"
-            local name="${port_name##*:}"
-            check_api_health "$name" "http://localhost:${port}/sse" 2
-        done
-
         # Phone bridge
-        check_api_health "Phone Bridge" "http://localhost:8095/health" 2
+        phone_health=$(curl -s --connect-timeout 3 http://localhost:8006/health 2>/dev/null)
+        if [ -n "$phone_health" ]; then
+            phone_connected=$(echo "$phone_health" | grep -o '"phone_connected":[^,}]*' | cut -d: -f2 | tr -d ' ')
+            phone_device=$(echo "$phone_health" | grep -o '"device_id":"[^"]*"' | cut -d'"' -f4)
+            phone_configured=$(echo "$phone_health" | grep -o '"bridge_configured":[^,}]*' | cut -d: -f2 | tr -d ' ')
+            phone_info="${DIM}(device: ${phone_device:-none}, connected: ${phone_connected}, configured: ${phone_configured})${NC}"
+            if [ "$phone_connected" = "true" ]; then
+                echo -e "[${GREEN}OK${NC}]   Phone Bridge ${phone_info}"
+            else
+                echo -e "[${YELLOW}WARN${NC}] Phone Bridge — phone not connected ${phone_info}"
+            fi
+        else
+            echo -e "[${RED}FAIL${NC}] Phone Bridge ${DIM}(http://localhost:8006/health → timeout)${NC}"
+        fi
 
         # --- ADB / Phone Gateway ---
         section_header "ADB DEVICES"
@@ -348,13 +375,11 @@ case $command in
         # --- Redis Queue Snapshot ---
         section_header "TASK QUEUE"
         if docker exec osia-redis redis-cli ping 2>/dev/null | grep -q PONG; then
-            local queue_depth
             queue_depth=$(docker exec osia-redis redis-cli LLEN osia:task_queue 2>/dev/null | tr -d '\r')
             echo -e "  Pending tasks: ${BOLD}${queue_depth:-0}${NC}"
 
             if [ "${queue_depth:-0}" -gt 0 ]; then
                 echo -e "  ${DIM}Next task preview:${NC}"
-                local next_task
                 next_task=$(docker exec osia-redis redis-cli LINDEX osia:task_queue 0 2>/dev/null | head -c 200)
                 echo -e "  ${DIM}${next_task}${NC}"
             fi
@@ -366,7 +391,7 @@ case $command in
         ;;
     logs)
         # Quick access to recent logs from key services
-        local target="${2:-osia-orchestrator.service}"
+        target="${2:-osia-orchestrator.service}"
         echo -e "${YELLOW}Showing last 50 lines for ${target}...${NC}"
         journalctl -u "$target" -n 50 --no-pager
         ;;

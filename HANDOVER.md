@@ -1,7 +1,7 @@
 # OSIA Project Handover & Mission Context
 
 ## 🎯 The Mission
-OSIA (Open Source Intelligence Agency) is a principled, counter-hegemonic intelligence framework founded on the **Socialist Intelligence Mandate**. It prioritizes anti-imperialism, labor rights, and national sovereignty.
+OSIA (Open Source Intelligence Agency) is a principled, counter-hegemonic intelligence framework founded on the **Decolonial & Socialist Mandate**. It prioritizes anti-imperialism, labor rights, and national sovereignty.
 
 ## 🏛️ Organizational Structure (AnythingLLM Desks)
 - **Collection Directorate:** (NPU) Raw data dump and ingestion. Qdrant Tag: `collection_raw`.
