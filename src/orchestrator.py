@@ -501,3 +501,23 @@ class OsiaOrchestrator:
 
         except Exception as e:
             logger.exception("Orchestration or desk analysis failed: %s", e)
+            if source.startswith("signal:"):
+                recipient = source[len("signal:"):]
+                
+                error_type = type(e).__name__
+                raw_error = str(e)
+                
+                # Basic sanitization to prevent leaking local paths or common sensitive patterns
+                sanitized_error = re.sub(r'(/home/|/var/|/tmp/|C:\\)[^\s]+', '[REDACTED_PATH]', raw_error)
+                sanitized_error = re.sub(r'sk-[A-Za-z0-9_-]{20,}', '[REDACTED_KEY]', sanitized_error)
+                sanitized_error = re.sub(r'AIza[0-9A-Za-z-_]{35}', '[REDACTED_KEY]', sanitized_error)
+                sanitized_error = re.sub(r'(https?://)[^\s]+', r'\1[REDACTED_URL]', sanitized_error)
+
+                error_msg = (
+                    f"⚠️ OSIA System Error ({error_type})\n\n"
+                    f"An error occurred while processing your request:\n"
+                    f"\"{sanitized_error}\"\n\n"
+                    "This could be due to a temporary issue with our intelligence desks or a timeout. "
+                    "Please try your query again later."
+                )
+                await self.send_signal_message(recipient, error_msg)
