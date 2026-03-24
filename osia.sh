@@ -352,6 +352,39 @@ case $command in
             echo -e "[${RED}FAIL${NC}] Redis is unresponsive"
         fi
 
+        # --- Qdrant Vector DB ---
+        section_header "QDRANT KNOWLEDGE BASE"
+        qdrant_collections=$(curl -s --connect-timeout 3 http://localhost:6333/collections 2>/dev/null)
+        if [ -n "$qdrant_collections" ] && echo "$qdrant_collections" | grep -q '"status":"ok"'; then
+            total_points=0
+            # Parse collection names from JSON
+            collection_names=$(echo "$qdrant_collections" | grep -o '"name":"[^"]*"' | cut -d'"' -f4)
+            if [ -z "$collection_names" ]; then
+                echo -e "  ${DIM}No collections found${NC}"
+            else
+                while IFS= read -r cname; do
+                    cinfo=$(curl -s --connect-timeout 3 "http://localhost:6333/collections/${cname}" 2>/dev/null)
+                    points=$(echo "$cinfo" | grep -o '"points_count":[0-9]*' | head -1 | cut -d: -f2)
+                    vectors=$(echo "$cinfo" | grep -o '"vectors_count":[0-9]*' | head -1 | cut -d: -f2)
+                    segments=$(echo "$cinfo" | grep -o '"segments_count":[0-9]*' | head -1 | cut -d: -f2)
+                    status=$(echo "$cinfo" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+                    points=${points:-0}
+                    total_points=$((total_points + points))
+
+                    status_color="$GREEN"
+                    [ "$status" != "green" ] && status_color="$YELLOW"
+
+                    echo -e "  ${status_color}●${NC} ${cname}: ${BOLD}${points}${NC} points ${DIM}(vectors: ${vectors:-0}, segments: ${segments:-0})${NC}"
+                done <<< "$collection_names"
+                col_count=$(echo "$collection_names" | wc -l | tr -d ' ')
+                echo -e "  ${DIM}─────────────────────────────────${NC}"
+                echo -e "  Total: ${BOLD}${col_count}${NC} collections, ${BOLD}${total_points}${NC} points"
+            fi
+        else
+            echo -e "  ${DIM}Qdrant unavailable — cannot query collections${NC}"
+        fi
+
         # Phone bridge
         phone_health=$(curl -s --connect-timeout 3 http://localhost:8006/health 2>/dev/null)
         if [ -n "$phone_health" ]; then
