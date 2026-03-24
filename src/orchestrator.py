@@ -567,18 +567,73 @@ class OsiaOrchestrator:
     # ADB media capture
     # ------------------------------------------------------------------
 
+    async def _detect_video_duration(self, screenshot_path: str) -> int | None:
+        """
+        Ask Gemini Vision to read the video duration from a player UI screenshot.
+        Returns duration in seconds, or None if it cannot be determined.
+        """
+        try:
+            screen_file = self.client.files.upload(file=screenshot_path)
+            response = self.client.models.generate_content(
+                model=self.model_id,
+                contents=[
+                    screen_file,
+                    (
+                        "Look at this screenshot of a video player (Instagram Reel, TikTok, "
+                        "YouTube Short, Facebook Reel, etc.). "
+                        "Find the total video duration shown in the player UI — it may appear "
+                        "as a timestamp like '0:45', '1:23', or in a progress bar label. "
+                        "Reply with ONLY the total duration in seconds as a plain integer "
+                        "(e.g. 45, 83, 120). "
+                        "If you cannot see a duration, reply with the single word: unknown"
+                    ),
+                ],
+            )
+            text = response.text.strip().lower()
+            if text == "unknown" or not text:
+                return None
+            # Handle MM:SS format in case the model ignores the instruction
+            if ":" in text:
+                parts = text.split(":")
+                return int(parts[0]) * 60 + int(parts[1])
+            return int(text)
+        except Exception as e:
+            logger.warning("Duration detection failed: %s", e)
+            return None
+
     async def process_media_link(self, url: str) -> str:
         """Uses ADB to capture media from a URL, then analyzes it with Gemini."""
         logger.info("Triggering ADB capture for URL: %s", url)
-        # Acquire the shared ADB lock so the persona daemon yields the phone.
-        # TTL covers the full record window (180s) plus upload headroom.
-        await self.redis.set("osia:adb:lock", "orchestrator", ex=300)
+
+        # Detect actual video duration so we record exactly as long as needed.
+        # We open the URL first, let it load, screenshot, then ask Gemini to read
+        # the player timestamp. Fall back to 180s if detection fails.
+        _FALLBACK_DURATION = 180
+        _BUFFER_SECS = 3  # small buffer so we don't cut off the last frame
+
+        await self.adb.open_url(url)
+        await asyncio.sleep(5)  # wait for player to render
+
+        tmp_dir = self.base_dir / "tmp"
+        tmp_dir.mkdir(exist_ok=True)
+        duration_screenshot = str(tmp_dir / "duration_probe.png")
+        await self.adb.take_screenshot(duration_screenshot)
+
+        detected = await self._detect_video_duration(duration_screenshot)
+        if detected and 3 <= detected <= 600:
+            record_duration = detected + _BUFFER_SECS
+            logger.info("Detected video duration: %ds — recording for %ds", detected, record_duration)
+        else:
+            record_duration = _FALLBACK_DURATION
+            logger.info("Could not detect duration (got %r) — using fallback %ds", detected, record_duration)
+
+        # TTL covers the full record window plus upload headroom.
+        lock_ttl = record_duration + 120
+        await self.redis.set("osia:adb:lock", "orchestrator", ex=lock_ttl)
         try:
-            await self.adb.open_url(url)
-            await asyncio.sleep(5)
             remote_path = "/sdcard/osia_capture.mp4"
             local_path = str(self.base_dir / "osia_capture.mp4")
-            await self.adb.record_screen(remote_path=remote_path, time_limit=180)
+            await self.adb.record_screen(remote_path=remote_path, time_limit=record_duration)
             await self.adb.pull_file(remote_path, local_path)
         finally:
             await self.redis.delete("osia:adb:lock")
