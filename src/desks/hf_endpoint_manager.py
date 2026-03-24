@@ -79,7 +79,7 @@ class HFEndpointManager:
 
         if status in ("paused", "scaledToZero"):
             logger.info("Waking endpoint '%s'...", endpoint_name)
-            ep.resume(token=self.token)
+            ep.resume()
         elif status == "initializing":
             logger.info("Endpoint '%s' already initializing, waiting...", endpoint_name)
         elif status == "failed":

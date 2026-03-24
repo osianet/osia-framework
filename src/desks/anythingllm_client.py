@@ -39,7 +39,11 @@ class AnythingLLMDesk:
         response = await self._client.post(url, json=payload)
         response.raise_for_status()
         data = response.json()
-        return data.get("textResponse", "")
+        text = data.get("textResponse") or ""
+        if not text:
+            logger.warning("Desk '%s' returned empty textResponse. Full payload: %s", workspace_slug, data)
+            raise ValueError(f"Desk '{workspace_slug}' returned an empty response.")
+        return text
 
     async def ingest_raw_data(self, workspace_slug: str, text_content: str, title: str):
         """Dumps raw OSINT collection data into a workspace's Vector DB."""
