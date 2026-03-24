@@ -287,9 +287,9 @@ class OsiaOrchestrator:
 
     async def _extract_youtube_transcript(self, video_url: str) -> str | None:
         logger.info("Attempting transcript extraction for: %s", video_url)
-        mcp_res = None
+        transcript = None
 
-        # 1. yt-dlp (software)
+        # 1. yt-dlp (local software, fastest)
         try:
             yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
             user_agent = (
@@ -313,34 +313,77 @@ class OsiaOrchestrator:
             )
             srt_path = self.base_dir / "yt_intel.en.srt"
             if srt_path.exists():
-                mcp_res = srt_path.read_text()
+                transcript = srt_path.read_text()
                 srt_path.unlink()
         except Exception as e:
             logger.warning("yt-dlp failed: %s", e)
 
-        # 2. MCP fallback
-        if not mcp_res:
-            logger.info("Software extraction failed. Falling back to MCP...")
+        # 2. youtube-transcript-api (pure Python, no MCP overhead)
+        if not transcript:
+            logger.info("yt-dlp failed. Trying youtube-transcript-api...")
+            try:
+                from youtube_transcript_api import YouTubeTranscriptApi
+                # Extract video ID from URL
+                video_id = None
+                if "youtu.be/" in video_url:
+                    video_id = video_url.split("youtu.be/")[1].split("?")[0]
+                elif "v=" in video_url:
+                    video_id = video_url.split("v=")[1].split("&")[0]
+                if video_id:
+                    fetched = await asyncio.to_thread(
+                        YouTubeTranscriptApi.get_transcript, video_id, languages=["en"]
+                    )
+                    transcript = "\n".join(
+                        f"[{entry['start']:.1f}s] {entry['text']}" for entry in fetched
+                    )
+            except Exception as e:
+                logger.warning("youtube-transcript-api failed: %s", e)
+
+        # 3. MCP YouTube tool (Node.js server)
+        if not transcript:
+            logger.info("Python extraction failed. Falling back to MCP...")
             try:
                 result = await self.mcp.call_tool("youtube", "get-transcript", {"url": video_url})
-                mcp_res = _extract_mcp_text(result)
-                if mcp_res and "Error: Request to YouTube was blocked" in mcp_res:
-                    mcp_res = None
+                transcript = _extract_mcp_text(result)
+                if transcript and "Error: Request to YouTube was blocked" in transcript:
+                    transcript = None
             except Exception as e:
                 logger.warning("MCP YouTube fallback failed: %s", e)
-                mcp_res = None
 
-        # 3. Physical capture (PHINT)
-        if not mcp_res:
-            logger.warning("All software extraction blocked. Triggering PHINT capture...")
+        # 4. Gemini native YouTube URL (direct Google access, uses tokens)
+        if not transcript:
+            logger.info("All scraping methods failed. Using Gemini native YouTube analysis...")
             try:
-                mcp_res = await self.process_media_link(video_url)
-                mcp_res = f"PHYSICAL INTERCEPT REPORT:\n{mcp_res}"
+                response = self.client.models.generate_content(
+                    model=self.model_id,
+                    contents=types.Content(
+                        parts=[
+                            types.Part(
+                                file_data=types.FileData(file_uri=video_url)
+                            ),
+                            types.Part(text=(
+                                "Produce a detailed transcript of this video. Include timestamps "
+                                "in [MM:SS] format. Capture all spoken words verbatim, describe "
+                                "key visual elements, and note any on-screen text."
+                            )),
+                        ]
+                    ),
+                )
+                transcript = response.text
             except Exception as e:
-                mcp_res = f"ERROR: All extraction methods failed, including physical capture. {e}"
+                logger.warning("Gemini native YouTube analysis failed: %s", e)
 
-        logger.info("YouTube intelligence length: %d", len(str(mcp_res)))
-        return mcp_res
+        # 5. Physical ADB capture (last resort)
+        if not transcript:
+            logger.warning("All extraction methods blocked. Triggering PHINT capture...")
+            try:
+                transcript = await self.process_media_link(video_url)
+                transcript = f"PHYSICAL INTERCEPT REPORT:\n{transcript}"
+            except Exception as e:
+                transcript = f"ERROR: All extraction methods failed, including physical capture. {e}"
+
+        logger.info("YouTube intelligence length: %d", len(str(transcript)))
+        return transcript
 
     # ------------------------------------------------------------------
     # Research loop — proper multi-turn tool calling
@@ -409,7 +452,7 @@ class OsiaOrchestrator:
         await asyncio.sleep(5)
         remote_path = "/sdcard/osia_capture.mp4"
         local_path = str(self.base_dir / "osia_capture.mp4")
-        await self.adb.record_screen(remote_path=remote_path, time_limit=15)
+        await self.adb.record_screen(remote_path=remote_path, time_limit=180)
         await self.adb.pull_file(remote_path, local_path)
 
         logger.info("Uploading captured video to Gemini...")

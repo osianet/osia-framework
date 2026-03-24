@@ -21,4 +21,5 @@ dependencies = [
     "uvicorn>=0.42.0",
     "websockets>=16.0",
     "yt-dlp>=2026.3.17",
+    "youtube-transcript-api>=1.0.0",
 ]
