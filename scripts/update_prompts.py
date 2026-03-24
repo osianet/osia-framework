@@ -35,9 +35,9 @@ TEMPLATES_DIR = BASE_DIR / "templates" / "prompts"
 DESK_MODELS = {
     "cyber-intelligence-and-warfare-desk": {
         "chatProvider": "anthropic",
-        "chatModel": "claude-3-5-sonnet-20240620",
+        "chatModel": "claude-sonnet-4-6",
         "agentProvider": "anthropic",
-        "agentModel": "claude-3-5-sonnet-20240620",
+        "agentModel": "claude-sonnet-4-6",
         "vectorTag": "cyber_intel"
     },
     "geopolitical-and-security-desk": {
@@ -56,9 +56,9 @@ DESK_MODELS = {
     },
     "science-technology-and-commercial-desk": {
         "chatProvider": "anthropic",
-        "chatModel": "claude-3-5-sonnet-20240620",
+        "chatModel": "claude-sonnet-4-6",
         "agentProvider": "anthropic",
-        "agentModel": "claude-3-5-sonnet-20240620",
+        "agentModel": "claude-sonnet-4-6",
         "vectorTag": "science_intel"
     },
     "human-intelligence-and-profiling-desk": {
