@@ -85,7 +85,7 @@ class PersonaDaemon:
     def __init__(self):
         load_dotenv()
         self.base_dir = Path(os.getenv("OSIA_BASE_DIR", Path(__file__).resolve().parent.parent.parent))
-        self.adb = ADBDevice()
+        self.adb = ADBDevice(device_id=os.getenv("ADB_DEVICE_DAVID_THORNE"))
         self.gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
         self.agent = SocialMediaAgent(

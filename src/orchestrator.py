@@ -55,7 +55,7 @@ class OsiaOrchestrator:
 
         # API Clients
         self.desk_client = AnythingLLMDesk()
-        self.adb = ADBDevice()
+        self.adb = ADBDevice(device_id=os.getenv("ADB_DEVICE_MEDIA_INTERCEPT"))
         self.mcp = MCPDispatcher()
         self.social_agent = SocialMediaAgent(
             adb=self.adb,

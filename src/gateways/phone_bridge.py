@@ -6,6 +6,8 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 import uvicorn
+import asyncio
+from src.gateways.adb_device import ADBDevice
 
 # This bridge allows AnythingLLM (Docker) to request physical phone actions
 # from the host-level Moto g06 via ADB.
@@ -17,6 +19,9 @@ PHONE_BRIDGE_TOKEN = os.getenv("PHONE_BRIDGE_TOKEN", "")
 
 app = FastAPI()
 security = HTTPBearer()
+
+# We can specify the ADB device ID in the .env file for the phone bridge
+adb = ADBDevice(device_id=os.getenv("ADB_DEVICE_DEFAULT"))
 
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -37,21 +42,17 @@ class Command(BaseModel):
 async def execute_phone_action(cmd: Command, _=Depends(verify_token)):
     if cmd.action == "screenshot":
         screenshot_path = BASE_DIR / "latest_intel.png"
-        # Wake + unlock
-        subprocess.run(["adb", "shell", "input", "keyevent", "26"])
-        subprocess.run(["adb", "shell", "input", "swipe", "500", "1500", "500", "500"])
-        # Capture — no shell=True, write the bytes from stdout instead
-        result = subprocess.run(
-            ["adb", "exec-out", "screencap", "-p"],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            return {"status": "error", "message": f"screencap failed: {result.stderr.decode()}"}
-        screenshot_path.write_bytes(result.stdout)
-        return {"status": "success", "message": f"Screenshot saved to {screenshot_path}"}
+        try:
+            # Wake + unlock + capture
+            await adb.wake_and_unlock()
+            await adb.take_screenshot(str(screenshot_path))
+            return {"status": "success", "message": f"Screenshot saved to {screenshot_path}"}
+        except RuntimeError as e:
+            return {"status": "error", "message": f"screencap failed: {e}"}
 
     return {"status": "error", "message": "Unknown action"}
 
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8006)
+
