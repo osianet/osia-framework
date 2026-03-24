@@ -429,6 +429,8 @@ class OsiaOrchestrator:
         source = task.get("source", "unknown")
         original_query = task.get("query", "")
         query = original_query
+        media_analysis = None
+        research_summary = None
 
         logger.info("Received new task from %s: %s", source, query)
 
@@ -494,6 +496,28 @@ class OsiaOrchestrator:
                 assigned_desk = "geopolitical-and-security-desk"
 
             logger.info("Task routed to: %s", assigned_desk)
+
+            # Ingest media analysis into the assigned desk so it's available in its vector DB
+            if media_analysis:
+                try:
+                    await self.desk_client.ingest_raw_data(
+                        assigned_desk,
+                        media_analysis,
+                        f"Media Intercept: {self._safe_title(url)}",
+                    )
+                except Exception as e:
+                    logger.warning("Failed to ingest media into desk '%s': %s", assigned_desk, e)
+
+            # Ingest research summary into the assigned desk
+            if research_summary:
+                try:
+                    await self.desk_client.ingest_raw_data(
+                        assigned_desk,
+                        research_summary,
+                        f"Research: {self._safe_title(original_query)}",
+                    )
+                except Exception as e:
+                    logger.warning("Failed to ingest research into desk '%s': %s", assigned_desk, e)
 
             # Wake up HF endpoint if this desk uses one (no-op for cloud-API desks)
             hf_ready = await self.hf_endpoints.ensure_ready(assigned_desk)
