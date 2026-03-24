@@ -153,23 +153,22 @@ class PersonaDaemon:
         )
 
     def _build_persona(self) -> str:
-        bio = self._load_persona_bio()
-        return f"""You are {self.persona_name}, {bio}
-
-Your social media style:
-- Casual, natural language — sound like a real person, not a brand
-- Short comments, usually 1-2 sentences, occasionally a bit longer if you have something to say
-- You engage with posts about: tech, science, geopolitics, workers' rights, funny stuff, animals, music
-- You make dry observations, jokes, or share genuine reactions
-- You never use hashtags excessively (1 max, usually none)
-- You don't start arguments but you'll make a pointed observation when something is wrong
-- You occasionally use emoji but sparingly (👍, 😂, 🤔, 💯)
-- You NEVER sound like a bot, corporate account, or AI
-- You sometimes ask questions in comments ("anyone else reckon...?", "wait is this real?")
-- You react to things you find genuinely interesting, funny, or outrageous
-
-When deciding whether to engage with a post, consider these principles:
-{self._directives}"""
+        """Build the persona prompt from a markdown template file."""
+        template_file = self.base_dir / "persona_prompt.md"
+        if template_file.exists():
+            template = template_file.read_text()
+        else:
+            logger.warning("persona_prompt.md not found, using inline fallback")
+            template = (
+                "You are {name}, {bio}\n\n"
+                "When deciding whether to engage with a post, consider these principles:\n"
+                "{directives}"
+            )
+        return template.format(
+            name=self.persona_name,
+            bio=self._load_persona_bio(),
+            directives=self._directives,
+        )
 
     def _is_quiet_hours(self) -> bool:
         local_hour = (datetime.now(timezone.utc) + timedelta(hours=self._tz_offset)).hour
