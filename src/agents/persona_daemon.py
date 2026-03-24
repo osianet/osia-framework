@@ -916,6 +916,19 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                         self.persona_name, queue_len,
                     )
                     await asyncio.sleep(30)
+                # Re-open a random social app so the session can continue
+                recovery_app = self._pick_app()
+                logger.info(
+                    "[%s] Re-launching %s to recover from home screen.",
+                    self.persona_name, recovery_app["name"],
+                )
+                await self.adb.wake_and_unlock()
+                await self.adb._run_checked([
+                    "shell", "monkey", "-p", recovery_app["package"],
+                    "-c", "android.intent.category.LAUNCHER", "1",
+                ])
+                app = recovery_app
+                await asyncio.sleep(random.uniform(3, 6))
                 continue
 
             except Exception as e:
