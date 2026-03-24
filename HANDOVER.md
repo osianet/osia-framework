@@ -17,7 +17,7 @@ OSIA (Open Source Intelligence Agency) is a principled, counter-hegemonic intell
 - **Hardware:** Orange Pi 5 Plus (Master), Moto g06 (Android Gateway), RTX 3080 Ti (Local GPU).
 - **Core:** Python 3.12 (`uv`), Redis (Task Queue), AnythingLLM (Context), Qdrant (Vectors).
 - **Networking:** `*.osia.dev` subdomains with Let's Encrypt (Wildcard) and Nginx reverse proxy.
-- **Ingress:** Signal (+61483840680), RSS Hourly Ingress, ADB Physical Screen Capture (PHINT).
+- **Ingress:** Signal ([REDACTED]), RSS Hourly Ingress, ADB Physical Screen Capture (PHINT).
 - **Egress:** Signal Group Broadcasts (OSIA Briefings Group).
 
 ## 🛠️ Integrated MCP Tools & Custom Agent Skills
@@ -37,7 +37,7 @@ OSIA (Open Source Intelligence Agency) is a principled, counter-hegemonic intell
 ## 🔐 Credentials & Configs
 - **Location:** `/home/ubuntu/osia-framework/.env` (Ignored by Git).
 - **YouTube Cookies:** `/home/ubuntu/osia-framework/config/youtube_cookies.txt` (Premium).
-- **Signal Number:** `+61483840680`.
+- **Signal Number:** `[REDACTED]`.
 - **Systemd:** 4 active services + 2 timers (Signal, Orchestrator, RSS, SITREP).
 - **Management Scripts:** Run `scripts/update_prompts.py` to auto-sync directives, prompts, and model configs to AnythingLLM workspaces.
 

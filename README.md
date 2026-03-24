@@ -47,7 +47,7 @@ OSIA utilizes **AnythingLLM**'s isolated Workspaces to act as specialized "Desks
 
 ```mermaid
 graph TD
-    A[Signal Gateway / +61483840680] -->|Raw Query/Link| B(OSIA Orchestrator)
+    A[Signal Gateway / [REDACTED]] -->|Raw Query/Link| B(OSIA Orchestrator)
     B -->|Task Enqueued| C{Redis Task Queue}
     C -->|Task Pulled| D[Active Research / MCP Tools]
     C -->|Media Intercept| E[ADB / Burner Phone]
@@ -64,7 +64,7 @@ graph TD
 OSIA is built on a decoupled, microservice-based architecture centered around a **Redis Task Queue**.
 
 ### 1. Ingress (Input)
-*   **Signal Gateway:** A cryptographically secure entry point using a physical Android burner phone (+61483840680) acting as a "Ghost Persona".
+*   **Signal Gateway:** A cryptographically secure entry point using a physical Android burner phone ([REDACTED]) acting as a "Ghost Persona".
 *   **ADB Media Pipeline:** A physical Moto g06 connected via USB. The framework uses ADB to physically "watch" social media (Instagram, TikTok, FB), record the screen, and use Gemini Vision to extract intelligence from video without triggering bot detection.
 
 ### 2. Orchestration (The Brain)
