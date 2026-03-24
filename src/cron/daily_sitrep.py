@@ -81,7 +81,17 @@ async def trigger_sitrep():
         f"3. Emerging Technology and AI — breakthroughs, regulatory changes, notable papers\n\n"
         f"Structure the report with clear section headers, cite specific sources where possible, "
         f"and highlight any items requiring immediate attention with a ⚠️ prefix.\n"
-        f"End with a 'WATCH LIST' section of developing situations to monitor."
+        f"End with a 'WATCH LIST' section of developing situations to monitor.\n\n"
+        f"## Citation Requirements\n\n"
+        f"Tag every factual claim with a bracketed citation [N]. At the end of the report, "
+        f"include a '## Sources' section listing each source with:\n"
+        f"- Citation number\n"
+        f"- Origin (RSS feed URL, tool name, or research source)\n"
+        f"- Reliability rating: A (peer-reviewed/official), B (established media), "
+        f"C (web/blog), D (social media), E (unverifiable)\n"
+        f"Format: [N] (Rating) Origin — Description\n"
+        f"End with a '## Source Confidence' line: HIGH (mostly A/B), MODERATE (mixed), or LOW (mostly C/D/E).\n"
+        f"Mark any unsourced claims as [UNSOURCED] inline."
     )
 
     task = {
