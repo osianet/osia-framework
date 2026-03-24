@@ -29,6 +29,11 @@ class AnythingLLMDesk:
     async def send_task(self, workspace_slug: str, message: str) -> str:
         """Sends a query to a specific workspace and returns the response."""
         url = f"/api/v1/workspace/{workspace_slug}/chat"
+        
+        # Automatically trigger agent mode so AnythingLLM desks can use custom skills
+        if not message.strip().startswith("@agent"):
+            message = f"@agent {message}"
+            
         payload = {"message": message, "mode": "chat"}
 
         response = await self._client.post(url, json=payload)

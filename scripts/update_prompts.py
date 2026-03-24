@@ -31,6 +31,66 @@ BASE_DIR = Path(__file__).parent.parent
 DIRECTIVES_PATH = BASE_DIR / "DIRECTIVES.md"
 TEMPLATES_DIR = BASE_DIR / "templates" / "prompts"
 
+# Configuration mapping defining exactly which agent and chat models should run each desk
+DESK_MODELS = {
+    "cyber-intelligence-and-warfare-desk": {
+        "chatProvider": "anthropic",
+        "chatModel": "claude-3-5-sonnet-20240620",
+        "agentProvider": "anthropic",
+        "agentModel": "claude-3-5-sonnet-20240620",
+        "vectorTag": "cyber_intel"
+    },
+    "geopolitical-and-security-desk": {
+        "chatProvider": "gemini",
+        "chatModel": "gemini-2.5-flash",
+        "agentProvider": "gemini",
+        "agentModel": "gemini-2.5-flash",
+        "vectorTag": "geopolitical_intel"
+    },
+    "cultural-and-theological-intelligence-desk": {
+        "chatProvider": "gemini",
+        "chatModel": "gemini-2.5-flash",
+        "agentProvider": "gemini",
+        "agentModel": "gemini-2.5-flash",
+        "vectorTag": "cultural_intel"
+    },
+    "science-technology-and-commercial-desk": {
+        "chatProvider": "anthropic",
+        "chatModel": "claude-3-5-sonnet-20240620",
+        "agentProvider": "anthropic",
+        "agentModel": "claude-3-5-sonnet-20240620",
+        "vectorTag": "science_intel"
+    },
+    "human-intelligence-and-profiling-desk": {
+        "chatProvider": "ollama",
+        "chatModel": "nchapman/dolphin3.0-llama3:latest",
+        "agentProvider": "ollama",
+        "agentModel": "nchapman/dolphin3.0-llama3:latest",
+        "vectorTag": "human_intel"
+    },
+    "finance-and-economics-directorate": {
+        "chatProvider": "openai",
+        "chatModel": "gpt-4o",
+        "agentProvider": "openai",
+        "agentModel": "gpt-4o",
+        "vectorTag": "finance_intel"
+    },
+    "the-watch-floor": {
+        "chatProvider": "gemini",
+        "chatModel": "gemini-2.5-pro",
+        "agentProvider": "gemini",
+        "agentModel": "gemini-2.5-pro",
+        "vectorTag": "watch_floor"
+    },
+    "collection-directorate": {
+        "chatProvider": "generic-openai",
+        "chatModel": "Pleias-RAG-350M",
+        "agentProvider": "generic-openai",
+        "agentModel": "Pleias-RAG-350M",
+        "vectorTag": "collection_raw"
+    }
+}
+
 def generate_prompt(template: str, directives: str) -> str:
     prompt = f"""You are an expert system prompt engineer for an AI system called OSIA. 
 I will provide you with a base template for a specific AI agent desk, and the core organizational directives. 
@@ -54,10 +114,36 @@ Rules:
     )
     return response.text.strip()
 
+def activate_global_skills():
+    """Update AnythingLLM sqlite to ensure all custom skills are loaded into default_agent_skills"""
+    import sqlite3
+    db_path = "/home/ubuntu/osia-knowledge-base/anythingllm.db"
+    
+    if not os.path.exists(db_path):
+        logger.warning("Could not find anythingllm.db to update global skills.")
+        return
+        
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # This exact JSON array defines the default enabled skills across all agents
+        skills_json = '["web-browsing","save-file-to-browser","create-chart","web-scraping","osia-cyber-ip-intel","osia-finance-stock-intel","osia-stash-writer"]'
+        
+        cursor.execute("UPDATE system_settings SET value = ? WHERE label = 'default_agent_skills';", (skills_json,))
+        conn.commit()
+        conn.close()
+        logger.info("Successfully activated all OSIA custom skills globally in the database.")
+    except Exception as e:
+        logger.error(f"Failed to activate custom skills in db: {e}")
+
 def main():
     if not DIRECTIVES_PATH.exists():
         logger.error(f"Directives file not found at {DIRECTIVES_PATH}")
         return
+
+    # First ensure the global skills are toggled on
+    activate_global_skills()
 
     directives = DIRECTIVES_PATH.read_text()
     
@@ -80,27 +166,38 @@ def main():
         slug = ws.get("slug")
         template_file = TEMPLATES_DIR / f"{slug}.txt"
         
-        if not template_file.exists():
-            logger.info(f"Skipping {slug} - no template found.")
+        # Base update payload
+        update_data = {}
+        
+        # Inject Model Configurations if we have them mapped
+        if slug in DESK_MODELS:
+            logger.info(f"Injecting model configurations for {slug}")
+            update_data.update(DESK_MODELS[slug])
+        
+        # Generate new prompt if template exists
+        if template_file.exists():
+            logger.info(f"Processing prompt for workspace: {slug}")
+            template = template_file.read_text()
+            try:
+                new_prompt = generate_prompt(template, directives)
+                update_data["openAiPrompt"] = new_prompt
+                logger.info(f"Generated new prompt for {slug} ({len(new_prompt)} chars)")
+            except Exception as e:
+                logger.error(f"Failed to generate prompt for {slug}: {e}")
+        
+        if not update_data:
+            logger.info(f"Skipping {slug} - no updates to push.")
             continue
             
-        logger.info(f"Processing workspace: {slug}")
-        template = template_file.read_text()
-        
+        # Push the unified update
         try:
-            new_prompt = generate_prompt(template, directives)
-            logger.info(f"Generated new prompt for {slug} ({len(new_prompt)} chars)")
-            
             update_url = f"{ANYTHINGLLM_BASE_URL.rstrip('/')}/api/v1/workspace/{slug}/update"
-            update_data = {
-                "openAiPrompt": new_prompt
-            }
             update_response = httpx.post(update_url, headers=headers, json=update_data)
             update_response.raise_for_status()
             logger.info(f"Successfully updated AnythingLLM workspace: {slug}")
             
         except Exception as e:
-            logger.error(f"Failed to update {slug}: {e}")
+            logger.error(f"Failed to push updates for {slug}: {e}")
 
 if __name__ == "__main__":
     main()

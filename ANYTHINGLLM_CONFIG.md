@@ -12,6 +12,7 @@ This document provides a summary of the current system and workspace configurati
 ### Vector Database
 *   **Vector DB Provider:** Qdrant
 *   **Qdrant Endpoint:** `http://172.20.0.1:6333`
+*   **Data Partitioning:** We explicitly assign a `vectorTag` to each workspace. This isolates embedding collections inside Qdrant for external Python script integration.
 
 ### Embeddings
 *   **Embedding Engine:** Native
@@ -27,57 +28,61 @@ This document provides a summary of the current system and workspace configurati
 ---
 
 ## Workspace (Desk) Configurations
+*(Prompts are now dynamically generated and synchronized using `scripts/update_prompts.py`)*
 
 ### 1. OSIA Intelligence Hub
 *   **Slug:** `my-workspace`
-*   **Chat Provider:** System Default (`gemini-2.5-flash`)
-*   **Prompt:** "Answer the user's question clearly and concisely."
-*   **Similarity Threshold:** 0.25 | **Top N:** 4
 
 ### 2. Collection Directorate
 *   **Slug:** `collection-directorate`
+*   **Vector Tag:** `collection_raw`
 *   **Chat Provider:** Generic OpenAI (`Pleias-RAG-350M`)
-*   **Prompt:** "You are an OSINT Collection Operative. Your only job is to gather raw, factual data from public sources, academic papers, and transcripts. Do not analyze or draw conclusions. Provide the data exactly as found, with citations."
-*   **Similarity Threshold:** 0.25 | **Top N:** 4
 
 ### 3. Geopolitical & Security Desk
 *   **Slug:** `geopolitical-and-security-desk`
-*   **Chat Provider:** System Default (`gemini-2.5-flash`)
-*   **Prompt:** "You are a Geopolitical Intelligence Analyst for OSIA. Analyze all intelligence through the Socialist Intelligence Mandate: prioritize anti-imperialism, national sovereignty against colonial encroachment, and expose state-sponsored destabilization. MANDATORY: You must use the time-get_current_time tool to fetch the current time and include a 'TIMESTAMP (UTC):' line at the top of every briefing. All times must be in UTC."
-*   **Similarity Threshold:** 0.25 | **Top N:** 4
+*   **Vector Tag:** `geopolitical_intel`
+*   **Chat Provider:** Gemini (`gemini-2.5-flash`)
 
 ### 4. Cultural & Theological Intelligence Desk
 *   **Slug:** `cultural-and-theological-intelligence-desk`
-*   **Chat Provider:** System Default (`gemini-2.5-flash`)
-*   **Prompt:** "You are a Cultural and Theological Intelligence Expert. Analyze the provided intelligence by examining the philosophical, religious, and socio-cultural underpinnings of the actors involved. Explain how their belief systems, historical grievances, and cultural narratives drive their actions."
-*   **Similarity Threshold:** 0.25 | **Top N:** 4
+*   **Vector Tag:** `cultural_intel`
+*   **Chat Provider:** Gemini (`gemini-2.5-flash`)
 
 ### 5. Science, Technology & Commercial Desk
 *   **Slug:** `science-technology-and-commercial-desk`
-*   **Chat Provider:** Anthropic (`claude-3-5-sonnet-20241022`)
-*   **Prompt:** "You are a Tech Intelligence Analyst for OSIA. Analyze tech breakthroughs through the Socialist Intelligence Mandate: prioritize public benefit and data sovereignty. MANDATORY: You must use the time-get_current_time tool to fetch the current time and include a 'TIMESTAMP (UTC):' line at the top of every briefing. All times must be in UTC."
-*   **Similarity Threshold:** 0.25 | **Top N:** 4
+*   **Vector Tag:** `science_intel`
+*   **Chat Provider:** Anthropic (`claude-3-5-sonnet-20240620`)
 
 ### 6. Human Intelligence & Profiling Desk
 *   **Slug:** `human-intelligence-and-profiling-desk`
+*   **Vector Tag:** `human_intel`
 *   **Chat Provider:** Ollama (`nchapman/dolphin3.0-llama3:latest`)
-*   **Prompt:** "You are a Behavioral Profiler for OSIA. Utilize the Socialist Intelligence Mandate to profile individuals and power structures. MANDATORY: You must use the time-get_current_time tool to fetch the current time and include a 'TIMESTAMP (UTC):' line at the top of every briefing. All times must be in UTC."
-*   **Similarity Threshold:** 0.25 | **Top N:** 4
 
 ### 7. The Watch Floor
 *   **Slug:** `the-watch-floor`
-*   **Chat Provider:** Gemini (`gemini-2.5-flash`)
-*   **Prompt:** "You are the Watch Floor Director. Synthesize subordinate reports into a final INTSUM that adheres strictly to the Socialist Intelligence Mandate. MANDATORY: You must use the time-get_current_time tool to fetch the current time and include a 'TIMESTAMP (UTC):' line at the top of every briefing. All times must be in UTC."
-*   **Similarity Threshold:** 0.25 | **Top N:** 4
+*   **Vector Tag:** `watch_floor`
+*   **Chat Provider:** Gemini (`gemini-2.5-pro`)
 
 ### 8. Finance & Economics Directorate
 *   **Slug:** `finance-and-economics-directorate`
+*   **Vector Tag:** `finance_intel`
 *   **Chat Provider:** OpenAI (`gpt-4o`)
-*   **Prompt:** "You are a Finance Intelligence Analyst for OSIA. Your analysis is driven by the Socialist Intelligence Mandate: prioritize labor rights, expose worker exploitation, and track extraction of wealth from the Global South. MANDATORY: You must use the time-get_current_time tool to fetch the current time and include a 'TIMESTAMP (UTC):' line at the top of every briefing. All times must be in UTC."
-*   **Similarity Threshold:** 0.25 | **Top N:** 4
 
 ### 9. Cyber Intelligence & Warfare Desk
 *   **Slug:** `cyber-intelligence-and-warfare-desk`
-*   **Chat Provider:** Anthropic (`claude-3-5-sonnet-20241022`)
-*   **Prompt:** "You are a Senior Cyber Intelligence Analyst for OSIA. Analyze all cyber-related intelligence through the Socialist Intelligence Mandate: prioritize digital sovereignty, expose state-sponsored cyber-warfare and destabilization (e.g., Stuxnet, Pegasus, and other imperialist malware), and identify the role of private military contractors (PMCs) and 'Cyber-Mercenaries' in global conflicts. \n\n**Your focus areas:**\n1. **Nation-State Operations:** Analyze cyber-attacks as tools of imperialist power projection or defensive measures by sovereign nations.\n2. **Cyber-Crime & Economic Sabotage:** Identify how ransomware and financial hacks are used as tools of economic warfare against the Global South or as methods of capital extraction.\n3. **Surveillance Capitalism:** Expose the technologies used for mass surveillance and the suppression of popular movements.\n4. **Digital Infrastructure Defense:** Evaluate the security of public digital utilities and the risks posed by proprietary, closed-source 'black box' systems.\n\nMANDATORY: You must use the `time-get_current_time` tool to fetch the current time and include a 'TIMESTAMP (UTC):' line at the top of every briefing. All times must be in UTC. Use materialist analysis: evaluate cyber capabilities not just as technical tools, but as expressions of economic and state power."
-*   **Similarity Threshold:** 0.25 | **Top N:** 4
+*   **Vector Tag:** `cyber_intel`
+*   **Chat Provider:** Anthropic (`claude-3-5-sonnet-20240620`)
+
+---
+
+## Custom Agent Skills
+Custom tools located in `/home/ubuntu/osia-knowledge-base/plugins/agent-skills/` to provide the AnythingLLM agents with external capabilities:
+*   **`osia-cyber-ip-intel`**: IP Geolocation & ASN lookup via `ip-api.com`. Used primarily by the Cyber Desk.
+*   **`osia-finance-stock-intel`**: Real-time ticker price & market data via Yahoo Finance. Used by the Finance Desk.
+*   **`osia-stash-writer`**: Allows agents to write synchronized intelligence reports directly to the host filesystem (`osia_shared_stash.txt`).
+
+---
+
+## Management Scripts
+Located in `/home/ubuntu/osia-framework/scripts/`
+*   **`update_prompts.py`**: A master configuration sync script. It uses Gemini to merge the Core Mandate (`DIRECTIVES.md`) with desk-specific templates (`templates/prompts/*.txt`). It automatically connects to the AnythingLLM API to push the new system prompts, configure the correct LLM models per desk, ensure custom skills are active, and define the custom Qdrant `vectorTags`.
