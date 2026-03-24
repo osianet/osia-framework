@@ -28,6 +28,9 @@ storage/
 *cookies*.txt
 *.cookies
 
+# Temp files
+tmp/
+
 # IDE & Tool Artifacts
 view.xml
 *.xml
