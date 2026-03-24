@@ -14,6 +14,11 @@ from src.desks.hf_endpoint_manager import HFEndpointManager
 from src.gateways.adb_device import ADBDevice
 from src.gateways.mcp_dispatcher import MCPDispatcher
 from src.agents.social_media_agent import SocialMediaAgent
+from src.intelligence.source_tracker import (
+    SourceTracker,
+    build_citation_protocol,
+    audit_report,
+)
 
 logger = logging.getLogger("osia.orchestrator")
 
@@ -225,6 +230,83 @@ class OsiaOrchestrator:
         except httpx.RequestError as e:
             logger.error("Failed to reach Signal API: %s", e)
 
+    async def send_signal_image(self, recipient: str, image_b64: str, caption: str = ""):
+        """Sends a base64-encoded image attachment via Signal."""
+        url = f"{self.signal_api_url}/v2/send"
+
+        if not recipient.startswith("+") and not recipient.startswith("group."):
+            recipient = f"group.{recipient}"
+
+        payload = {
+            "message": caption,
+            "number": self.signal_number,
+            "recipients": [recipient],
+            "base64_attachments": [image_b64],
+        }
+        logger.info("Sending infographic to %s via Signal...", recipient)
+        try:
+            response = await self._signal_client.post(url, json=payload)
+            response.raise_for_status()
+            logger.info("Infographic delivered successfully.")
+        except httpx.HTTPStatusError as e:
+            logger.error("Signal API returned %s sending image: %s", e.response.status_code, e.response.text)
+        except httpx.RequestError as e:
+            logger.error("Failed to reach Signal API for image: %s", e)
+
+    async def generate_infographic(self, report_text: str) -> str | None:
+        """
+        Uses Gemini image generation to create a social-media-ready infographic
+        summarising the key points from an intelligence report.
+
+        Returns the image as a base64-encoded PNG string, or None on failure.
+        """
+        # Ask a text model to distil the report into a tight visual brief first.
+        # This keeps the image prompt focused and avoids token-limit issues.
+        brief_prompt = (
+            "You are a graphic designer briefing an AI image generator. "
+            "Read the following intelligence report and extract 4–6 key findings. "
+            "Write a concise image-generation prompt (max 300 words) that describes "
+            "a bold, dark-themed infographic card suitable for social media (9:16 portrait). "
+            "The card should display the key findings as short bullet points with a strong "
+            "headline, a dark background, and high-contrast accent colours (red/amber on dark). "
+            "Include the label 'OSIA INTELLIGENCE BRIEF' at the top. "
+            "Output ONLY the image prompt, no preamble.\n\n"
+            f"REPORT:\n{report_text[:6000]}"
+        )
+        try:
+            brief_res = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=self.model_id,
+                contents=brief_prompt,
+            )
+            image_prompt = brief_res.text.strip()
+            logger.info("Infographic brief generated (%d chars).", len(image_prompt))
+        except Exception as e:
+            logger.error("Failed to generate infographic brief: %s", e)
+            return None
+
+        image_model = os.getenv("GEMINI_IMAGE_MODEL_ID", "gemini-2.5-flash-image")
+        try:
+            img_res = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=image_model,
+                contents=image_prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                    image_config=types.ImageConfig(aspect_ratio="9:16"),
+                ),
+            )
+            for part in img_res.parts:
+                if part.thought:
+                    continue
+                if part.inline_data is not None:
+                    import base64
+                    return base64.b64encode(part.inline_data.data).decode()
+            logger.warning("Gemini image generation returned no image parts.")
+        except Exception as e:
+            logger.error("Infographic image generation failed: %s", e)
+        return None
+
     # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
@@ -402,9 +484,14 @@ class OsiaOrchestrator:
     # Research loop — proper multi-turn tool calling
     # ------------------------------------------------------------------
 
-    async def handle_research(self, query: str) -> str:
-        """Executes a multi-turn research loop, feeding tool results back to Gemini."""
+    async def handle_research(self, query: str) -> tuple[str, SourceTracker]:
+        """Executes a multi-turn research loop, feeding tool results back to Gemini.
+
+        Returns the final research text and a SourceTracker containing
+        provenance metadata for every tool call made during the loop.
+        """
         logger.info("Chief of Staff initiating research loop for: %s", query)
+        tracker = SourceTracker()
 
         config = types.GenerateContentConfig(tools=self.tools)
         contents = [types.Content(role="user", parts=[types.Part(text=query)])]
@@ -424,19 +511,25 @@ class OsiaOrchestrator:
             if not function_calls:
                 # Model is done calling tools — return its final text
                 text_parts = [p.text for p in candidate.content.parts if p.text]
-                return "\n".join(text_parts)
+                return "\n".join(text_parts), tracker
 
             # Execute each tool and build FunctionResponse parts
             response_parts = []
             for part in function_calls:
                 call = part.function_call
                 logger.info("Gemini requested tool: %s", call.name)
+                tool_query = ""
+                if call.args:
+                    tool_query = call.args.get("query", call.args.get("url", ""))
                 try:
                     result = await self._dispatch_tool(call)
                     result_str = str(result) if result else "No results found."
                 except Exception as e:
                     logger.error("Tool %s failed: %s", call.name, e)
                     result_str = f"Tool error: {e}"
+
+                # Record source provenance
+                tracker.record(call.name, tool_query, result_str)
 
                 logger.info("Tool '%s' returned data (length: %d)", call.name, len(result_str))
                 response_parts.append(
@@ -452,7 +545,7 @@ class OsiaOrchestrator:
         # If we exhausted rounds, summarize what we have
         logger.warning("Research loop hit max rounds (%d)", max_rounds)
         text_parts = [p.text for p in contents[-1].parts if hasattr(p, "text") and p.text]
-        return "\n".join(text_parts) if text_parts else ""
+        return ("\n".join(text_parts) if text_parts else ""), tracker
 
     # ------------------------------------------------------------------
     # ADB media capture
@@ -502,6 +595,7 @@ class OsiaOrchestrator:
         query = original_query
         media_analysis = None
         research_summary = None
+        source_tracker: SourceTracker | None = None
 
         logger.info("Received new task from %s: %s", source, query)
 
@@ -540,7 +634,7 @@ class OsiaOrchestrator:
 
         # 2. Automated Research (multi-turn tool calling)
         try:
-            research_summary = await self.handle_research(original_query)
+            research_summary, source_tracker = await self.handle_research(original_query)
             if research_summary:
                 logger.info("Research complete. Injecting into Collection Desk...")
                 await self.desk_client.ingest_raw_data(
@@ -548,7 +642,15 @@ class OsiaOrchestrator:
                     research_summary,
                     f"Research: {self._safe_title(original_query)}",
                 )
-                query = f"Baseline research summary for this topic:\n{research_summary}\n\nOriginal Request: {query}"
+                # Build source manifest for desk consumption
+                manifest = source_tracker.format_manifest() if source_tracker else ""
+                citation_block = build_citation_protocol()
+                query = (
+                    f"Baseline research summary for this topic:\n{research_summary}\n\n"
+                    f"{manifest}\n\n"
+                    f"{citation_block}\n\n"
+                    f"Original Request: {query}"
+                )
         except Exception as e:
             logger.error("Automated research failed: %s", e)
 
@@ -631,6 +733,7 @@ class OsiaOrchestrator:
                 ) + (
                     f"You are acting as the {assigned_desk} for OSIA. "
                     f"Analyze the following intelligence request and provide a thorough report.\n\n"
+                    f"{build_citation_protocol()}\n\n"
                     f"{query}"
                 )
                 fallback_res = self.client.models.generate_content(
@@ -641,9 +744,19 @@ class OsiaOrchestrator:
 
             logger.info("Intelligence synthesis complete.")
 
+            # Audit citations and append source quality summary
+            analysis += audit_report(analysis, source_tracker)
+
             if source.startswith("signal:"):
                 recipient = source[len("signal:"):]
                 await self.send_signal_message(recipient, analysis)
+                # Generate and send a social-media infographic alongside the text report
+                try:
+                    infographic_b64 = await self.generate_infographic(analysis)
+                    if infographic_b64:
+                        await self.send_signal_image(recipient, infographic_b64, caption="📊 OSIA Intelligence Brief")
+                except Exception as img_err:
+                    logger.warning("Infographic delivery failed (non-fatal): %s", img_err)
 
         except Exception as e:
             logger.exception("Orchestration or desk analysis failed: %s", e)
