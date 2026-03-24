@@ -570,12 +570,18 @@ class OsiaOrchestrator:
     async def process_media_link(self, url: str) -> str:
         """Uses ADB to capture media from a URL, then analyzes it with Gemini."""
         logger.info("Triggering ADB capture for URL: %s", url)
-        await self.adb.open_url(url)
-        await asyncio.sleep(5)
-        remote_path = "/sdcard/osia_capture.mp4"
-        local_path = str(self.base_dir / "osia_capture.mp4")
-        await self.adb.record_screen(remote_path=remote_path, time_limit=180)
-        await self.adb.pull_file(remote_path, local_path)
+        # Acquire the shared ADB lock so the persona daemon yields the phone.
+        # TTL covers the full record window (180s) plus upload headroom.
+        await self.redis.set("osia:adb:lock", "orchestrator", ex=300)
+        try:
+            await self.adb.open_url(url)
+            await asyncio.sleep(5)
+            remote_path = "/sdcard/osia_capture.mp4"
+            local_path = str(self.base_dir / "osia_capture.mp4")
+            await self.adb.record_screen(remote_path=remote_path, time_limit=180)
+            await self.adb.pull_file(remote_path, local_path)
+        finally:
+            await self.redis.delete("osia:adb:lock")
 
         logger.info("Uploading captured video to Gemini...")
         video_file = self.client.files.upload(file=local_path)

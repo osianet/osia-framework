@@ -824,6 +824,9 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
         for i in range(num_posts):
             try:
+                # Yield the phone if the orchestrator has acquired the ADB lock
+                await self._wait_for_adb_lock()
+
                 # Reading pause — varies like a real person
                 await asyncio.sleep(random.uniform(1.5, 4))
 
@@ -858,12 +861,25 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             self.persona_name, self.stats.likes, self.stats.comments, self.stats.shares, self.stats.posts,
         )
 
+    async def _wait_for_adb_lock(self, poll_interval: int = 15) -> None:
+        """Block until the shared ADB lock is released by the orchestrator."""
+        while True:
+            locked = await self.redis.get("osia:adb:lock")
+            if not locked:
+                return
+            logger.info(
+                "[%s] ADB lock held by '%s' — waiting %ds before retrying.",
+                self.persona_name, locked.decode() if isinstance(locked, bytes) else locked, poll_interval,
+            )
+            await asyncio.sleep(poll_interval)
+
     async def run_forever(self):
         """Main daemon loop."""
         logger.info("[%s] Persona daemon starting (id=%s)", self.persona_name, self.persona_id)
 
         while True:
             try:
+                await self._wait_for_adb_lock()
                 await self.run_session()
             except Exception as e:
                 logger.error("[%s] Session failed: %s", self.persona_name, e)
