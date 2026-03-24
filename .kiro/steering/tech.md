@@ -19,6 +19,7 @@
 - `yt-dlp` — YouTube transcript extraction
 - `python-dotenv` — environment variable loading
 - `pandas`, `matplotlib`, `openpyxl` — data analysis and charting
+- `huggingface-hub` — HuggingFace Inference Endpoints management (provisioning, scale-to-zero)
 
 ## Infrastructure
 
@@ -28,6 +29,7 @@
 - Qdrant — vector database for intelligence storage
 - systemd — service management (see `systemd/` directory)
 - Nginx — reverse proxy with Let's Encrypt wildcard certs
+- HuggingFace Inference Endpoints — dedicated scale-to-zero GPU endpoints for uncensored models (Dolphin 3.0)
 
 ## Hardware Target
 
@@ -57,6 +59,11 @@ uv run python -m src.cron.daily_sitrep
 
 # Start infrastructure services
 docker compose up -d
+
+# Manage HuggingFace Inference Endpoints (uncensored models)
+uv run python scripts/provision_hf_endpoints.py            # provision
+uv run python scripts/provision_hf_endpoints.py --status    # check
+uv run python scripts/provision_hf_endpoints.py --pause     # stop billing
 ```
 
 ## Environment Configuration
@@ -69,3 +76,5 @@ All secrets and config live in `.env` (git-ignored). See `.env.example` for requ
 - `REDIS_URL` — Redis connection string
 - `OSIA_BASE_DIR` — project root path
 - `MCP_TOOLS_BASE` — parent directory for MCP tool installations
+- `HF_TOKEN` — HuggingFace write-scoped token (for Inference Endpoints)
+- `HF_NAMESPACE` — HuggingFace username or org

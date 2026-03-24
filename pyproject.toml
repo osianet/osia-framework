@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.135.1",
     "feedparser>=6.0.12",
     "google-genai>=1.68.0",
+    "huggingface-hub>=0.24.0",
     "httpx>=0.28.1",
     "matplotlib>=3.10.8",
     "mcp[cli]>=1.26.0",

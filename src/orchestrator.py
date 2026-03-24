@@ -10,6 +10,7 @@ from google import genai
 from google.genai import types
 from dotenv import load_dotenv
 from src.desks.anythingllm_client import AnythingLLMDesk
+from src.desks.hf_endpoint_manager import HFEndpointManager
 from src.gateways.adb_device import ADBDevice
 from src.gateways.mcp_dispatcher import MCPDispatcher
 from src.agents.social_media_agent import SocialMediaAgent
@@ -55,6 +56,7 @@ class OsiaOrchestrator:
 
         # API Clients
         self.desk_client = AnythingLLMDesk()
+        self.hf_endpoints = HFEndpointManager()
         self.adb = ADBDevice(device_id=os.getenv("ADB_DEVICE_MEDIA_INTERCEPT"))
         self.mcp = MCPDispatcher()
         self.social_agent = SocialMediaAgent(
@@ -492,6 +494,12 @@ class OsiaOrchestrator:
                 assigned_desk = "geopolitical-and-security-desk"
 
             logger.info("Task routed to: %s", assigned_desk)
+
+            # Wake up HF endpoint if this desk uses one (no-op for cloud-API desks)
+            hf_ready = await self.hf_endpoints.ensure_ready(assigned_desk)
+            if not hf_ready:
+                logger.warning("HF endpoint for '%s' not ready — proceeding with existing desk config", assigned_desk)
+
             analysis = await self.desk_client.send_task(assigned_desk, query)
             logger.info("Intelligence synthesis complete.")
 
