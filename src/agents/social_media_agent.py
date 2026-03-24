@@ -222,39 +222,70 @@ Rules:
         """
         Execute a vision-action loop until the goal is achieved or we hit the step limit.
         Optionally opens a URL first to navigate to the right content.
+
+        Stuck detection: if the screen description repeats for 2+ consecutive steps, or
+        the model returns 'fail', press the Android back button to escape (e.g. full-screen
+        image/video overlay). Back-press recovery is capped at 3 attempts to avoid loops.
         """
         if pre_url:
             await self.adb.open_url(pre_url)
             await asyncio.sleep(4)  # wait for app to load the deep link
 
         collected_data: list[str] = []
+        last_description: str = ""
+        stuck_count: int = 0
+        back_presses: int = 0
+        _MAX_BACK_PRESSES = 3
+        _STUCK_THRESHOLD = 2
 
         for step in range(_MAX_STEPS):
             screenshot_path = await self._screenshot()
             analysis = await self._analyze_screen(screenshot_path, goal)
 
+            description = analysis.get("description", "")
+            action = analysis.get("action", "")
+
             logger.info(
                 "Step %d/%d — screen: %s | action: %s",
                 step + 1, _MAX_STEPS,
-                analysis.get("description", "?")[:80],
-                analysis.get("action", "?"),
+                description[:80],
+                action,
             )
 
             # Accumulate any data the model extracts along the way
             if analysis.get("data"):
                 collected_data.append(analysis["data"])
 
-            if analysis["action"] == "done":
+            if action == "done":
                 return ActionResult(
                     success=True,
                     data="\n\n".join(collected_data) if collected_data else analysis.get("data", ""),
                 )
 
-            if analysis["action"] == "fail":
-                return ActionResult(
-                    success=False,
-                    error=analysis.get("reasoning", "Agent could not achieve the goal."),
-                )
+            # Stuck detection: same screen description repeating or explicit fail
+            if description and description == last_description:
+                stuck_count += 1
+            else:
+                stuck_count = 0
+            last_description = description
+
+            if action == "fail" or stuck_count >= _STUCK_THRESHOLD:
+                if back_presses < _MAX_BACK_PRESSES:
+                    logger.warning(
+                        "Agent stuck (action=%s, stuck_count=%d) — pressing back button (attempt %d/%d)",
+                        action, stuck_count, back_presses + 1, _MAX_BACK_PRESSES,
+                    )
+                    await self.adb.press_back()
+                    await asyncio.sleep(1)
+                    stuck_count = 0
+                    last_description = ""
+                    back_presses += 1
+                    continue
+                else:
+                    return ActionResult(
+                        success=False,
+                        error=analysis.get("reasoning", "Agent could not achieve the goal after back-button recovery."),
+                    )
 
             await self._execute_action(analysis)
 
