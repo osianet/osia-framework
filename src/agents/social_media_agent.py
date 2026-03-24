@@ -69,6 +69,9 @@ class SocialMediaAgent:
         ))
         self._scratch_dir = self.base_dir / "tmp" / "social_agent"
         self._scratch_dir.mkdir(parents=True, exist_ok=True)
+        # Cached screen dimensions — fetched lazily on first use
+        self._screen_width: int | None = None
+        self._screen_height: int | None = None
 
     # ------------------------------------------------------------------
     # Core vision-action loop
@@ -78,6 +81,10 @@ class SocialMediaAgent:
         """Take a screenshot and return the local file path."""
         path = str(self._scratch_dir / "screen.png")
         await self.adb.take_screenshot(path)
+        # Lazily cache screen dimensions on first screenshot
+        if self._screen_width is None:
+            self._screen_width, self._screen_height = await self.adb.get_screen_size()
+            logger.info("Screen resolution cached: %dx%d", self._screen_width, self._screen_height)
         return path
 
     async def _human_delay(self):
@@ -100,8 +107,21 @@ class SocialMediaAgent:
         """
         screen_file = self.gemini.files.upload(file=screenshot_path)
 
+        # Build resolution context string if available
+        if self._screen_width and self._screen_height:
+            resolution_context = (
+                f"The screen resolution is exactly {self._screen_width}x{self._screen_height} pixels "
+                f"(width x height). All coordinates you provide MUST be within these bounds: "
+                f"x between 0 and {self._screen_width}, y between 0 and {self._screen_height}. "
+                f"The coordinate origin (0,0) is the top-left corner."
+            )
+        else:
+            resolution_context = "Coordinates use pixels from the top-left origin (0,0)."
+
         prompt = f"""You are an autonomous agent controlling a physical Android phone.
 Your current goal: {goal}
+
+Screen information: {resolution_context}
 
 Analyze this screenshot and decide the SINGLE next action to take.
 
@@ -125,6 +145,7 @@ Rules:
 - Use "fail" if the goal cannot be achieved from the current state.
 - If you need to scroll to see more content, use "swipe_down" or "swipe_up".
 - Be precise with coordinates — they must land on the intended UI element.
+- IMPORTANT: Do NOT tap on video thumbnails, images, or post content areas — this will expand them full-screen and lose the UI controls. Only tap on clearly visible UI elements such as buttons, icons, input fields, and navigation items.
 - If a keyboard is visible and you need to submit, tap the Send/Post button rather than using Enter.
 """
 
