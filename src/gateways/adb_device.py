@@ -131,6 +131,22 @@ class ADBDevice:
             raise RuntimeError(f"Could not parse screen size from: {output}")
         return int(match.group(1)), int(match.group(2))
 
+    async def get_foreground_app(self) -> str:
+        """Return the package name of the currently focused app."""
+        output = await self._run_checked(["shell", "dumpsys", "activity", "recents"])
+        # Look for the top ResumedActivity line
+        for line in output.splitlines():
+            if "ResumedActivity" in line or "topResumedActivity" in line:
+                # Format: ...ActivityRecord{... pkg/activity ...}
+                match = re.search(r"([a-zA-Z][a-zA-Z0-9_.]+)/[a-zA-Z0-9_.]+", line)
+                if match:
+                    return match.group(1)
+        # Fallback: mFocusedApp
+        match = re.search(r"mFocusedApp.*?([a-zA-Z][a-zA-Z0-9_.]+)/", output)
+        if match:
+            return match.group(1)
+        return ""
+
     async def pull_file(self, remote_path: str, local_path: str):
         logger.info("Pulling %s to %s...", remote_path, local_path)
         await self._run_checked(["pull", remote_path, local_path])

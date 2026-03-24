@@ -26,6 +26,23 @@ _TRANSITION_WAIT = (1.5, 3.0)  # random range in seconds — looks more human
 # Maximum vision-action iterations per high-level command
 _MAX_STEPS = 15
 
+# Android launcher/home screen package names
+_HOME_SCREEN_PACKAGES = {
+    "com.android.launcher",
+    "com.android.launcher2",
+    "com.android.launcher3",
+    "com.google.android.apps.nexuslauncher",
+    "com.sec.android.app.launcher",
+    "com.miui.home",
+    "com.huawei.android.launcher",
+    "com.oneplus.launcher",
+    "com.motorola.launcher3",
+}
+
+
+class HomeScreenError(Exception):
+    """Raised when the agent detects it has landed on the Android home screen."""
+
 
 @dataclass
 class ScreenState:
@@ -262,6 +279,13 @@ Rules:
 
         for step in range(_MAX_STEPS):
             screenshot_path = await self._screenshot()
+
+            # Detect home screen — agent has been ejected from the app
+            foreground = await self.adb.get_foreground_app()
+            if any(foreground.startswith(pkg) for pkg in _HOME_SCREEN_PACKAGES):
+                logger.warning("Home screen detected (foreground=%s) — aborting task.", foreground)
+                raise HomeScreenError(f"Landed on home screen ({foreground}), task aborted.")
+
             analysis = await self._analyze_screen(screenshot_path, goal)
 
             description = analysis.get("description", "")

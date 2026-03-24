@@ -37,7 +37,7 @@ from google import genai
 from dotenv import load_dotenv
 import redis.asyncio as aioredis
 from src.gateways.adb_device import ADBDevice
-from src.agents.social_media_agent import SocialMediaAgent
+from src.agents.social_media_agent import SocialMediaAgent, HomeScreenError
 
 logger = logging.getLogger("osia.persona")
 
@@ -873,6 +873,23 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 # Occasional longer pause (reading comments, watching a video, etc.)
                 if random.random() < 0.25:
                     await asyncio.sleep(random.uniform(4, 12))
+
+            except HomeScreenError:
+                logger.warning(
+                    "[%s] Post %d/%d — landed on home screen, abandoning task.",
+                    self.persona_name, i + 1, num_posts,
+                )
+                # Re-check ADB lock — orchestrator may have grabbed the phone
+                await self._wait_for_adb_lock()
+                # If the orchestrator queue has pending work, yield for a bit
+                queue_len = await self.redis.llen("osia:task_queue")
+                if queue_len > 0:
+                    logger.info(
+                        "[%s] %d task(s) pending in orchestrator queue — pausing 30s to yield phone.",
+                        self.persona_name, queue_len,
+                    )
+                    await asyncio.sleep(30)
+                continue
 
             except Exception as e:
                 logger.warning("[%s] Error during post interaction: %s", self.persona_name, e)
