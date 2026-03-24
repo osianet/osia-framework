@@ -118,10 +118,30 @@ class SocialMediaAgent:
         else:
             resolution_context = "Coordinates use pixels from the top-left origin (0,0)."
 
+        # Build a safe-zone hint based on known resolution
+        if self._screen_width and self._screen_height:
+            safe_y_start = int(self._screen_height * 0.75)
+            danger_zone_note = (
+                f"DANGER ZONE: The top {int(self._screen_height * 0.75)}px of the screen "
+                f"(y < {safe_y_start}) contains post images, videos, and content areas. "
+                f"Tapping anywhere in this zone will expand content full-screen and lose UI controls. "
+                f"UI controls (comment box, like button, share, nav bar) are in the BOTTOM 25% of the screen "
+                f"(y >= {safe_y_start}). When looking for the comment input field, it will be near the bottom "
+                f"of the screen, typically between y={safe_y_start} and y={self._screen_height}."
+            )
+        else:
+            danger_zone_note = (
+                "DANGER ZONE: Post images and video thumbnails occupy most of the screen. "
+                "Tapping them will expand content full-screen. "
+                "UI controls (comment box, like, share, nav bar) are always near the BOTTOM of the screen."
+            )
+
         prompt = f"""You are an autonomous agent controlling a physical Android phone.
 Your current goal: {goal}
 
 Screen information: {resolution_context}
+
+{danger_zone_note}
 
 Analyze this screenshot and decide the SINGLE next action to take.
 
@@ -140,13 +160,15 @@ Rules:
 - "coordinates" is required when action is "tap" or "tap_and_type" — tap the exact center of the UI element.
 - "swipe" is required when action is "swipe_down" or "swipe_up".
 - "text" is required when action is "type" or "tap_and_type".
-- "tap_and_type" should be used when you need to select an input field and immediately type into it.
+- "tap_and_type" should be used when you need to select an input field and immediately type into it. PREFER this over separate tap + type steps.
 - Use "done" when the goal has been achieved. Put the final result in "data".
 - Use "fail" if the goal cannot be achieved from the current state.
 - If you need to scroll to see more content, use "swipe_down" or "swipe_up".
 - Be precise with coordinates — they must land on the intended UI element.
-- IMPORTANT: Do NOT tap on video thumbnails, images, or post content areas — this will expand them full-screen and lose the UI controls. Only tap on clearly visible UI elements such as buttons, icons, input fields, and navigation items.
-- If a keyboard is visible and you need to submit, tap the Send/Post button rather than using Enter.
+- CRITICAL: NEVER tap on video thumbnails, post images, or any content area in the upper portion of the screen. This will expand them full-screen and lose all UI controls. Only tap on clearly visible UI chrome: buttons, icons, input fields, and navigation bars.
+- The comment input box is a text field, usually a rounded rectangle near the bottom of the screen. Tap its CENTER — not the edges, not the area above it.
+- If a keyboard is visible and you need to submit, tap the Send/Post button on the keyboard or in the UI rather than pressing Enter.
+- If you see a full-screen image or video with no UI controls visible, use "back" to return to the post view.
 """
 
         response = self.gemini.models.generate_content(
@@ -331,10 +353,12 @@ Rules:
         """
         goal = (
             f"Navigate to the comments section of this post. "
-            f"Tap the comment input field, type the following comment, "
-            f"then tap the Post/Send button to submit it.\n\n"
+            f"Find the comment input field — it is a rounded text box near the BOTTOM of the screen. "
+            f"Use 'tap_and_type' to tap the CENTER of that input field and type the comment. "
+            f"Do NOT tap anywhere in the post image or content area above the comment bar. "
+            f"After typing, tap the Post/Send button to submit.\n\n"
             f"Comment to post: \"{comment_text}\"\n\n"
-            f"Once the comment is successfully posted (you can see it appear), use 'done'. "
+            f"Once the comment is successfully posted (you can see it appear in the list), use 'done'. "
             f"If the comment fails to post, use 'fail' with the reason."
         )
         return await self._run_goal(goal, pre_url=post_url)
@@ -356,8 +380,9 @@ Rules:
         goal = (
             f"Navigate to the comments section of this post. "
             f"Find the comment by the user '{target_author}'. "
-            f"Tap the Reply button on that specific comment. "
-            f"Type the following reply and submit it:\n\n"
+            f"Tap the Reply button on that specific comment — it is a small text link below the comment, NOT in the post image area. "
+            f"The reply input field will appear near the BOTTOM of the screen. "
+            f"Use 'tap_and_type' to tap the CENTER of the reply input field and type the reply, then submit it:\n\n"
             f"Reply: \"{reply_text}\"\n\n"
             f"Once the reply is posted, use 'done'. "
             f"If you cannot find the comment by '{target_author}', scroll down to look for it. "
