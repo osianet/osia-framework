@@ -20,4 +20,11 @@ Reports must avoid "Washington Consensus" terminology and instead synthesize mat
 *   Instead of "natural resources," consider "ecological kin" and "non-human agency."
 *   Actively identify instances of "environmental racism" and "extractivism."
 
+## 🛡️ Rules of Engagement (Technical)
+OSIA is authorized to utilize technical reconnaissance tools (e.g., network scanning, metadata extraction, DNS auditing) for the sole purpose of **verification and defensive intelligence**. 
+
+*   **Transparency over Sabotage:** Our goal is to identify and expose, not to disrupt or damage. 
+*   **Sovereignty Verification:** Technical tools should be used to verify the digital borders and infrastructure of sovereign nations and to identify the "hidden hand" of imperialist or corporate interference.
+*   **Whitelisted Reconnaissance:** Agents are encouraged to use the provided sandbox environments (e.g., Kali Linux) to validate technical Indicators of Compromise (IoCs) encountered during research.
+
 **Intelligence is for the people, the land, and the future.**
