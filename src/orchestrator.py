@@ -291,6 +291,8 @@ class OsiaOrchestrator:
 
         # 1. yt-dlp (local software, fastest)
         try:
+            tmp_dir = self.base_dir / "tmp"
+            tmp_dir.mkdir(exist_ok=True)
             yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
             user_agent = (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -299,7 +301,7 @@ class OsiaOrchestrator:
             cmd = [
                 str(yt_dlp_bin), "--skip-download",
                 "--write-auto-subs", "--sub-lang", "en.*", "--convert-subs", "srt",
-                "--output", "yt_intel", "--user-agent", user_agent, "--geo-bypass",
+                "--output", str(tmp_dir / "yt_intel"), "--user-agent", user_agent, "--geo-bypass",
             ]
             cookies_path = self.base_dir / "config" / "youtube_cookies.txt"
             if cookies_path.exists():
@@ -311,7 +313,7 @@ class OsiaOrchestrator:
                 __import__("subprocess").run, cmd,
                 capture_output=True, text=True, cwd=str(self.base_dir),
             )
-            srt_path = self.base_dir / "yt_intel.en.srt"
+            srt_path = tmp_dir / "yt_intel.en.srt"
             if srt_path.exists():
                 transcript = srt_path.read_text()
                 srt_path.unlink()
@@ -322,6 +324,9 @@ class OsiaOrchestrator:
                     proc.stdout[-500:] if proc.stdout else "(empty)",
                     proc.stderr[-500:] if proc.stderr else "(empty)",
                 )
+            # Clean up any leftover subtitle files (vtt, srt, etc.)
+            for leftover in tmp_dir.glob("yt_intel*"):
+                leftover.unlink(missing_ok=True)
         except Exception as e:
             logger.warning("yt-dlp failed: %s", e)
 
