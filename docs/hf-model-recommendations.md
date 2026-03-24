@@ -168,13 +168,19 @@ cheap upgrade, but it's probably not necessary.
 ### 8. The Watch Floor
 
 **Current:** Gemini — `gemini-2.5-pro`
-**Recommendation:** Keep Gemini 2.5 Pro.
+**Recommendation:** Upgrade to `gemini-3.1-pro-preview`.
 
 The Watch Floor synthesizes all subordinate desk reports into a final INTSUM. This
 requires the strongest possible model with the largest context window — it needs to
-ingest multiple full reports and produce a coherent synthesis. Gemini 2.5 Pro with
-its 1M+ token context is ideal for this. No open-source model currently matches
-this context length at comparable quality.
+ingest multiple full reports and produce a coherent synthesis. Gemini 3.1 Pro
+(released Feb 19, 2026) tops 13 of 16 industry reasoning benchmarks and has a
+dedicated agentic/tool-calling endpoint. It's a direct upgrade over 2.5 Pro with
+improved reasoning depth and synthesis quality. Note that `gemini-3-pro-preview`
+was deprecated on March 9, 2026 and now redirects to 3.1 — so go straight to
+`gemini-3.1-pro-preview`.
+
+This is the most important desk to have the best model on, since it produces the
+final output that gets delivered via Signal.
 
 ---
 

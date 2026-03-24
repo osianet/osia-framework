@@ -95,9 +95,9 @@ DESK_MODELS = {
     },
     "the-watch-floor": {
         "chatProvider": "gemini",
-        "chatModel": "gemini-2.5-pro",
+        "chatModel": "gemini-3.1-pro-preview",
         "agentProvider": "gemini",
-        "agentModel": "gemini-2.5-pro",
+        "agentModel": "gemini-3.1-pro-preview",
         "vectorTag": "watch_floor"
     },
     "collection-directorate": {
