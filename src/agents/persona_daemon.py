@@ -999,6 +999,15 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         ])
         await asyncio.sleep(random.uniform(3, 6))
 
+        # Facebook opens with suggested friends / stories at the top — scroll
+        # past them to land on actual feed posts before we start browsing.
+        if app["name"].lower() == "facebook":
+            w, h = await self.adb.get_screen_size()
+            cx = w // 2
+            for _ in range(3):
+                await self.adb.swipe(cx, h * 3 // 4, cx, h // 4, duration_ms=400)
+                await asyncio.sleep(0.6)
+
         # Maybe create an original post before browsing
         await self._maybe_create_post(app["name"])
 
