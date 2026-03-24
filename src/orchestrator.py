@@ -330,11 +330,12 @@ class OsiaOrchestrator:
                 elif "v=" in video_url:
                     video_id = video_url.split("v=")[1].split("&")[0]
                 if video_id:
+                    ytt_api = YouTubeTranscriptApi()
                     fetched = await asyncio.to_thread(
-                        YouTubeTranscriptApi.get_transcript, video_id, languages=["en"]
+                        ytt_api.fetch, video_id, languages=["en"]
                     )
                     transcript = "\n".join(
-                        f"[{entry['start']:.1f}s] {entry['text']}" for entry in fetched
+                        f"[{snippet.start:.1f}s] {snippet.text}" for snippet in fetched
                     )
             except Exception as e:
                 logger.warning("youtube-transcript-api failed: %s", e)
