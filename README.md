@@ -47,7 +47,7 @@ OSIA utilizes **AnythingLLM**'s isolated Workspaces to act as specialized "Desks
 
 ```mermaid
 graph TD
-    A[Signal Gateway / 012345678 -->|Raw Query/Link| B(OSIA Orchestrator)
+    A[Signal Gateway] -->|Raw Query/Link| B(OSIA Orchestrator)
     B -->|Task Enqueued| C{Redis Task Queue}
     C -->|Task Pulled| D[Active Research / MCP Tools]
     C -->|Media Intercept| E[ADB / Burner Phone]
