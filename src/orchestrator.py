@@ -315,6 +315,13 @@ class OsiaOrchestrator:
             if srt_path.exists():
                 transcript = srt_path.read_text()
                 srt_path.unlink()
+            else:
+                logger.warning(
+                    "yt-dlp exited %d but no SRT produced.\nstdout: %s\nstderr: %s",
+                    proc.returncode,
+                    proc.stdout[-500:] if proc.stdout else "(empty)",
+                    proc.stderr[-500:] if proc.stderr else "(empty)",
+                )
         except Exception as e:
             logger.warning("yt-dlp failed: %s", e)
 
