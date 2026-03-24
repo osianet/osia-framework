@@ -1,6 +1,7 @@
 [Unit]
 Description=OSIA Physical Phone ADB Bridge
-After=network.target
+After=network.target osia-adb-server.service
+Requires=osia-adb-server.service
 
 [Service]
 Type=simple

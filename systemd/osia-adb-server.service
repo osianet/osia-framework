@@ -1,0 +1,13 @@
+[Unit]
+Description=ADB Server for OSIA Phone Gateway
+After=local-fs.target
+Before=osia-mcp-phone-bridge.service
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/adb start-server
+ExecStop=/usr/bin/adb kill-server
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
