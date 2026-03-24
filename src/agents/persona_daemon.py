@@ -129,36 +129,46 @@ class PersonaDaemon:
             self._tz_offset, self._daily_like_cap, self._daily_comment_cap, self._daily_post_cap,
         )
 
+    def _persona_file(self, filename: str) -> Path:
+        """
+        Resolve a persona asset file using a persona-specific → default fallback chain.
+
+        Lookup order:
+          1. personas/{persona_id}/{filename}
+          2. personas/default/{filename}
+        """
+        specific = self.base_dir / "personas" / self.persona_id / filename
+        if specific.exists():
+            return specific
+        return self.base_dir / "personas" / "default" / filename
+
     def _load_directives(self) -> str:
-        path = self.base_dir / "DIRECTIVES.md"
+        # Persona-specific directives override the global DIRECTIVES.md if present
+        path = self._persona_file("directives.md")
+        if not path.exists():
+            path = self.base_dir / "DIRECTIVES.md"
         if path.exists():
             return path.read_text()
-        logger.warning("DIRECTIVES.md not found at %s", path)
+        logger.warning("No directives file found for persona %s", self.persona_id)
         return ""
 
     def _load_persona_bio(self) -> str:
-        """Load persona bio from env var, file, or fall back to default."""
-        # Check for a persona-specific bio file first
-        bio_file = self.base_dir / "config" / f"persona_{self.persona_id}_bio.txt"
-        if bio_file.exists():
-            return bio_file.read_text().strip()
+        """Load bio from env var, personas/{id}/bio.txt, personas/default/bio.txt."""
         if self._persona_bio:
             return self._persona_bio
-        # Default bio
-        return (
-            f"a 34-year-old Australian bloke from Perth. "
-            f"Works in IT infrastructure and has a dry, sardonic sense of humor. "
-            f"Politically engaged but not preachy — cares about workers' rights, "
-            f"housing affordability, and tech ethics. Follows news, science, and memes."
-        )
+        path = self._persona_file("bio.txt")
+        if path.exists():
+            return path.read_text().strip()
+        logger.warning("No bio.txt found for persona %s", self.persona_id)
+        return f"a social media user"
 
     def _build_persona(self) -> str:
-        """Build the persona prompt from a markdown template file."""
-        template_file = self.base_dir / "persona_prompt.md"
-        if template_file.exists():
-            template = template_file.read_text()
+        """Build the persona prompt from personas/{id}/prompt.md or personas/default/prompt.md."""
+        path = self._persona_file("prompt.md")
+        if path.exists():
+            template = path.read_text()
         else:
-            logger.warning("persona_prompt.md not found, using inline fallback")
+            logger.warning("No prompt.md found for persona %s, using inline fallback", self.persona_id)
             template = (
                 "You are {name}, {bio}\n\n"
                 "When deciding whether to engage with a post, consider these principles:\n"
