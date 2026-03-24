@@ -8,17 +8,19 @@ shares) guided by the persona profile and DIRECTIVES.md analytical lens.
 Supports multiple personas via a persona_id parameter — each persona gets its
 own ADB device, name, bio, and env var namespace (PERSONA_<id>_*).
 
-When the persona encounters a video, reel, or short, it captures the screen
-recording, uploads it to Gemini for multimodal analysis (transcription, visual
-context, thematic extraction), then evaluates the content against DIRECTIVES.md
-to decide whether to engage. Comments are only posted when the persona genuinely
-has something to say. Likes and reshares happen when content aligns with core values.
+When the persona encounters a video, reel, or short, it extracts the URL and
+downloads via yt-dlp (falling back to screen recording), uploads to Gemini for
+multimodal analysis, then evaluates against DIRECTIVES.md to decide engagement.
 
-Activity is randomized to mimic natural human behavior:
-- Heavier usage during "waking hours" (configurable per persona)
-- Variable session lengths (3-12 scroll actions per session)
-- Active engagement: ~35-45% like, ~15-20% comment, rest scroll
-- Cooldowns between sessions (15-60 minutes during active hours)
+The persona also creates original posts — opinions, observations, reactions to
+current events (sourced from the RSS daily digest in Redis), and casual thoughts.
+Posts are platform-appropriate and capped at a configurable daily limit.
+
+Activity is tuned for high engagement to build a realistic online presence:
+- 5-18 posts browsed per session, 8-35 min gaps between sessions
+- ~50-60% like rate, ~25-30% comment rate on content seen
+- ~20-30% chance of creating an original post each session
+- Daily caps: 80 likes, 30 comments, 3 original posts (all configurable)
 """
 
 import asyncio
@@ -33,6 +35,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from google import genai
 from dotenv import load_dotenv
+import redis.asyncio as aioredis
 from src.gateways.adb_device import ADBDevice
 from src.agents.social_media_agent import SocialMediaAgent
 
@@ -53,6 +56,7 @@ class SessionStats:
     likes: int = 0
     comments: int = 0
     shares: int = 0
+    posts: int = 0
     sessions: int = 0
     date: str = ""
 
@@ -62,6 +66,7 @@ class SessionStats:
             self.likes = 0
             self.comments = 0
             self.shares = 0
+            self.posts = 0
             self.sessions = 0
             self.date = today
 
@@ -87,12 +92,13 @@ class PersonaDaemon:
                                          os.getenv("PERSONA_TZ_OFFSET", "10")))
 
         # Daily limits — configurable per persona
-        self._daily_like_cap = int(os.getenv(f"PERSONA_{persona_id}_LIKE_CAP", "50"))
-        self._daily_comment_cap = int(os.getenv(f"PERSONA_{persona_id}_COMMENT_CAP", "15"))
+        self._daily_like_cap = int(os.getenv(f"PERSONA_{persona_id}_LIKE_CAP", "80"))
+        self._daily_comment_cap = int(os.getenv(f"PERSONA_{persona_id}_COMMENT_CAP", "30"))
+        self._daily_post_cap = int(os.getenv(f"PERSONA_{persona_id}_POST_CAP", "3"))
 
         # Session timing
-        self._min_gap = int(os.getenv(f"PERSONA_{persona_id}_MIN_GAP", "15"))
-        self._max_gap = int(os.getenv(f"PERSONA_{persona_id}_MAX_GAP", "60"))
+        self._min_gap = int(os.getenv(f"PERSONA_{persona_id}_MIN_GAP", "8"))
+        self._max_gap = int(os.getenv(f"PERSONA_{persona_id}_MAX_GAP", "35"))
         self._quiet_start = int(os.getenv(f"PERSONA_{persona_id}_QUIET_START", "23"))
         self._quiet_end = int(os.getenv(f"PERSONA_{persona_id}_QUIET_END", "8"))
 
@@ -109,14 +115,18 @@ class PersonaDaemon:
             model_id=self.model_id,
             base_dir=self.base_dir,
         )
+
+        # Redis — for pulling RSS digest as post inspiration
+        self.redis = aioredis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+
         self.stats = SessionStats()
         self._directives = self._load_directives()
         self._persona_prompt = self._build_persona()
 
         logger.info(
-            "Persona '%s' (id=%s) initialized — device=%s, tz=%+d, caps=%d likes/%d comments",
+            "Persona '%s' (id=%s) initialized — device=%s, tz=%+d, caps=%d likes/%d comments/%d posts",
             self.persona_name, persona_id, device_id or "any",
-            self._tz_offset, self._daily_like_cap, self._daily_comment_cap,
+            self._tz_offset, self._daily_like_cap, self._daily_comment_cap, self._daily_post_cap,
         )
 
     def _load_directives(self) -> str:
@@ -208,16 +218,17 @@ When deciding whether to engage with a post, consider these principles:
         # Dynamic engagement hints based on remaining budget
         if can_comment and can_like:
             engagement_hint = (
-                "You're in an engaging mood today. Be active:\n"
-                "- About 35-45% of the time, like/react to the post\n"
-                "- About 15-20% of the time, leave a comment\n"
-                "- The rest of the time, just scroll past\n"
-                "- If something is genuinely funny, interesting, or outrageous, ALWAYS engage"
+                "You're feeling social today. Be VERY active — engage with most things:\n"
+                "- About 50-60% of the time, like/react to the post\n"
+                "- About 25-30% of the time, leave a comment\n"
+                "- Only scroll past ~15-20% of posts — the boring or irrelevant ones\n"
+                "- If something is genuinely funny, interesting, or outrageous, ALWAYS engage\n"
+                "- Don't be shy — real people interact with their feeds a lot"
             )
         elif can_like:
             engagement_hint = (
                 "You've commented enough for today, but still like things freely:\n"
-                "- About 40-50% of the time, like/react\n"
+                "- About 55-65% of the time, like/react\n"
                 "- Don't comment, just scroll or like"
             )
         else:
@@ -538,6 +549,169 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             if result.success:
                 self.stats.shares += 1
 
+    # ------------------------------------------------------------------
+    # Original content creation
+    # ------------------------------------------------------------------
+
+    # Post types the persona can create, with platform suitability
+    _POST_TYPES = [
+        {"type": "opinion", "desc": "a short opinion or hot take on something in the news", "platforms": ["Facebook", "Instagram", "Upscrolled"]},
+        {"type": "observation", "desc": "a casual observation about daily life, tech, or something funny", "platforms": ["Facebook", "Instagram", "YouTube", "Upscrolled"]},
+        {"type": "share_article", "desc": "sharing a link or summarizing an interesting article you read", "platforms": ["Facebook", "Upscrolled"]},
+        {"type": "question", "desc": "asking your followers a genuine question to spark discussion", "platforms": ["Facebook", "Instagram", "Upscrolled"]},
+        {"type": "reaction", "desc": "reacting to a trending topic or current event", "platforms": ["Facebook", "Instagram", "Upscrolled"]},
+    ]
+
+    async def _get_post_inspiration(self) -> str:
+        """
+        Pull recent RSS digest items from Redis to give the persona something
+        topical to post about. Returns a summary string or empty if nothing available.
+        """
+        try:
+            # Peek at the daily digest without draining it (LRANGE, not LPOP)
+            items = await self.redis.lrange("osia:rss:daily_digest", 0, 9)
+            if items:
+                summaries = [item.decode() if isinstance(item, bytes) else item for item in items[:5]]
+                return "Recent news headlines you've been reading:\n" + "\n".join(
+                    f"- {s[:200]}" for s in summaries
+                )
+        except Exception as e:
+            logger.debug("[%s] Could not fetch RSS digest for post inspiration: %s", self.persona_name, e)
+        return ""
+
+    async def _generate_post_content(self, app_name: str) -> dict | None:
+        """
+        Ask Gemini to generate an original post as the persona.
+        Returns dict with 'text' and optionally 'type', or None if generation fails.
+        """
+        # Pick a post type suitable for this platform
+        suitable = [p for p in self._POST_TYPES if app_name in p["platforms"]]
+        if not suitable:
+            suitable = self._POST_TYPES
+        post_type = random.choice(suitable)
+
+        inspiration = await self._get_post_inspiration()
+
+        local_time = datetime.now(timezone.utc) + timedelta(hours=self._tz_offset)
+        time_context = local_time.strftime("%A, %I:%M %p")
+
+        prompt = f"""{self._persona_prompt}
+
+---
+
+It's {time_context} and you're on {app_name}. You want to make a post.
+
+Post type: {post_type['desc']}
+
+{inspiration}
+
+Write a post that {self.persona_name} would naturally make. Rules:
+- Sound like a REAL person, not a brand or AI
+- Keep it short — 1-3 sentences for most posts, max 4-5 if you really have something to say
+- Match the platform style ({app_name})
+- Be genuine — dry humor, real opinions, casual language
+- No hashtags on Facebook. On Instagram, 0-2 relevant hashtags MAX at the end
+- Don't be preachy or lecture-y. If it's political, make it a pointed observation not a speech
+- Sometimes be funny, sometimes be thoughtful, sometimes just share something interesting
+- NEVER sound like you're trying to go viral or get engagement
+
+Respond with ONLY valid JSON (no markdown, no code fences):
+{{
+    "text": "The actual post text",
+    "type": "{post_type['type']}",
+    "reasoning": "Why this feels natural right now"
+}}"""
+
+        response = self.gemini.models.generate_content(
+            model=self.model_id,
+            contents=[prompt],
+        )
+
+        parsed = self._parse_json_response(response.text)
+        if parsed and parsed.get("text"):
+            return parsed
+        logger.warning("[%s] Could not generate post content", self.persona_name)
+        return None
+
+    async def _create_post_on_app(self, app_name: str, post_text: str) -> bool:
+        """
+        Use the vision agent to create a new post on the currently open app.
+        Returns True if the post was successfully created.
+        """
+        # Platform-specific instructions for creating a post
+        if app_name == "Facebook":
+            instruction = (
+                "You are on the Facebook app home feed. Find and tap the 'What's on your mind?' "
+                "text box at the top of the feed (or the create post button). "
+                "Once the post composer opens, tap the text input area and type this post:\n\n"
+                f"\"{post_text}\"\n\n"
+                "Then tap the 'Post' button to publish it. Once posted, use 'done'."
+            )
+        elif app_name == "Instagram":
+            instruction = (
+                "You are on Instagram. Tap the '+' (create/new post) button, usually at the bottom "
+                "center or top right of the screen. If it asks what type of content, select 'Post'. "
+                "If it asks to select a photo, just pick the most recent photo in the gallery "
+                "(or take a quick photo if needed — the text is what matters). "
+                "On the caption screen, tap the caption field and type:\n\n"
+                f"\"{post_text}\"\n\n"
+                "Then tap 'Share' or 'Post' to publish. Once posted, use 'done'. "
+                "If you can't create a text-only post, use 'fail'."
+            )
+        elif app_name == "YouTube":
+            instruction = (
+                "You are on YouTube. Tap the '+' create button at the bottom center. "
+                "Select 'Create a post' (community post). "
+                "Tap the text area and type:\n\n"
+                f"\"{post_text}\"\n\n"
+                "Then tap 'Post' to publish. Once posted, use 'done'. "
+                "If community posts aren't available, use 'fail'."
+            )
+        else:
+            instruction = (
+                f"You are on {app_name}. Find the create post / new post button. "
+                "Tap it to open the post composer. Type this post:\n\n"
+                f"\"{post_text}\"\n\n"
+                "Then tap Post/Share/Submit to publish. Once posted, use 'done'."
+            )
+
+        result = await self.agent.execute_custom("", instruction)
+        return result.success
+
+    async def _maybe_create_post(self, app_name: str) -> bool:
+        """
+        Decide whether to create an original post this session.
+        ~25% chance per session, respects daily post cap.
+        Returns True if a post was created.
+        """
+        if self.stats.posts >= self._daily_post_cap:
+            return False
+
+        # 25% chance to post, slightly higher in the evening (people post more then)
+        local_hour = (datetime.now(timezone.utc) + timedelta(hours=self._tz_offset)).hour
+        post_chance = 0.30 if 17 <= local_hour <= 22 else 0.20
+        if random.random() > post_chance:
+            return False
+
+        logger.info("[%s] Generating original post for %s...", self.persona_name, app_name)
+        content = await self._generate_post_content(app_name)
+        if not content:
+            return False
+
+        post_text = content["text"]
+        logger.info(
+            "[%s] Posting (%s): %s",
+            self.persona_name, content.get("type", "?"), post_text[:80],
+        )
+
+        success = await self._create_post_on_app(app_name, post_text)
+        if success:
+            self.stats.posts += 1
+            logger.info("[%s] Post created successfully (today: %d/%d)", self.persona_name, self.stats.posts, self._daily_post_cap)
+        else:
+            logger.warning("[%s] Failed to create post on %s", self.persona_name, app_name)
+        return success
+
     async def _execute_interaction(self, decision: dict, app_name: str = ""):
         """Execute the decided interaction on the current screen."""
         action = decision.get("action", "scroll")
@@ -628,13 +802,13 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         self.stats.sessions += 1
 
         app = self._pick_app()
-        num_posts = random.randint(3, 12)
+        num_posts = random.randint(5, 18)
 
         logger.info(
             "[%s] Session #%d — Opening %s, browsing ~%d posts "
-            "(today: %d likes, %d comments, %d shares)",
+            "(today: %d likes, %d comments, %d shares, %d posts)",
             self.persona_name, self.stats.sessions, app["name"], num_posts,
-            self.stats.likes, self.stats.comments, self.stats.shares,
+            self.stats.likes, self.stats.comments, self.stats.shares, self.stats.posts,
         )
 
         # Open the app
@@ -644,6 +818,9 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             "-c", "android.intent.category.LAUNCHER", "1",
         ])
         await asyncio.sleep(random.uniform(3, 6))
+
+        # Maybe create an original post before browsing
+        await self._maybe_create_post(app["name"])
 
         for i in range(num_posts):
             try:
@@ -677,8 +854,8 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         # Press home to close
         await self.adb._run_checked(["shell", "input", "keyevent", "3"])
         logger.info(
-            "[%s] Session complete — today: %d likes, %d comments, %d shares",
-            self.persona_name, self.stats.likes, self.stats.comments, self.stats.shares,
+            "[%s] Session complete — today: %d likes, %d comments, %d shares, %d posts",
+            self.persona_name, self.stats.likes, self.stats.comments, self.stats.shares, self.stats.posts,
         )
 
     async def run_forever(self):
