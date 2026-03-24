@@ -43,6 +43,17 @@ class AnythingLLMDesk:
         if not text:
             logger.warning("Desk '%s' returned empty textResponse. Full payload: %s", workspace_slug, data)
             raise ValueError(f"Desk '{workspace_slug}' returned an empty response.")
+
+        # AnythingLLM returns agent errors as textResponse — detect and raise
+        agent_error_markers = [
+            "The agent model failed to respond",
+            "agent could not complete",
+            "failed to generate a response",
+        ]
+        if any(marker.lower() in text.lower() for marker in agent_error_markers):
+            logger.error("Desk '%s' agent error: %s", workspace_slug, text[:200])
+            raise RuntimeError(f"Desk '{workspace_slug}' agent failed: {text[:200]}")
+
         return text
 
     async def ingest_raw_data(self, workspace_slug: str, text_content: str, title: str):
