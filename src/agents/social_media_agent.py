@@ -346,3 +346,62 @@ Rules:
             instruction: Free-form instruction for the vision agent.
         """
         return await self._run_goal(instruction, pre_url=url if url else None)
+
+    async def generate_infographic_via_phone(self, image_prompt: str) -> bytes | None:
+            """
+            Fallback infographic generator: drives the Gemini Android app via ADB
+            to produce an image when the Gemini API is over capacity.
+
+            Opens the Gemini app, submits the image prompt, waits for generation,
+            screenshots the result, and returns the PNG bytes.
+            Returns None if the flow fails.
+            """
+            GEMINI_APP = "com.google.android.apps.bard"
+            logger.info("Infographic API unavailable — falling back to Gemini phone app.")
+
+            # Launch the Gemini app fresh
+            await self.adb.wake_and_unlock()
+            await self.adb._run_checked([
+                "shell", "am", "start", "-n",
+                f"{GEMINI_APP}/com.google.android.apps.bard.ui.BardActivity",
+            ])
+            await asyncio.sleep(3)
+
+            # Use the vision loop to navigate to a new chat and submit the prompt
+            setup_result = await self._run_goal(
+                goal=(
+                    "Open a new chat if one is not already open. "
+                    "Tap the message input field, type the following prompt exactly, "
+                    "then tap the send button. "
+                    f"PROMPT: {image_prompt[:800]}"
+                )
+            )
+
+            if not setup_result.success:
+                logger.warning("Phone Gemini prompt submission failed: %s", setup_result.error)
+                return None
+
+            # Wait for image generation — Gemini app typically takes 10–30s
+            logger.info("Waiting for Gemini app to generate image...")
+            await asyncio.sleep(20)
+
+            # Use the vision loop to confirm the image is visible and capture it
+            confirm_result = await self._run_goal(
+                goal=(
+                    "An AI-generated image should now be visible in the chat. "
+                    "If it is still loading, wait and check again. "
+                    "Once the image is fully rendered, report done. "
+                    "If an error message is shown instead, report fail."
+                )
+            )
+
+            if not confirm_result.success:
+                logger.warning("Gemini app did not produce an image: %s", confirm_result.error)
+                return None
+
+            # Take a final clean screenshot and return the raw PNG bytes
+            screenshot_path = str(self._scratch_dir / "infographic_capture.png")
+            await self.adb.take_screenshot(screenshot_path)
+
+            with open(screenshot_path, "rb") as f:
+                return f.read()

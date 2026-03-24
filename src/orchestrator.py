@@ -304,7 +304,23 @@ class OsiaOrchestrator:
                     return base64.b64encode(part.inline_data.data).decode()
             logger.warning("Gemini image generation returned no image parts.")
         except Exception as e:
+            # High-demand / capacity errors — fall back to driving the Gemini Android app
+            _capacity_markers = ("high demand", "overloaded", "503", "resource_exhausted", "RESOURCE_EXHAUSTED")
+            if any(m.lower() in str(e).lower() for m in _capacity_markers):
+                logger.warning("Gemini image API over capacity (%s) — trying phone fallback.", e)
+                return await self._generate_infographic_via_phone(image_prompt)
             logger.error("Infographic image generation failed: %s", e)
+        return None
+
+    async def _generate_infographic_via_phone(self, image_prompt: str) -> str | None:
+        """Drives the Gemini Android app via ADB to generate an infographic image."""
+        import base64
+        try:
+            png_bytes = await self.social_agent.generate_infographic_via_phone(image_prompt)
+            if png_bytes:
+                return base64.b64encode(png_bytes).decode()
+        except Exception as e:
+            logger.error("Phone infographic fallback failed: %s", e)
         return None
 
     # ------------------------------------------------------------------
