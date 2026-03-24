@@ -307,6 +307,30 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         await asyncio.sleep(0.5)
         return None
 
+    async def _get_video_duration(self, url: str) -> int | None:
+        """
+        Use yt-dlp --dump-json to fetch video metadata without downloading.
+        Returns duration in seconds, or None if unavailable.
+        """
+        yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
+        if not yt_dlp_bin.exists():
+            yt_dlp_bin = "yt-dlp"
+
+        cmd = [str(yt_dlp_bin), "--dump-json", "--no-playlist", url]
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run, cmd,
+                capture_output=True, text=True, timeout=15,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                data = json.loads(proc.stdout)
+                duration = data.get("duration")
+                if duration:
+                    return int(duration)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
+            logger.debug("[%s] Could not fetch video duration: %s", self.persona_name, e)
+        return None
+
     async def _download_video_ytdlp(self, url: str) -> str | None:
         """
         Use yt-dlp to download the video directly. Works for YouTube, Instagram
@@ -383,18 +407,28 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         """
         Tiered video capture:
         1. Extract the post URL via the share button
-        2. Try yt-dlp to download the actual video (fast, full quality)
-        3. Fall back to ADB screen recording if yt-dlp can't handle it
+        2. Use yt-dlp --dump-json to get the actual duration (no download)
+        3. Try yt-dlp to download the actual video (fast, full quality)
+        4. Fall back to ADB screen recording using the real duration (capped at 60s)
         """
-        # Tier 1: try to get the URL and download directly
+        # Tier 1: try to get the URL
         url = await self._extract_post_url()
         if url:
+            # Fetch real duration before attempting download — avoids over-recording
+            real_duration = await self._get_video_duration(url)
+            if real_duration:
+                # Cap at 60s — enough for analysis, avoids wasting time on long videos
+                duration = min(real_duration + 2, 60)  # +2s buffer for playback start
+                logger.info("[%s] Video duration: %ds — recording %ds", self.persona_name, real_duration, duration)
+            else:
+                logger.debug("[%s] Could not determine duration, using default %ds", self.persona_name, duration)
+
             video_path = await self._download_video_ytdlp(url)
             if video_path:
                 return video_path
             logger.info("[%s] yt-dlp couldn't grab it, falling back to screen recording", self.persona_name)
 
-        # Tier 2: screen recording
+        # Tier 2: screen recording with accurate duration
         return await self._record_screen_fallback(duration=duration)
 
     async def _analyze_video_content(self, video_path: str) -> dict:
@@ -771,9 +805,10 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
         elif action in ("watch_video", "watch"):
             logger.info("[%s] Video detected: %s", name, decision.get("post_summary", "")[:60])
-            # Capture the video playing on screen
-            capture_duration = random.randint(12, 20)
-            video_path = await self._capture_video(duration=capture_duration)
+            # _capture_video will use yt-dlp metadata to determine real duration;
+            # this fallback only applies if URL extraction fails entirely
+            fallback_duration = random.randint(15, 30)
+            video_path = await self._capture_video(duration=fallback_duration)
 
             if video_path:
                 # Analyze the video content with Gemini multimodal
