@@ -17,6 +17,7 @@ dependencies = [
     "pandas>=3.0.1",
     "python-dotenv>=1.2.2",
     "redis>=7.3.0",
+    "slowapi>=0.1.9",
     "starlette-context>=0.5.1",
     "uvicorn>=0.42.0",
     "websockets>=16.0",

@@ -2,25 +2,42 @@
 OSIA Status API — exposes service health, metrics, and logs over HTTP.
 
 Authentication:
-  - Bearer token (STATUS_API_TOKEN env var)
+  - Bearer token (STATUS_API_TOKEN env var) — compared with secrets.compare_digest
   - User-Agent must contain the cryptic sentinel (STATUS_API_UA_SENTINEL env var)
+  - Wrong UA returns 404 (service appears non-existent to scanners)
 
 Token management:
   uv run python scripts/manage_status_token.py          # show current token
   uv run python scripts/manage_status_token.py --rotate  # generate and save a new token
+
+Security posture:
+  - All subprocess calls use list form (no shell=True, no user input interpolated)
+  - Service names validated against a hardcoded whitelist before any syscall
+  - Log output sanitised — ANSI/control characters stripped
+  - Redis task preview redacted to type/source fields only (no payload content)
+  - Token comparison is constant-time (secrets.compare_digest)
+  - Rate limiting: 30 req/min per IP via slowapi
+  - Server header suppressed
+  - No shell=True anywhere
 """
 
-import os
-import json
-import asyncio
+import hmac
 import logging
+import os
+import re
+import secrets
 import subprocess
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import uvicorn
 
 load_dotenv()
@@ -32,7 +49,8 @@ STATUS_API_TOKEN = os.getenv("STATUS_API_TOKEN", "")
 STATUS_API_UA_SENTINEL = os.getenv("STATUS_API_UA_SENTINEL", "osia-monitor/1")
 STATUS_API_PORT = int(os.getenv("STATUS_API_PORT", "8099"))
 
-SERVICES = [
+# Hardcoded whitelists — nothing outside these lists ever touches a subprocess
+SERVICES: list[str] = [
     "osia-orchestrator.service",
     "osia-signal-ingress.service",
     "osia-persona-daemon.service",
@@ -44,14 +62,15 @@ SERVICES = [
     "osia-mcp-time-bridge.service",
     "osia-mcp-wikipedia-bridge.service",
     "osia-cyber-bridge.service",
+    "osia-status-api.service",
 ]
 
-TIMERS = [
+TIMERS: list[str] = [
     "osia-daily-sitrep.timer",
     "osia-rss-ingress.timer",
 ]
 
-CONTAINERS = [
+CONTAINERS: list[str] = [
     "osia-anythingllm",
     "osia-qdrant",
     "osia-redis",
@@ -60,8 +79,28 @@ CONTAINERS = [
     "osia-kali",
 ]
 
+# Pre-compiled pattern for stripping ANSI escape codes and non-printable
+# control characters from log output before returning it to the caller.
+_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 security = HTTPBearer()
+
+
+# ---------------------------------------------------------------------------
+# Middleware — strip server fingerprint header
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def _remove_server_header(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.pop("server", None)
+    response.headers.pop("x-powered-by", None)
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -69,23 +108,44 @@ security = HTTPBearer()
 # ---------------------------------------------------------------------------
 
 def _check_auth(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Two-factor gate:
+      1. User-Agent must contain the sentinel string (wrong UA → 404, looks like nothing is here)
+      2. Bearer token must match via constant-time comparison (wrong token → 403)
+    """
     if not STATUS_API_TOKEN:
-        raise HTTPException(status_code=503, detail="Status API not configured")
+        raise HTTPException(status_code=503, detail="Not configured")
+
     ua = request.headers.get("user-agent", "")
     if STATUS_API_UA_SENTINEL not in ua:
         raise HTTPException(status_code=404, detail="Not found")
-    if credentials.credentials != STATUS_API_TOKEN:
+
+    # Constant-time comparison — prevents timing oracle on the token
+    if not hmac.compare_digest(
+        credentials.credentials.encode(),
+        STATUS_API_TOKEN.encode(),
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
 # ---------------------------------------------------------------------------
-# Helpers — all run in a thread pool to avoid blocking the event loop
+# Subprocess helper — list-form only, never shell=True
 # ---------------------------------------------------------------------------
 
 def _run(cmd: list[str], timeout: int = 5) -> tuple[int, str, str]:
-    """Run a subprocess and return (returncode, stdout, stderr)."""
+    """
+    Execute a command as a list (no shell interpolation possible).
+    All callers must pass fully-hardcoded argument lists — no user input
+    should ever be interpolated into cmd.
+    """
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            shell=False,          # explicit — never allow shell expansion
+        )
         return r.returncode, r.stdout.strip(), r.stderr.strip()
     except subprocess.TimeoutExpired:
         return -1, "", "timeout"
@@ -93,9 +153,23 @@ def _run(cmd: list[str], timeout: int = 5) -> tuple[int, str, str]:
         return -1, "", "command not found"
 
 
+def _sanitise(text: str) -> str:
+    """Strip ANSI escape sequences and non-printable control characters."""
+    text = _ANSI_ESCAPE.sub("", text)
+    text = _CONTROL_CHARS.sub("", text)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Data collectors — all subprocess args are hardcoded, never user-supplied
+# ---------------------------------------------------------------------------
+
 def _systemd_service_info(name: str) -> dict:
-    rc, out, _ = _run(["systemctl", "show", name,
-                        "--property=ActiveState,SubState,MainPID,MemoryCurrent,ExecMainStartTimestamp"])
+    # name is always from the SERVICES whitelist — validated before this call
+    rc, out, _ = _run([
+        "systemctl", "show", name,
+        "--property=ActiveState,SubState,MainPID,MemoryCurrent,ExecMainStartTimestamp",
+    ])
     props: dict = {}
     for line in out.splitlines():
         if "=" in line:
@@ -103,31 +177,29 @@ def _systemd_service_info(name: str) -> dict:
             props[k] = v
 
     active = props.get("ActiveState", "unknown")
-    sub = props.get("SubState", "unknown")
-    pid = props.get("MainPID", "0")
-    mem_bytes = props.get("MemoryCurrent", "")
-    started = props.get("ExecMainStartTimestamp", "")
-
     mem_mb: float | None = None
     try:
-        mem_mb = round(int(mem_bytes) / 1024 / 1024, 1)
+        mem_mb = round(int(props.get("MemoryCurrent", "")) / 1024 / 1024, 1)
     except (ValueError, TypeError):
         pass
 
+    pid = props.get("MainPID", "0")
     return {
         "name": name,
         "active": active,
-        "sub": sub,
+        "sub": props.get("SubState", "unknown"),
         "pid": pid if pid != "0" else None,
         "memory_mb": mem_mb,
-        "started": started or None,
+        "started": props.get("ExecMainStartTimestamp") or None,
         "ok": active == "active",
     }
 
 
 def _systemd_timer_info(name: str) -> dict:
-    rc, out, _ = _run(["systemctl", "show", name,
-                        "--property=ActiveState,NextElapseUSecRealtime,LastTriggerUSec"])
+    rc, out, _ = _run([
+        "systemctl", "show", name,
+        "--property=ActiveState,NextElapseUSecRealtime,LastTriggerUSec",
+    ])
     props: dict = {}
     for line in out.splitlines():
         if "=" in line:
@@ -137,20 +209,24 @@ def _systemd_timer_info(name: str) -> dict:
     return {
         "name": name,
         "active": props.get("ActiveState", "unknown"),
-        "next_elapse": props.get("NextElapseUSecRealtime", None),
-        "last_trigger": props.get("LastTriggerUSec", None),
+        "next_elapse": props.get("NextElapseUSecRealtime") or None,
+        "last_trigger": props.get("LastTriggerUSec") or None,
         "ok": props.get("ActiveState") == "active",
     }
 
 
 def _docker_container_info(name: str) -> dict:
-    rc, out, _ = _run(["docker", "inspect", "-f",
-                        "{{.State.Status}}|{{.State.StartedAt}}|{{.State.Health.Status}}",
-                        name])
+    # name is always from the CONTAINERS whitelist — validated before this call
+    # Go template is hardcoded — no user input reaches docker inspect
+    rc, out, _ = _run([
+        "docker", "inspect",
+        "-f", "{{.State.Status}}|{{.State.StartedAt}}|{{.State.Health.Status}}",
+        name,
+    ])
     if rc != 0 or not out:
         return {"name": name, "status": "not found", "ok": False}
     parts = out.split("|")
-    status = parts[0] if len(parts) > 0 else "unknown"
+    status = parts[0] if parts else "unknown"
     started = parts[1] if len(parts) > 1 else None
     health = parts[2] if len(parts) > 2 else None
     return {
@@ -174,17 +250,14 @@ def _system_metrics() -> dict:
         "gpu": None,
     }
 
-    # hostname
     rc, out, _ = _run(["hostname"])
-    metrics["hostname"] = out
+    metrics["hostname"] = _sanitise(out)
 
-    # uptime + load
     try:
         with open("/proc/uptime") as f:
             secs = float(f.read().split()[0])
             h, rem = divmod(int(secs), 3600)
-            m = rem // 60
-            metrics["uptime"] = f"{h}h {m}m"
+            metrics["uptime"] = f"{h}h {rem // 60}m"
     except Exception:
         pass
 
@@ -195,23 +268,21 @@ def _system_metrics() -> dict:
     except Exception:
         pass
 
-    # memory
     try:
         rc, out, _ = _run(["free", "-m"])
         for line in out.splitlines():
             if line.startswith("Mem:"):
                 parts = line.split()
-                total, used, free = int(parts[1]), int(parts[2]), int(parts[3])
+                total, used = int(parts[1]), int(parts[2])
                 metrics["memory"] = {
                     "total_mb": total,
                     "used_mb": used,
-                    "free_mb": free,
+                    "free_mb": int(parts[3]),
                     "pct": round(used * 100 / total, 1) if total else 0,
                 }
     except Exception:
         pass
 
-    # disk
     try:
         rc, out, _ = _run(["df", "-m", str(BASE_DIR)])
         lines = out.splitlines()
@@ -227,7 +298,6 @@ def _system_metrics() -> dict:
     except Exception:
         pass
 
-    # CPU temp (ARM SBC)
     try:
         temp_path = Path("/sys/class/thermal/thermal_zone0/temp")
         if temp_path.exists():
@@ -235,15 +305,16 @@ def _system_metrics() -> dict:
     except Exception:
         pass
 
-    # GPU (nvidia-smi)
     try:
-        rc, out, _ = _run(["nvidia-smi",
-                            "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total",
-                            "--format=csv,noheader,nounits"])
+        rc, out, _ = _run([
+            "nvidia-smi",
+            "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         if rc == 0 and out:
             parts = [p.strip() for p in out.split(",")]
             metrics["gpu"] = {
-                "name": parts[0],
+                "name": _sanitise(parts[0]),
                 "temp_c": int(parts[1]),
                 "util_pct": int(parts[2]),
                 "vram_used_mb": int(parts[3]),
@@ -261,24 +332,44 @@ def _redis_info() -> dict:
         return {"ok": False, "queue_depth": None}
 
     rc2, depth, _ = _run(["docker", "exec", "osia-redis", "redis-cli", "LLEN", "osia:task_queue"])
-    rc3, peek, _ = _run(["docker", "exec", "osia-redis", "redis-cli", "LINDEX", "osia:task_queue", "0"])
-
     queue_depth = int(depth) if depth.isdigit() else 0
+
+    # Peek at the next task but extract only safe metadata fields —
+    # never return raw payload content (may contain Signal numbers, keys, etc.)
+    task_meta: dict | None = None
+    if queue_depth > 0:
+        rc3, peek, _ = _run(["docker", "exec", "osia-redis", "redis-cli", "LINDEX", "osia:task_queue", "0"])
+        if peek:
+            try:
+                import json
+                task = json.loads(peek)
+                # Only surface non-sensitive routing fields
+                task_meta = {
+                    k: task[k]
+                    for k in ("type", "source", "desk", "timestamp")
+                    if k in task
+                }
+            except Exception:
+                task_meta = {"type": "unparseable"}
+
     return {
         "ok": True,
         "queue_depth": queue_depth,
-        "next_task_preview": peek[:300] if peek else None,
+        "next_task_meta": task_meta,
     }
 
 
-def _get_logs(service: str, lines: int = 100) -> list[str]:
+def _get_logs(service: str, lines: int) -> list[str]:
+    # service is pre-validated against SERVICES whitelist by the route handler
+    # lines is a clamped integer — safe to pass as string arg
     rc, out, err = _run(
         ["journalctl", "-u", service, "-n", str(lines), "--no-pager", "--output=short-iso"],
         timeout=10,
     )
     if rc != 0:
-        return [f"ERROR: {err or 'journalctl failed'}"]
-    return out.splitlines()
+        return [f"ERROR: journalctl returned {rc}"]
+    # Sanitise every line — strip ANSI and control chars from log output
+    return [_sanitise(line) for line in out.splitlines()]
 
 
 # ---------------------------------------------------------------------------
@@ -286,22 +377,16 @@ def _get_logs(service: str, lines: int = 100) -> list[str]:
 # ---------------------------------------------------------------------------
 
 @app.get("/status")
-async def get_status(_=Depends(_check_auth)):
+@limiter.limit("30/minute")
+async def get_status(request: Request, _=Depends(_check_auth)):
     """Full system status snapshot."""
-    (
-        system,
-        services,
-        timers,
-        containers,
-        redis_info,
-    ) = await asyncio.gather(
+    system, services, timers, containers, redis_info = await asyncio.gather(
         asyncio.to_thread(_system_metrics),
         asyncio.gather(*[asyncio.to_thread(_systemd_service_info, s) for s in SERVICES]),
         asyncio.gather(*[asyncio.to_thread(_systemd_timer_info, t) for t in TIMERS]),
         asyncio.gather(*[asyncio.to_thread(_docker_container_info, c) for c in CONTAINERS]),
         asyncio.to_thread(_redis_info),
     )
-
     return {
         "system": system,
         "services": list(services),
@@ -312,33 +397,34 @@ async def get_status(_=Depends(_check_auth)):
 
 
 @app.get("/status/services")
-async def get_services(_=Depends(_check_auth)):
-    """Systemd service states only."""
+@limiter.limit("30/minute")
+async def get_services(request: Request, _=Depends(_check_auth)):
     results = await asyncio.gather(*[asyncio.to_thread(_systemd_service_info, s) for s in SERVICES])
     return {"services": list(results)}
 
 
 @app.get("/status/containers")
-async def get_containers(_=Depends(_check_auth)):
-    """Docker container states only."""
+@limiter.limit("30/minute")
+async def get_containers(request: Request, _=Depends(_check_auth)):
     results = await asyncio.gather(*[asyncio.to_thread(_docker_container_info, c) for c in CONTAINERS])
     return {"containers": list(results)}
 
 
 @app.get("/status/system")
-async def get_system(_=Depends(_check_auth)):
-    """Host system metrics (CPU, memory, disk, GPU)."""
+@limiter.limit("30/minute")
+async def get_system(request: Request, _=Depends(_check_auth)):
     return await asyncio.to_thread(_system_metrics)
 
 
 @app.get("/status/redis")
-async def get_redis(_=Depends(_check_auth)):
-    """Redis health and task queue depth."""
+@limiter.limit("30/minute")
+async def get_redis(request: Request, _=Depends(_check_auth)):
     return await asyncio.to_thread(_redis_info)
 
 
 @app.get("/logs/{service}")
-async def get_service_logs(service: str, lines: int = 100, _=Depends(_check_auth)):
+@limiter.limit("20/minute")
+async def get_service_logs(service: str, request: Request, lines: int = 100, _=Depends(_check_auth)):
     """
     Tail logs for a named systemd service.
     Service name may omit the .service suffix.
@@ -346,20 +432,30 @@ async def get_service_logs(service: str, lines: int = 100, _=Depends(_check_auth
     """
     if not service.endswith(".service"):
         service = f"{service}.service"
-    # Whitelist — only OSIA services
+    # Whitelist check — service name never reaches subprocess unless it's in this list
     if service not in SERVICES:
-        raise HTTPException(status_code=404, detail=f"Unknown service: {service}")
-    lines = min(lines, 500)
+        raise HTTPException(status_code=404, detail="Unknown service")
+    lines = max(1, min(lines, 500))
     log_lines = await asyncio.to_thread(_get_logs, service, lines)
     return {"service": service, "lines": log_lines, "count": len(log_lines)}
 
 
 @app.get("/health")
-async def health():
-    """Unauthenticated liveness probe."""
+@limiter.limit("60/minute")
+async def health(request: Request):
+    """Minimal liveness probe — requires correct UA sentinel, returns no detail."""
+    ua = request.headers.get("user-agent", "")
+    if STATUS_API_UA_SENTINEL not in ua:
+        raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(app, host="0.0.0.0", port=STATUS_API_PORT)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=STATUS_API_PORT,
+        server_header=False,   # suppress "server: uvicorn" fingerprint
+        date_header=False,
+    )
