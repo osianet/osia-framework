@@ -27,6 +27,7 @@ SERVICES=(
     "osia-mcp-wikipedia-bridge.service"
     "osia-cyber-bridge.service"
     "osia-status-api.service"
+    "osia-queue-api.service"
 )
 
 TIMERS=(
@@ -456,12 +457,24 @@ case $command in
         section_header "TASK QUEUE"
         if docker exec osia-redis redis-cli ping 2>/dev/null | grep -q PONG; then
             queue_depth=$(docker exec osia-redis redis-cli LLEN osia:task_queue 2>/dev/null | tr -d '\r')
-            echo -e "  Pending tasks: ${BOLD}${queue_depth:-0}${NC}"
+            research_depth=$(docker exec osia-redis redis-cli LLEN osia:research_queue 2>/dev/null | tr -d '\r')
+            echo -e "  Task queue:     ${BOLD}${queue_depth:-0}${NC} pending"
+            echo -e "  Research queue: ${BOLD}${research_depth:-0}${NC} pending"
 
             if [ "${queue_depth:-0}" -gt 0 ]; then
                 echo -e "  ${DIM}Next task preview:${NC}"
                 next_task=$(docker exec osia-redis redis-cli LINDEX osia:task_queue 0 2>/dev/null | head -c 200)
                 echo -e "  ${DIM}${next_task}${NC}"
+            fi
+
+            # Queue API health
+            QUEUE_API_UA=$(grep -E '^QUEUE_API_UA_SENTINEL=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+            QUEUE_API_UA="${QUEUE_API_UA:-osia-worker/1}"
+            queue_api_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 -A "$QUEUE_API_UA" http://localhost:8098/health 2>/dev/null)
+            if [ "$queue_api_code" = "200" ]; then
+                echo -e "[${GREEN}OK${NC}]   Queue API ${DIM}(http://localhost:8098 → HTTP $queue_api_code)${NC}"
+            else
+                echo -e "[${RED}FAIL${NC}] Queue API ${DIM}(http://localhost:8098 → ${queue_api_code:-timeout})${NC}"
             fi
         else
             echo -e "  ${DIM}Redis unavailable — cannot inspect queue${NC}"
