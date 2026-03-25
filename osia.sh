@@ -26,6 +26,7 @@ SERVICES=(
     "osia-mcp-time-bridge.service"
     "osia-mcp-wikipedia-bridge.service"
     "osia-cyber-bridge.service"
+    "osia-status-api.service"
 )
 
 TIMERS=(
