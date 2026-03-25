@@ -24,12 +24,14 @@
 ## Infrastructure
 
 - Redis (via Docker) — task queue and state tracking
+- Queue API (`queue.osia.dev`) — authenticated HTTP wrapper around Redis for remote worker access
 - Signal CLI REST API (via Docker) — encrypted messaging gateway
 - AnythingLLM — isolated LLM workspaces acting as intelligence desks
-- Qdrant — vector database for intelligence storage
+- Qdrant (`qdrant.osia.dev`) — vector database for intelligence storage and RAG retrieval
+- HuggingFace Spaces — cloud-hosted research workers (Gradio, free CPU tier)
 - systemd — service management (see `systemd/` directory)
 - Nginx — reverse proxy with Let's Encrypt wildcard certs
-- HuggingFace Inference Endpoints — dedicated scale-to-zero GPU endpoints for uncensored models (Dolphin 3.0)
+- HuggingFace Inference Endpoints — dedicated scale-to-zero GPU endpoints for uncensored models (Dolphin 3.0, Hermes 3)
 
 ## Hardware Target
 
@@ -50,6 +52,12 @@ uv run python main.py
 uv run python -m src.gateways.signal_ingress
 uv run python -m src.gateways.rss_ingress
 uv run python -m src.gateways.phone_bridge
+
+# Run the Queue API (Redis HTTP wrapper for remote workers)
+uv run python src/gateways/queue_api.py
+
+# Run the research worker locally (for testing)
+uv run python -m src.workers.research_worker
 
 # Run the MCP stdio-to-SSE bridge
 uv run python src/mcp_bridge.py --command <cmd> --port <port> --name <name>
@@ -76,5 +84,8 @@ All secrets and config live in `.env` (git-ignored). See `.env.example` for requ
 - `REDIS_URL` — Redis connection string
 - `OSIA_BASE_DIR` — project root path
 - `MCP_TOOLS_BASE` — parent directory for MCP tool installations
-- `HF_TOKEN` — HuggingFace write-scoped token (for Inference Endpoints)
+- `HF_TOKEN` — HuggingFace write-scoped token (for Inference Endpoints and embedding API)
 - `HF_NAMESPACE` — HuggingFace username or org
+- `QUEUE_API_TOKEN` — bearer token for the Queue API
+- `QUEUE_API_UA_SENTINEL` — user-agent sentinel for Queue API requests
+- `TAVILY_API_KEY` — Tavily web search API key (used by research worker)

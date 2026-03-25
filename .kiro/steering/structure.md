@@ -25,10 +25,20 @@ osia-framework/
 │   │   ├── rss_ingress.py          # RSS feed poller — new articles → Collection Directorate
 │   │   ├── phone_bridge.py         # FastAPI endpoint for remote ADB commands (screenshot, record)
 │   │   ├── adb_device.py           # Low-level ADB wrapper (tap, swipe, type, screenshot, record)
-│   │   └── mcp_dispatcher.py       # MCP client — manages persistent sessions to STDIO MCP servers
+│   │   ├── mcp_dispatcher.py       # MCP client — manages persistent sessions to STDIO MCP servers
+│   │   └── queue_api.py            # Authenticated HTTP wrapper around Redis (for remote workers)
+│   │
+│   ├── workers/
+│   │   └── research_worker.py      # Async research worker — polls queue, runs Gemini tool loop, writes Qdrant
 │   │
 │   └── cron/
 │       └── daily_sitrep.py         # Pushes a daily SITREP task to the Redis queue
+│
+├── hf-spaces/
+│   └── research-worker/            # HuggingFace Gradio Space — deploys research_worker as a cloud worker
+│       ├── app.py                  # Gradio UI + background worker thread entry point
+│       ├── worker.py               # Copy of research_worker.py (self-contained for Space repo)
+│       └── requirements.txt
 │
 └── systemd/                 # systemd unit files for all long-running services and timers
 ```
@@ -36,10 +46,12 @@ osia-framework/
 ## Architecture Patterns
 
 - **Event-driven queue**: All work flows through a Redis list (`osia:task_queue`). Ingress gateways push tasks, the orchestrator pops and processes them.
-- **Gateway pattern**: Each external system (Signal, RSS, ADB phone, MCP tools) has a dedicated gateway module in `src/gateways/`.
+- **Research queue**: A second queue (`osia:research_queue`) feeds async research workers. Workers pop jobs, run multi-source Gemini tool loops, and write chunked results into Qdrant for RAG retrieval.
+- **Gateway pattern**: Each external system (Signal, RSS, ADB phone, MCP tools, Queue API) has a dedicated gateway module in `src/gateways/`.
 - **Desk abstraction**: Intelligence analysis desks are AnythingLLM workspaces accessed via a single HTTP client (`AnythingLLMDesk`). The orchestrator routes tasks to desks by slug name.
 - **MCP tool dispatch**: The orchestrator declares Gemini function-call tools that map 1:1 to MCP server calls via `MCPDispatcher`. The research loop supports multi-turn tool calling.
 - **Vision-action loop**: The social media agent uses a `screenshot → Gemini Vision → execute action` cycle to autonomously drive a physical Android phone without hardcoded coordinates.
+- **Remote workers**: HuggingFace Spaces run `research_worker.py` as a Gradio app. Workers communicate with the Pi exclusively via the Queue API (`queue.osia.dev`) and Qdrant (`qdrant.osia.dev`) — no direct Redis or SSH access.
 
 ## Code Conventions
 

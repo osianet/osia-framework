@@ -19,6 +19,7 @@ OSIA (Open Source Intelligence Agency) is a principled, counter-hegemonic intell
 - **Networking:** `*.osia.dev` subdomains with Let's Encrypt (Wildcard) and Nginx reverse proxy.
 - **Ingress:** Signal ([REDACTED]), RSS Hourly Ingress, ADB Physical Screen Capture (PHINT).
 - **Egress:** Signal Group Broadcasts (OSIA Briefings Group).
+- **Remote Workers:** HuggingFace Spaces run async research workers that poll `osia:research_queue`, execute multi-source Gemini tool loops, and write chunked intel into Qdrant for RAG retrieval.
 
 ## 🛠️ Integrated MCP Tools & Custom Agent Skills
 **MCP Tools** (`mcp.osia.dev`):
@@ -43,15 +44,11 @@ OSIA (Open Source Intelligence Agency) is a principled, counter-hegemonic intell
 
 ## ☁️ HuggingFace Inference Endpoints (Uncensored Cloud Models)
 
-Dedicated HF Inference Endpoints provide on-demand access to uncensored models (Dolphin 3.0) for desks that need unfiltered analysis. Endpoints use Text Generation Inference (TGI) and expose an OpenAI-compatible API.
-
-**How billing works:** Endpoints are configured with scale-to-zero. After 10 minutes of inactivity, replicas drop to 0 and billing stops. A cold start of ~2-5 minutes occurs on the next request. You provision once, then leave them — no need to tear down.
+Dedicated HF Inference Endpoints provide on-demand access to uncensored models for desks that need unfiltered analysis. Endpoints use Text Generation Inference (TGI) with an OpenAI-compatible API and scale-to-zero billing.
 
 **Provisioned endpoints:**
-- `osia-dolphin-8b` — Dolphin 3.0 8B on L4 GPU ($0.80/hr active, $0 idle). Lightweight fallback.
-- `osia-dolphin-70b` — Dolphin 3.0 70B on 2x A100 ($5.00/hr active, $0 idle). Primary uncensored model.
-
-**Target desks:** Human Intelligence, Cyber Intelligence, Cultural & Theological.
+- `osia-dolphin-r1-24b` — `cognitivecomputations/Dolphin3.0-R1-Mistral-24B` on L4 GPU ($0.80/hr active, $0 idle). Serves HUMINT and Cultural desks. R1 reasoning variant gives auditable analytical chains.
+- `osia-hermes-70b` — `NousResearch/Hermes-3-Llama-3.1-70B` on 2x A100 ($5.00/hr active, $0 idle). Serves Cyber desk. Purpose-built for reliable agentic tool-calling.
 
 **Management:**
 ```bash
@@ -61,12 +58,29 @@ uv run python scripts/provision_hf_endpoints.py --pause     # force-pause (stop 
 uv run python scripts/provision_hf_endpoints.py --resume    # wake up paused endpoints
 ```
 
-**AnythingLLM integration:** Configure target desks to use "Generic OpenAI" provider with:
-- Base URL: the endpoint URL from `--status` output (append `/v1`)
-- API Key: your `HF_TOKEN`
-- Model: `cognitivecomputations/Dolphin3.0-Llama3.1-70B` (or 8B)
+## 🔬 Queue API & Research Workers
 
-**Env vars:** `HF_TOKEN`, `HF_NAMESPACE` — see `.env.example`.
+The Queue API (`queue.osia.dev`, port 8098) is an authenticated HTTP wrapper around Redis that allows remote workers to push/pop jobs without direct Redis access. It exposes only the operations needed: push, pop, queue length, seen-check, seen-add.
+
+Research workers run as HuggingFace Gradio Spaces (`hf-spaces/research-worker/`). Each worker:
+1. Polls `osia:research_queue` via the Queue API
+2. Runs a multi-turn Gemini research loop using direct HTTP tools (Tavily, Wikipedia, ArXiv, Semantic Scholar)
+3. Chunks and embeds the output using `all-MiniLM-L6-v2` (matching AnythingLLM's embedder)
+4. Writes results into Qdrant collection `osia:research_cache` with desk/topic metadata
+
+**Deploying a research worker Space:**
+1. Create a new Space at `huggingface.co/spaces/BadIdeasRory/osia-research-worker` (Gradio SDK)
+2. Push the contents of `hf-spaces/research-worker/` to the Space repo
+3. Set secrets in Space Settings: `QUEUE_API_URL`, `QUEUE_API_TOKEN`, `QUEUE_API_UA_SENTINEL`, `QDRANT_URL`, `QDRANT_API_KEY`, `GEMINI_API_KEY`, `TAVILY_API_KEY`, `HF_TOKEN`
+
+**Pushing a research job manually:**
+```bash
+curl -X POST https://queue.osia.dev/queue/push \
+  -A "osia-worker/1" \
+  -H "Authorization: Bearer $QUEUE_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"queue":"osia:research_queue","payload":{"topic":"Bolivia lithium 2025","desk":"finance-and-economics-directorate"}}'
+```
 
 ## 🚀 Active Objectives
 1. **Intelligence Dashboard:** Automating Telegram/Discord monitoring via the ADB gateway.
