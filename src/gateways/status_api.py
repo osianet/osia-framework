@@ -70,6 +70,21 @@ TIMERS: list[str] = [
     "osia-rss-ingress.timer",
 ]
 
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
+
+# Known desk collections — mirrors the vectorTag assignments in ANYTHINGLLM_CONFIG.md
+QDRANT_DESK_COLLECTIONS = [
+    "collection-directorate",
+    "geopolitical-and-security-desk",
+    "cultural-and-theological-intelligence-desk",
+    "science-technology-and-commercial-desk",
+    "human-intelligence-and-profiling-desk",
+    "finance-and-economics-directorate",
+    "cyber-intelligence-and-warfare-desk",
+    "the-watch-floor",
+]
+
 CONTAINERS: list[str] = [
     "osia-anythingllm",
     "osia-qdrant",
@@ -328,6 +343,57 @@ def _system_metrics() -> dict:
     return metrics
 
 
+def _qdrant_info() -> dict:
+    """Query Qdrant HTTP API directly and return collection stats per desk."""
+    import urllib.request
+    import urllib.error
+
+    headers = {"Content-Type": "application/json"}
+    if QDRANT_API_KEY:
+        headers["api-key"] = QDRANT_API_KEY
+
+    def _get(path: str) -> dict | None:
+        req = urllib.request.Request(f"{QDRANT_URL}{path}", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read().decode())
+        except Exception:
+            return None
+
+    top = _get("/collections")
+    if not top or top.get("status") != "ok":
+        return {"ok": False, "error": "Qdrant unreachable", "collections": []}
+
+    existing = {c["name"] for c in top.get("result", {}).get("collections", [])}
+    collections = []
+    total_points = 0
+
+    for name in sorted(existing):
+        info = _get(f"/collections/{name}")
+        result = (info or {}).get("result", {})
+        config = result.get("config", {})
+        points = result.get("points_count", 0) or 0
+        vectors = result.get("vectors_count", 0) or 0
+        segments = result.get("segments_count", 0) or 0
+        total_points += points
+        collections.append({
+            "name": name,
+            "is_desk": name in QDRANT_DESK_COLLECTIONS,
+            "points_count": points,
+            "vectors_count": vectors,
+            "segments_count": segments,
+            "status": result.get("status", "unknown"),
+        })
+
+    return {
+        "ok": True,
+        "url": QDRANT_URL,
+        "total_collections": len(existing),
+        "total_points": total_points,
+        "collections": collections,
+    }
+
+
 def _redis_info() -> dict:
     rc, out, _ = _run(["docker", "exec", "osia-redis", "redis-cli", "ping"])
     if "PONG" not in out:
@@ -382,12 +448,13 @@ def _get_logs(service: str, lines: int) -> list[str]:
 @limiter.limit("30/minute")
 async def get_status(request: Request, _=Depends(_check_auth)):
     """Full system status snapshot."""
-    system, services, timers, containers, redis_info = await asyncio.gather(
+    system, services, timers, containers, redis_info, qdrant_info = await asyncio.gather(
         asyncio.to_thread(_system_metrics),
         asyncio.gather(*[asyncio.to_thread(_systemd_service_info, s) for s in SERVICES]),
         asyncio.gather(*[asyncio.to_thread(_systemd_timer_info, t) for t in TIMERS]),
         asyncio.gather(*[asyncio.to_thread(_docker_container_info, c) for c in CONTAINERS]),
         asyncio.to_thread(_redis_info),
+        asyncio.to_thread(_qdrant_info),
     )
     return {
         "system": system,
@@ -395,6 +462,7 @@ async def get_status(request: Request, _=Depends(_check_auth)):
         "timers": list(timers),
         "containers": list(containers),
         "redis": redis_info,
+        "qdrant": qdrant_info,
     }
 
 
@@ -416,6 +484,12 @@ async def get_containers(request: Request, _=Depends(_check_auth)):
 @limiter.limit("30/minute")
 async def get_system(request: Request, _=Depends(_check_auth)):
     return await asyncio.to_thread(_system_metrics)
+
+
+@app.get("/status/qdrant")
+@limiter.limit("30/minute")
+async def get_qdrant(request: Request, _=Depends(_check_auth)):
+    return await asyncio.to_thread(_qdrant_info)
 
 
 @app.get("/status/redis")
