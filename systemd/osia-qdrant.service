@@ -1,0 +1,13 @@
+[Unit]
+Description=OSIA Qdrant Vector Database
+Requires=docker.service
+After=docker.service network.target
+
+[Service]
+Restart=always
+RestartSec=5
+ExecStart=/usr/bin/docker start -a osia-qdrant
+ExecStop=/usr/bin/docker stop -t 10 osia-qdrant
+
+[Install]
+WantedBy=multi-user.target
