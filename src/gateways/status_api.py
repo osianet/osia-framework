@@ -98,8 +98,10 @@ security = HTTPBearer()
 @app.middleware("http")
 async def _remove_server_header(request: Request, call_next):
     response = await call_next(request)
-    response.headers.pop("server", None)
-    response.headers.pop("x-powered-by", None)
+    if "server" in response.headers:
+        del response.headers["server"]
+    if "x-powered-by" in response.headers:
+        del response.headers["x-powered-by"]
     return response
 
 
