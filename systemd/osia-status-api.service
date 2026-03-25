@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=ubuntu
 Group=ubuntu
+SupplementaryGroups=docker
 WorkingDirectory=/home/ubuntu/osia-framework
 EnvironmentFile=/home/ubuntu/osia-framework/.env
 ExecStart=/home/ubuntu/osia-framework/.venv/bin/python src/gateways/status_api.py
