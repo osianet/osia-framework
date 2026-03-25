@@ -1,4 +1,4 @@
-google-genai>=1.68.0
+# Dependencies for research_batch.py when run via hf jobs uv run
+# These are passed via --with flags in the job command, or listed here for reference.
 httpx>=0.28.1
-python-dotenv>=1.2.2
-gradio>=5.0.0
+huggingface-hub>=0.24.0

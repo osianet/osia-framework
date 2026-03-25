@@ -35,10 +35,9 @@ osia-framework/
 │       └── daily_sitrep.py         # Pushes a daily SITREP task to the Redis queue
 │
 ├── hf-spaces/
-│   └── research-worker/            # HuggingFace Gradio Space — deploys research_worker as a cloud worker
-│       ├── app.py                  # Gradio UI + background worker thread entry point
-│       ├── worker.py               # Copy of research_worker.py (self-contained for Space repo)
-│       └── requirements.txt
+│   └── research-worker/            # HuggingFace Jobs batch script — synced to HF dataset repo via GitHub Actions
+│       ├── research_batch.py       # Self-contained batch job: wakes endpoints, drains queue, writes Qdrant
+│       └── requirements.txt        # Job dependencies (httpx, huggingface-hub)
 │
 └── systemd/                 # systemd unit files for all long-running services and timers
 ```
@@ -51,7 +50,7 @@ osia-framework/
 - **Desk abstraction**: Intelligence analysis desks are AnythingLLM workspaces accessed via a single HTTP client (`AnythingLLMDesk`). The orchestrator routes tasks to desks by slug name.
 - **MCP tool dispatch**: The orchestrator declares Gemini function-call tools that map 1:1 to MCP server calls via `MCPDispatcher`. The research loop supports multi-turn tool calling.
 - **Vision-action loop**: The social media agent uses a `screenshot → Gemini Vision → execute action` cycle to autonomously drive a physical Android phone without hardcoded coordinates.
-- **Remote workers**: HuggingFace Spaces run `research_worker.py` as a Gradio app. Workers communicate with the Pi exclusively via the Queue API (`queue.osia.dev`) and Qdrant (`qdrant.osia.dev`) — no direct Redis or SSH access.
+- **Remote workers**: HuggingFace Jobs run `research_batch.py` on-demand. The Pi-side systemd timer checks queue depth every 2 hours and fires an HF Job when the threshold is met. The job wakes the appropriate HF Inference Endpoint (Dolphin R1 or Hermes 3), drains the queue, writes results to Qdrant, and exits. Billing stops on exit.
 
 ## Code Conventions
 

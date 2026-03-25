@@ -1,0 +1,51 @@
+name: Sync HF Jobs repo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "hf-spaces/research-worker/**"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Push job scripts to HuggingFace dataset repo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
+        run: |
+          pip install huggingface_hub
+
+          python - <<'EOF'
+          import os
+          from huggingface_hub import HfApi
+
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          namespace = os.environ["HF_NAMESPACE"]
+          repo_id = f"{namespace}/osia-jobs"
+
+          # Create the dataset repo if it doesn't exist yet
+          api.create_repo(
+              repo_id=repo_id,
+              repo_type="dataset",
+              private=True,
+              exist_ok=True,
+          )
+
+          # Upload all files from hf-spaces/research-worker/
+          api.upload_folder(
+              folder_path="hf-spaces/research-worker",
+              repo_id=repo_id,
+              repo_type="dataset",
+              commit_message=f"sync from osia-framework@${{ github.sha }}",
+              ignore_patterns=["*.pyc", "__pycache__", ".DS_Store"],
+          )
+
+          print(f"Synced to https://huggingface.co/datasets/{repo_id}")
+          EOF

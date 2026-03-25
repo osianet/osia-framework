@@ -28,7 +28,8 @@
 - Signal CLI REST API (via Docker) — encrypted messaging gateway
 - AnythingLLM — isolated LLM workspaces acting as intelligence desks
 - Qdrant (`qdrant.osia.dev`) — vector database for intelligence storage and RAG retrieval
-- HuggingFace Spaces — cloud-hosted research workers (Gradio, free CPU tier)
+- HuggingFace Jobs — on-demand batch compute for research workers (CPU Basic, ~$0.01/hr)
+- HuggingFace Spaces — (removed, replaced by HF Jobs)
 - systemd — service management (see `systemd/` directory)
 - Nginx — reverse proxy with Let's Encrypt wildcard certs
 - HuggingFace Inference Endpoints — dedicated scale-to-zero GPU endpoints for uncensored models (Dolphin 3.0, Hermes 3)
@@ -89,3 +90,6 @@ All secrets and config live in `.env` (git-ignored). See `.env.example` for requ
 - `QUEUE_API_TOKEN` — bearer token for the Queue API
 - `QUEUE_API_UA_SENTINEL` — user-agent sentinel for Queue API requests
 - `TAVILY_API_KEY` — Tavily web search API key (used by research worker)
+- `RESEARCH_BATCH_THRESHOLD` — min queue depth before triggering an HF Job (default: 3)
+- `RESEARCH_JOB_FLAVOR` — HF Jobs hardware flavor (default: cpu-basic, ~$0.01/hr)
+- `RESEARCH_JOB_TIMEOUT` — max job runtime before HF auto-cancels (default: 2h)
