@@ -209,35 +209,47 @@ class OsiaOrchestrator:
     # Signal messaging
     # ------------------------------------------------------------------
 
+    async def _signal_post(self, payload: dict, label: str = "message", retries: int = 5, retry_delay: int = 30) -> bool:
+        """POST to the Signal API with retry logic. Returns True on success."""
+        url = f"{self.signal_api_url}/v2/send"
+        for attempt in range(1, retries + 1):
+            try:
+                response = await self._signal_client.post(url, json=payload)
+                response.raise_for_status()
+                logger.info("Signal %s delivered successfully.", label)
+                return True
+            except httpx.HTTPStatusError as e:
+                logger.error(
+                    "Signal API returned %s for %s (attempt %d/%d): %s",
+                    e.response.status_code, label, attempt, retries, e.response.text,
+                )
+            except httpx.RequestError as e:
+                logger.error(
+                    "Failed to reach Signal API for %s (attempt %d/%d): %s",
+                    label, attempt, retries, e,
+                )
+            if attempt < retries:
+                logger.info("Retrying Signal %s in %ds...", label, retry_delay)
+                await asyncio.sleep(retry_delay)
+        logger.error("Signal %s failed after %d attempts — giving up.", label, retries)
+        return False
+
     async def send_signal_message(self, recipient: str, message: str):
         """Sends a Signal message back to the requester."""
-        url = f"{self.signal_api_url}/v2/send"
-
         if not recipient.startswith("+") and not recipient.startswith("group."):
             recipient = f"group.{recipient}"
-
         payload = {
             "message": message,
             "number": self.signal_number,
             "recipients": [recipient],
         }
         logger.info("Sending intelligence report to %s via Signal...", recipient)
-        try:
-            response = await self._signal_client.post(url, json=payload)
-            response.raise_for_status()
-            logger.info("Report delivered successfully.")
-        except httpx.HTTPStatusError as e:
-            logger.error("Signal API returned %s: %s", e.response.status_code, e.response.text)
-        except httpx.RequestError as e:
-            logger.error("Failed to reach Signal API: %s", e)
+        await self._signal_post(payload, label="message")
 
     async def send_signal_image(self, recipient: str, image_b64: str, caption: str = ""):
         """Sends a base64-encoded image attachment via Signal."""
-        url = f"{self.signal_api_url}/v2/send"
-
         if not recipient.startswith("+") and not recipient.startswith("group."):
             recipient = f"group.{recipient}"
-
         payload = {
             "message": caption,
             "number": self.signal_number,
@@ -245,14 +257,7 @@ class OsiaOrchestrator:
             "base64_attachments": [image_b64],
         }
         logger.info("Sending infographic to %s via Signal...", recipient)
-        try:
-            response = await self._signal_client.post(url, json=payload)
-            response.raise_for_status()
-            logger.info("Infographic delivered successfully.")
-        except httpx.HTTPStatusError as e:
-            logger.error("Signal API returned %s sending image: %s", e.response.status_code, e.response.text)
-        except httpx.RequestError as e:
-            logger.error("Failed to reach Signal API for image: %s", e)
+        await self._signal_post(payload, label="image")
 
     async def generate_infographic(self, report_text: str) -> str | None:
         """
