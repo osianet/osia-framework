@@ -98,8 +98,8 @@ def _get_redis() -> aioredis.Redis:
 @app.middleware("http")
 async def _remove_server_header(request: Request, call_next):
     response = await call_next(request)
-    response.headers.pop("server", None)
-    response.headers.pop("x-powered-by", None)
+    response.headers.__delitem__("server") if "server" in response.headers else None
+    response.headers.__delitem__("x-powered-by") if "x-powered-by" in response.headers else None
     return response
 
 
