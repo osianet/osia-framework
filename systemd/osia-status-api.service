@@ -5,6 +5,7 @@ After=network.target
 [Service]
 Type=simple
 User=ubuntu
+Group=ubuntu
 WorkingDirectory=/home/ubuntu/osia-framework
 EnvironmentFile=/home/ubuntu/osia-framework/.env
 ExecStart=/home/ubuntu/osia-framework/.venv/bin/python src/gateways/status_api.py
@@ -13,6 +14,43 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=osia-status-api
+
+# --- Sandboxing ---
+# Prevent privilege escalation (no sudo, no setuid binaries)
+NoNewPrivileges=true
+
+# Read-only access to the entire filesystem except where explicitly needed
+ProtectSystem=strict
+# Allow writes only to the project dir (for .env reads, tmp, etc.) and journal
+ReadWritePaths=/home/ubuntu/osia-framework
+
+# Hide /home dirs of other users
+ProtectHome=read-only
+
+# Prevent access to kernel tunables
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+
+# Restrict system calls to a safe subset (no ptrace, no mount, no raw sockets)
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Private /tmp — not shared with other services
+PrivateTmp=true
+
+# No access to hardware devices
+PrivateDevices=true
+
+# Restrict address families — only need IPv4/IPv6 for the HTTP server
+# and AF_UNIX for journald/docker socket
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Prevent loading kernel modules
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=multi-user.target
