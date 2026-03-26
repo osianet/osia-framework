@@ -85,7 +85,7 @@ def main():
         print("Example curl:")
         print(f'  curl -s -H "Authorization: Bearer {token}" \\')
         print(f'       -H "User-Agent: {sentinel}" \\')
-        print(f'       http://localhost:{port}/status | python3 -m json.tool')
+        print(f"       http://localhost:{port}/status | python3 -m json.tool")
 
 
 if __name__ == "__main__":

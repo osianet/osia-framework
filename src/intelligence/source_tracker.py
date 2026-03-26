@@ -16,6 +16,7 @@ logger = logging.getLogger("osia.sources")
 
 class SourceReliability(str, Enum):  # noqa: UP042 — StrEnum requires Python 3.11+, keeping str+Enum for compatibility
     """Admiralty-style source reliability rating."""
+
     A = "A — Peer-reviewed / Official government source"
     B = "B — Established media / Institutional publication"
     C = "C — Web search / Blog / Unverified news outlet"
@@ -40,6 +41,7 @@ TOOL_RELIABILITY: dict[str, SourceReliability] = {
 @dataclass
 class SourceRecord:
     """A single source captured during research."""
+
     tool: str
     query: str
     snippet: str
@@ -47,7 +49,7 @@ class SourceRecord:
     timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def format_short(self, index: int) -> str:
-        return f"[{index}] ({self.reliability.name}) {self.tool} — q: \"{self.query}\" | {self.snippet[:120]}"
+        return f'[{index}] ({self.reliability.name}) {self.tool} — q: "{self.query}" | {self.snippet[:120]}'
 
 
 class SourceTracker:
@@ -86,11 +88,13 @@ class SourceTracker:
         for i, src in enumerate(self.sources, 1):
             lines.append(src.format_short(i))
         lines.append("")
-        lines.append(f"Total sources: {len(self.sources)} | "
-                      f"A-tier: {self._count_tier('A')} | "
-                      f"B-tier: {self._count_tier('B')} | "
-                      f"C-tier: {self._count_tier('C')} | "
-                      f"D-tier: {self._count_tier('D')}")
+        lines.append(
+            f"Total sources: {len(self.sources)} | "
+            f"A-tier: {self._count_tier('A')} | "
+            f"B-tier: {self._count_tier('B')} | "
+            f"C-tier: {self._count_tier('C')} | "
+            f"D-tier: {self._count_tier('D')}"
+        )
         return "\n".join(lines)
 
     def _count_tier(self, tier: str) -> int:

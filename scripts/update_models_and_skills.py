@@ -5,10 +5,10 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-load_dotenv(Path(__file__).parent.parent / '.env')
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 ANYTHINGLLM_BASE_URL = os.getenv("ANYTHINGLLM_BASE_URL", "http://localhost:3001")
 ANYTHINGLLM_API_KEY = os.getenv("ANYTHINGLLM_API_KEY")
@@ -25,19 +25,19 @@ GLOBAL_SKILLS = [
     "web-scraping",
     "osia-cyber-ip-intel",
     "osia-finance-stock-intel",
-    "osia-stash-writer"
+    "osia-stash-writer",
 ]
 
+
 def main():
-    headers = {
-        "Authorization": f"Bearer {ANYTHINGLLM_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {ANYTHINGLLM_API_KEY}", "Content-Type": "application/json"}
 
     # 1. Update Global System Skills (Internal API method using update-env or preferences if needed)
     # Note: We manually injected these into the sqlite DB for the moment, but normally
     # AnythingLLM auto-enables any custom skill where active: true in plugin.json.
-    logger.info("Custom skills loaded. Since they have active: true, AnythingLLM automatically detects them on next agent boot.")
+    logger.info(
+        "Custom skills loaded. Since they have active: true, AnythingLLM automatically detects them on next agent boot."
+    )
 
     # 2. Update Workspace Models
     workspaces_url = f"{ANYTHINGLLM_BASE_URL.rstrip('/')}/api/v1/workspaces"
@@ -55,26 +55,26 @@ def main():
             "chatProvider": "anthropic",
             "chatModel": "claude-sonnet-4-6",
             "agentProvider": "anthropic",
-            "agentModel": "claude-sonnet-4-6"
+            "agentModel": "claude-sonnet-4-6",
         },
         "geopolitical-and-security-desk": {
             "chatProvider": "gemini",
             "chatModel": "gemini-3-flash",
             "agentProvider": "gemini",
-            "agentModel": "gemini-3-flash"
+            "agentModel": "gemini-3-flash",
         },
         "finance-and-economics-directorate": {
             "chatProvider": "openai",
             "chatModel": "gpt-5.4-mini",
             "agentProvider": "openai",
-            "agentModel": "gpt-5.4-mini"
+            "agentModel": "gpt-5.4-mini",
         },
         "the-watch-floor": {
             "chatProvider": "gemini",
             "chatModel": "gemini-3.1-pro-preview",
             "agentProvider": "gemini",
-            "agentModel": "gemini-3.1-pro-preview"
-        }
+            "agentModel": "gemini-3.1-pro-preview",
+        },
     }
 
     for ws in workspaces:
@@ -90,6 +90,7 @@ def main():
                 logger.info(f"Successfully configured agents & models for {slug}")
             except Exception as e:
                 logger.error(f"Failed to update {slug}: {e}")
+
 
 if __name__ == "__main__":
     main()

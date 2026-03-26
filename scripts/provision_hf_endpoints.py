@@ -106,9 +106,9 @@ ENDPOINTS = [
 ]
 
 
-
 def get_client():
     from huggingface_hub import HfApi
+
     return HfApi(token=HF_TOKEN)
 
 
@@ -125,7 +125,9 @@ def provision_endpoint(api, spec: dict):
         existing = get_inference_endpoint(name, namespace=namespace, token=HF_TOKEN)
         logger.info(
             "Endpoint '%s' already exists — status: %s, url: %s",
-            name, existing.status, existing.url,
+            name,
+            existing.status,
+            existing.url,
         )
         return existing
     except HfHubHTTPError:
@@ -154,7 +156,8 @@ def provision_endpoint(api, spec: dict):
 
     logger.info(
         "Endpoint '%s' created — status: %s. It will initialize and then scale to zero when idle.",
-        name, endpoint.status,
+        name,
+        endpoint.status,
     )
     return endpoint
 

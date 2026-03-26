@@ -34,8 +34,7 @@ logger = logging.getLogger("osia.qdrant_store")
 EMBEDDING_DIM = 384
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 HF_EMBEDDING_URL = (
-    "https://api-inference.huggingface.co/pipeline/feature-extraction/"
-    "sentence-transformers/all-MiniLM-L6-v2"
+    "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
 )
 
 # All desk collections + research cache — used by cross_desk_search
@@ -277,15 +276,17 @@ class QdrantStore:
                 for hit in hits:
                     payload = dict(hit.payload or {})
                     text = payload.pop("text", "")
-                    out.append((
-                        str(hit.id),
-                        SearchResult(
-                            text=text,
-                            score=hit.score,
-                            collection=col,
-                            metadata=payload,
-                        ),
-                    ))
+                    out.append(
+                        (
+                            str(hit.id),
+                            SearchResult(
+                                text=text,
+                                score=hit.score,
+                                collection=col,
+                                metadata=payload,
+                            ),
+                        )
+                    )
                 return out
             except Exception as exc:
                 logger.warning("cross_desk_search: collection '%s' unavailable: %s", col, exc)

@@ -18,6 +18,7 @@ SIGNAL_WS_URL = f"{_signal_ws_base}/v1/receive/{SIGNAL_NUMBER}"
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 TASK_QUEUE = os.getenv("OSIA_TASK_QUEUE", "osia:task_queue")
 
+
 async def listen_to_signal():
     """Connects to the Signal REST API WebSocket and listens for incoming messages."""
     redis_client = redis.from_url(REDIS_URL)
@@ -62,10 +63,7 @@ async def listen_to_signal():
                                     # If group_id is found, it is the source for replies
                                     task_source = f"signal:{group_id}" if group_id else f"signal:{source}"
 
-                                    task = {
-                                        "source": task_source,
-                                        "query": text
-                                    }
+                                    task = {"source": task_source, "query": text}
 
                                     await redis_client.rpush(TASK_QUEUE, json.dumps(task))
                                     print(f"[*] Task pushed to {TASK_QUEUE}")
@@ -76,6 +74,7 @@ async def listen_to_signal():
         except Exception as e:
             print(f"WebSocket connection dropped: {e}. Reconnecting in 5 seconds...")
             await asyncio.sleep(5)
+
 
 if __name__ == "__main__":
     asyncio.run(listen_to_signal())

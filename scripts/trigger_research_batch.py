@@ -87,14 +87,15 @@ def _fire_hf_job() -> str:
     # (synced from GitHub via Actions) and runs it with uv.
     job = api.run_job(
         command=[
-            "bash", "-c",
+            "bash",
+            "-c",
             (
                 'python -c "'
-                'import urllib.request, os; '
-                'from pathlib import Path; '
-                'o = urllib.request.build_opener(); '
-                'o.addheaders = [(\\\"Authorization\\\", \\\"Bearer \\\" + os.environ[\\\"HF_TOKEN\\\"])]; '
-                'Path(\\\"/tmp/research_batch.py\\\").write_bytes(o.open(os.environ[\\\"UV_SCRIPT_URL\\\"]).read())'
+                "import urllib.request, os; "
+                "from pathlib import Path; "
+                "o = urllib.request.build_opener(); "
+                'o.addheaders = [(\\"Authorization\\", \\"Bearer \\" + os.environ[\\"HF_TOKEN\\"])]; '
+                'Path(\\"/tmp/research_batch.py\\").write_bytes(o.open(os.environ[\\"UV_SCRIPT_URL\\"]).read())'
                 '" && uv run --with httpx --with huggingface-hub /tmp/research_batch.py'
             ),
         ],

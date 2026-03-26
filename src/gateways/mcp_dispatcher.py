@@ -36,8 +36,7 @@ def _build_server_configs() -> dict[str, StdioServerParameters]:
         "youtube": StdioServerParameters(
             command="node",
             args=[
-                f"{mcp_base}/osia-knowledge-base/mcp/youtube/"
-                "node_modules/@fabriqa.ai/youtube-transcript-mcp/index.js"
+                f"{mcp_base}/osia-knowledge-base/mcp/youtube/node_modules/@fabriqa.ai/youtube-transcript-mcp/index.js"
             ],
             env=os.environ,
         ),

@@ -110,6 +110,7 @@ security = HTTPBearer()
 # Middleware — strip server fingerprint header
 # ---------------------------------------------------------------------------
 
+
 @app.middleware("http")
 async def _remove_server_header(request: Request, call_next):
     response = await call_next(request)
@@ -123,6 +124,7 @@ async def _remove_server_header(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
+
 
 def _check_auth(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     """
@@ -149,6 +151,7 @@ def _check_auth(request: Request, credentials: HTTPAuthorizationCredentials = De
 # Subprocess helper — list-form only, never shell=True
 # ---------------------------------------------------------------------------
 
+
 def _run(cmd: list[str], timeout: int = 5) -> tuple[int, str, str]:
     """
     Execute a command as a list (no shell interpolation possible).
@@ -161,7 +164,7 @@ def _run(cmd: list[str], timeout: int = 5) -> tuple[int, str, str]:
             capture_output=True,
             text=True,
             timeout=timeout,
-            shell=False,          # explicit — never allow shell expansion
+            shell=False,  # explicit — never allow shell expansion
         )
         return r.returncode, r.stdout.strip(), r.stderr.strip()
     except subprocess.TimeoutExpired:
@@ -181,12 +184,17 @@ def _sanitise(text: str) -> str:
 # Data collectors — all subprocess args are hardcoded, never user-supplied
 # ---------------------------------------------------------------------------
 
+
 def _systemd_service_info(name: str) -> dict:
     # name is always from the SERVICES whitelist — validated before this call
-    rc, out, _ = _run([
-        "systemctl", "show", name,
-        "--property=ActiveState,SubState,MainPID,MemoryCurrent,ExecMainStartTimestamp",
-    ])
+    rc, out, _ = _run(
+        [
+            "systemctl",
+            "show",
+            name,
+            "--property=ActiveState,SubState,MainPID,MemoryCurrent,ExecMainStartTimestamp",
+        ]
+    )
     props: dict = {}
     for line in out.splitlines():
         if "=" in line:
@@ -213,10 +221,14 @@ def _systemd_service_info(name: str) -> dict:
 
 
 def _systemd_timer_info(name: str) -> dict:
-    rc, out, _ = _run([
-        "systemctl", "show", name,
-        "--property=ActiveState,NextElapseUSecRealtime,LastTriggerUSec",
-    ])
+    rc, out, _ = _run(
+        [
+            "systemctl",
+            "show",
+            name,
+            "--property=ActiveState,NextElapseUSecRealtime,LastTriggerUSec",
+        ]
+    )
     props: dict = {}
     for line in out.splitlines():
         if "=" in line:
@@ -235,11 +247,15 @@ def _systemd_timer_info(name: str) -> dict:
 def _docker_container_info(name: str) -> dict:
     # name is always from the CONTAINERS whitelist — validated before this call
     # Go template is hardcoded — no user input reaches docker inspect
-    rc, out, _ = _run([
-        "docker", "inspect",
-        "-f", "{{.State.Status}}|{{.State.StartedAt}}|{{.State.Health.Status}}",
-        name,
-    ])
+    rc, out, _ = _run(
+        [
+            "docker",
+            "inspect",
+            "-f",
+            "{{.State.Status}}|{{.State.StartedAt}}|{{.State.Health.Status}}",
+            name,
+        ]
+    )
     if rc != 0 or not out:
         return {"name": name, "status": "not found", "ok": False}
     parts = out.split("|")
@@ -323,11 +339,13 @@ def _system_metrics() -> dict:
         pass
 
     try:
-        rc, out, _ = _run([
-            "nvidia-smi",
-            "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total",
-            "--format=csv,noheader,nounits",
-        ])
+        rc, out, _ = _run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ]
+        )
         if rc == 0 and out:
             parts = [p.strip() for p in out.split(",")]
             metrics["gpu"] = {
@@ -375,14 +393,16 @@ def _qdrant_info() -> dict:
         vectors = result.get("vectors_count", 0) or 0
         segments = result.get("segments_count", 0) or 0
         total_points += points
-        collections.append({
-            "name": name,
-            "is_desk": name in QDRANT_DESK_COLLECTIONS,
-            "points_count": points,
-            "vectors_count": vectors,
-            "segments_count": segments,
-            "status": result.get("status", "unknown"),
-        })
+        collections.append(
+            {
+                "name": name,
+                "is_desk": name in QDRANT_DESK_COLLECTIONS,
+                "points_count": points,
+                "vectors_count": vectors,
+                "segments_count": segments,
+                "status": result.get("status", "unknown"),
+            }
+        )
 
     return {
         "ok": True,
@@ -409,13 +429,10 @@ def _redis_info() -> dict:
         if peek:
             try:
                 import json
+
                 task = json.loads(peek)
                 # Only surface non-sensitive routing fields
-                task_meta = {
-                    k: task[k]
-                    for k in ("type", "source", "desk", "timestamp")
-                    if k in task
-                }
+                task_meta = {k: task[k] for k in ("type", "source", "desk", "timestamp") if k in task}
             except Exception:
                 task_meta = {"type": "unparseable"}
 
@@ -442,6 +459,7 @@ def _get_logs(service: str, lines: int) -> list[str]:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @app.get("/status")
 @limiter.limit("30/minute")
@@ -531,6 +549,6 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=STATUS_API_PORT,
-        server_header=False,   # suppress "server: uvicorn" fingerprint
+        server_header=False,  # suppress "server: uvicorn" fingerprint
         date_header=False,
     )

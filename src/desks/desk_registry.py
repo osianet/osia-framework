@@ -76,13 +76,14 @@ class DeskConfig:
     qdrant: QdrantConfig
     tools: list[str]
     mcp_servers: list[str]
-    system_prompt: str          # fully assembled: prompt + mandate + citation protocol
+    system_prompt: str  # fully assembled: prompt + mandate + citation protocol
     entity_research_target: bool = True
 
 
 # ---------------------------------------------------------------------------
 # YAML parsing helpers
 # ---------------------------------------------------------------------------
+
 
 def _parse_model_config(data: dict, file_path: str, key_prefix: str) -> ModelConfig:
     """Parse a model config block (primary or fallback)."""
@@ -101,9 +102,7 @@ def _parse_model_config(data: dict, file_path: str, key_prefix: str) -> ModelCon
 
     hf_endpoint_name = data.get("hf_endpoint_name") or None
     if provider == "hf_endpoint" and not hf_endpoint_name:
-        raise ValueError(
-            f"{file_path}: '{key_prefix}.hf_endpoint_name' is required when provider is 'hf_endpoint'"
-        )
+        raise ValueError(f"{file_path}: '{key_prefix}.hf_endpoint_name' is required when provider is 'hf_endpoint'")
 
     return ModelConfig(
         provider=provider,
@@ -222,8 +221,7 @@ class DeskRegistry:
         yaml_files = sorted(desks_path.glob("*.yaml"))
         if not yaml_files:
             raise RuntimeError(
-                f"No desk configuration files found in '{desks_dir}'. "
-                "At least one *.yaml file is required."
+                f"No desk configuration files found in '{desks_dir}'. At least one *.yaml file is required."
             )
 
         for yaml_path in yaml_files:
@@ -241,16 +239,13 @@ class DeskRegistry:
         directives_file = os.getenv("OSIA_DIRECTIVES_FILE", "DIRECTIVES.md")
 
         if directives_file == "":
-            logger.warning(
-                "OSIA_DIRECTIVES_FILE is set to empty string — no analytical mandate will be appended."
-            )
+            logger.warning("OSIA_DIRECTIVES_FILE is set to empty string — no analytical mandate will be appended.")
             return ""
 
         mandate_path = Path(directives_file)
         if not mandate_path.exists():
             raise FileNotFoundError(
-                f"Analytical mandate file not found: '{directives_file}' "
-                "(set OSIA_DIRECTIVES_FILE to override)"
+                f"Analytical mandate file not found: '{directives_file}' (set OSIA_DIRECTIVES_FILE to override)"
             )
 
         text = mandate_path.read_text(encoding="utf-8")
@@ -385,17 +380,15 @@ class DeskRegistry:
         if model_cfg.provider == "hf_endpoint":
             return await self._invoke_hf_endpoint(desk, model_cfg, assembled_message)
         elif model_cfg.provider == "gemini":
-            return await self._invoke_with_retry(
-                lambda: self._call_gemini(desk, model_cfg, assembled_message)
-            )
+            return await self._invoke_with_retry(lambda: self._call_gemini(desk, model_cfg, assembled_message))
         elif model_cfg.provider == "anthropic":
-            return await self._invoke_with_retry(
-                lambda: self._call_anthropic(desk, model_cfg, assembled_message)
-            )
+            return await self._invoke_with_retry(lambda: self._call_anthropic(desk, model_cfg, assembled_message))
         elif model_cfg.provider == "openai":
             return await self._invoke_with_retry(
                 lambda: self._call_openai_compat(
-                    desk, model_cfg, assembled_message,
+                    desk,
+                    model_cfg,
+                    assembled_message,
                     base_url="https://api.openai.com",
                     api_key=os.getenv("OPENAI_API_KEY", ""),
                 )
@@ -413,7 +406,9 @@ class DeskRegistry:
                 if exc.response.status_code == 503 and attempt < RETRY_COUNT:
                     logger.warning(
                         "HTTP 503 on attempt %d/%d — retrying in %ds",
-                        attempt, RETRY_COUNT, RETRY_DELAY,
+                        attempt,
+                        RETRY_COUNT,
+                        RETRY_DELAY,
                     )
                     await asyncio.sleep(RETRY_DELAY)
                     last_exc = exc
@@ -513,15 +508,16 @@ class DeskRegistry:
         ready = await self._hf_manager.ensure_ready(desk.slug)
         if not ready:
             raise RuntimeError(
-                f"Desk '{desk.slug}': HF endpoint '{model_cfg.hf_endpoint_name}' "
-                "failed to become ready."
+                f"Desk '{desk.slug}': HF endpoint '{model_cfg.hf_endpoint_name}' failed to become ready."
             )
 
         endpoint_url = await self._resolve_hf_endpoint_url(model_cfg)
 
         return await self._invoke_with_retry(
             lambda: self._call_openai_compat(
-                desk, model_cfg, assembled_message,
+                desk,
+                model_cfg,
+                assembled_message,
                 base_url=endpoint_url,
                 api_key=os.getenv("HF_TOKEN", ""),
             )
@@ -547,11 +543,7 @@ class DeskRegistry:
             return url.rstrip("/")
 
         # Fetch URL from HF hub without blocking the event loop
-        url = await asyncio.to_thread(
-            self._hf_manager._wake_and_wait, model_cfg.hf_endpoint_name
-        )
+        url = await asyncio.to_thread(self._hf_manager._wake_and_wait, model_cfg.hf_endpoint_name)
         if not url:
-            raise RuntimeError(
-                f"Could not resolve URL for HF endpoint '{model_cfg.hf_endpoint_name}'"
-            )
+            raise RuntimeError(f"Could not resolve URL for HF endpoint '{model_cfg.hf_endpoint_name}'")
         return url.rstrip("/")

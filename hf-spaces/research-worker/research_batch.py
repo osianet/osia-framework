@@ -85,6 +85,7 @@ def _endpoint_for_desk(desk: str) -> tuple[str, str]:
 # Endpoint wake-up (reuses logic from hf_endpoint_manager.py)
 # ---------------------------------------------------------------------------
 
+
 def _wake_endpoint(endpoint_name: str) -> str | None:
     """Block until the named HF endpoint is running. Returns URL or None."""
     from huggingface_hub import get_inference_endpoint
@@ -143,6 +144,7 @@ async def _probe_endpoint(url: str, timeout: int = 60) -> bool:
 # Queue API client
 # ---------------------------------------------------------------------------
 
+
 class QueueClient:
     def __init__(self, http: httpx.AsyncClient):
         self._http = http
@@ -193,6 +195,7 @@ class QueueClient:
 # Research tools (direct HTTP)
 # ---------------------------------------------------------------------------
 
+
 async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
     if not TAVILY_API_KEY:
         return "Tavily API key not configured."
@@ -204,10 +207,7 @@ async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
         )
         resp.raise_for_status()
         results = resp.json().get("results", [])
-        return "\n\n".join(
-            f"[{r.get('title','')}]({r.get('url','')})\n{r.get('content','')[:500]}"
-            for r in results
-        )
+        return "\n\n".join(f"[{r.get('title', '')}]({r.get('url', '')})\n{r.get('content', '')[:500]}" for r in results)
     except Exception as e:
         return f"Web search error: {e}"
 
@@ -216,8 +216,7 @@ async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
     try:
         resp = await http.get(
             "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "list": "search", "srsearch": query,
-                    "srlimit": 3, "format": "json"},
+            params={"action": "query", "list": "search", "srsearch": query, "srlimit": 3, "format": "json"},
             timeout=10.0,
         )
         hits = resp.json().get("query", {}).get("search", [])
@@ -226,8 +225,14 @@ async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
         title = hits[0]["title"]
         ex = await http.get(
             "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "prop": "extracts", "exintro": True,
-                    "explaintext": True, "titles": title, "format": "json"},
+            params={
+                "action": "query",
+                "prop": "extracts",
+                "exintro": True,
+                "explaintext": True,
+                "titles": title,
+                "format": "json",
+            },
             timeout=10.0,
         )
         pages = ex.json().get("query", {}).get("pages", {})
@@ -239,6 +244,7 @@ async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
 
 async def tool_search_arxiv(query: str, http: httpx.AsyncClient) -> str:
     import re
+
     try:
         resp = await http.get(
             "https://export.arxiv.org/api/query",
@@ -275,8 +281,8 @@ async def tool_search_semantic_scholar(query: str, http: httpx.AsyncClient) -> s
         for p in papers:
             authors = ", ".join(a["name"] for a in p.get("authors", [])[:3])
             results.append(
-                f"**{p.get('title','')}** ({p.get('year','')})\n"
-                f"Authors: {authors}\n{p.get('url','')}\n"
+                f"**{p.get('title', '')}** ({p.get('year', '')})\n"
+                f"Authors: {authors}\n{p.get('url', '')}\n"
                 f"{(p.get('abstract') or '')[:400]}"
             )
         return "\n\n---\n\n".join(results)
@@ -293,36 +299,45 @@ TOOLS = {
 
 # OpenAI-format tool schemas
 TOOL_SCHEMAS = [
-    {"type": "function", "function": {
-        "name": "search_web",
-        "description": "Search the live web for current events and news.",
-        "parameters": {"type": "object", "properties": {
-            "query": {"type": "string"}}, "required": ["query"]},
-    }},
-    {"type": "function", "function": {
-        "name": "search_wikipedia",
-        "description": "Search Wikipedia for factual background.",
-        "parameters": {"type": "object", "properties": {
-            "query": {"type": "string"}}, "required": ["query"]},
-    }},
-    {"type": "function", "function": {
-        "name": "search_arxiv",
-        "description": "Search ArXiv for academic papers.",
-        "parameters": {"type": "object", "properties": {
-            "query": {"type": "string"}}, "required": ["query"]},
-    }},
-    {"type": "function", "function": {
-        "name": "search_semantic_scholar",
-        "description": "Search Semantic Scholar for peer-reviewed literature.",
-        "parameters": {"type": "object", "properties": {
-            "query": {"type": "string"}}, "required": ["query"]},
-    }},
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": "Search the live web for current events and news.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_wikipedia",
+            "description": "Search Wikipedia for factual background.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_arxiv",
+            "description": "Search ArXiv for academic papers.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_semantic_scholar",
+            "description": "Search Semantic Scholar for peer-reviewed literature.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
 ]
 
 
 # ---------------------------------------------------------------------------
 # OpenAI-compat research loop (works against Dolphin and Hermes endpoints)
 # ---------------------------------------------------------------------------
+
 
 async def run_research_loop(
     topic: str,
@@ -411,11 +426,13 @@ async def run_research_loop(
             else:
                 result = f"Unknown tool: {fn_name}"
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc["id"],
-                "content": result,
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result,
+                }
+            )
 
     logger.warning("Hit max rounds for topic: %s", topic)
     # Return whatever the last assistant message contained
@@ -429,15 +446,12 @@ async def run_research_loop(
 # Chunking, embedding, Qdrant storage
 # ---------------------------------------------------------------------------
 
+
 def _chunk_text(text: str) -> list[str]:
     words = text.split()
     overlap = CHUNK_SIZE // 5
     step = CHUNK_SIZE - overlap
-    return [
-        " ".join(words[i: i + CHUNK_SIZE])
-        for i in range(0, len(words), step)
-        if words[i: i + CHUNK_SIZE]
-    ]
+    return [" ".join(words[i : i + CHUNK_SIZE]) for i in range(0, len(words), step) if words[i : i + CHUNK_SIZE]]
 
 
 async def _embed(texts: list[str], http: httpx.AsyncClient) -> list[list[float]]:
@@ -469,8 +483,7 @@ async def _ensure_collection(http: httpx.AsyncClient):
     logger.info("Created Qdrant collection: %s", RESEARCH_COLLECTION)
 
 
-async def _store(job_id: str, topic: str, desk: str, triggered_by: str,
-                 text: str, http: httpx.AsyncClient):
+async def _store(job_id: str, topic: str, desk: str, triggered_by: str, text: str, http: httpx.AsyncClient):
     chunks = _chunk_text(text)
     if not chunks:
         return
@@ -479,18 +492,23 @@ async def _store(job_id: str, topic: str, desk: str, triggered_by: str,
     points = []
     for i, (chunk, vector) in enumerate(zip(chunks, embeddings, strict=False)):
         point_id = int(hashlib.md5(f"{job_id}:{i}".encode()).hexdigest()[:8], 16)  # noqa: S324
-        points.append({
-            "id": point_id,
-            "vector": vector,
-            "payload": {
-                "text": chunk, "topic": topic, "desk": desk,
-                "job_id": job_id, "chunk_index": i,
-                "total_chunks": len(chunks),
-                "triggered_by": triggered_by,
-                "collected_at": now,
-                "source": "hf_research_batch",
-            },
-        })
+        points.append(
+            {
+                "id": point_id,
+                "vector": vector,
+                "payload": {
+                    "text": chunk,
+                    "topic": topic,
+                    "desk": desk,
+                    "job_id": job_id,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "triggered_by": triggered_by,
+                    "collected_at": now,
+                    "source": "hf_research_batch",
+                },
+            }
+        )
     headers = {"api-key": QDRANT_API_KEY, "Content-Type": "application/json"}
     resp = await http.put(
         f"{QDRANT_URL}/collections/{RESEARCH_COLLECTION}/points",
@@ -505,6 +523,7 @@ async def _store(job_id: str, topic: str, desk: str, triggered_by: str,
 # ---------------------------------------------------------------------------
 # Main batch loop
 # ---------------------------------------------------------------------------
+
 
 async def main():
     logger.info("=== OSIA Research Batch Job starting ===")

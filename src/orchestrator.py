@@ -34,9 +34,7 @@ def _extract_mcp_text(result) -> str:
     if isinstance(result, str):
         return result
     if hasattr(result, "content") and result.content:
-        return "\n".join(
-            block.text for block in result.content if hasattr(block, "text")
-        )
+        return "\n".join(block.text for block in result.content if hasattr(block, "text"))
     return str(result)
 
 
@@ -146,7 +144,9 @@ class OsiaOrchestrator:
                         description="Search Semantic Scholar for peer-reviewed scientific literature and citations.",
                         parameters=types.Schema(
                             type="OBJECT",
-                            properties={"query": types.Schema(type="STRING", description="The scientific search query.")},
+                            properties={
+                                "query": types.Schema(type="STRING", description="The scientific search query.")
+                            },
                             required=["query"],
                         ),
                     ),
@@ -186,7 +186,9 @@ class OsiaOrchestrator:
                         description="Use the physical phone to navigate to a social media post and extract all visible comments.",
                         parameters=types.Schema(
                             type="OBJECT",
-                            properties={"url": types.Schema(type="STRING", description="Direct URL to the social media post.")},
+                            properties={
+                                "url": types.Schema(type="STRING", description="Direct URL to the social media post.")
+                            },
                             required=["url"],
                         ),
                     ),
@@ -209,7 +211,9 @@ class OsiaOrchestrator:
                             type="OBJECT",
                             properties={
                                 "url": types.Schema(type="STRING", description="Direct URL to the social media post."),
-                                "target_author": types.Schema(type="STRING", description="Username of the comment author to reply to."),
+                                "target_author": types.Schema(
+                                    type="STRING", description="Username of the comment author to reply to."
+                                ),
                                 "reply": types.Schema(type="STRING", description="The reply text."),
                             },
                             required=["url", "target_author", "reply"],
@@ -220,7 +224,9 @@ class OsiaOrchestrator:
                         description="Use the physical phone to navigate to a social media post and extract its full content, stats, and metadata.",
                         parameters=types.Schema(
                             type="OBJECT",
-                            properties={"url": types.Schema(type="STRING", description="Direct URL to the social media post.")},
+                            properties={
+                                "url": types.Schema(type="STRING", description="Direct URL to the social media post.")
+                            },
                             required=["url"],
                         ),
                     ),
@@ -257,7 +263,9 @@ class OsiaOrchestrator:
     # Signal messaging
     # ------------------------------------------------------------------
 
-    async def _signal_post(self, payload: dict, label: str = "message", retries: int = 5, retry_delay: int = 30) -> bool:
+    async def _signal_post(
+        self, payload: dict, label: str = "message", retries: int = 5, retry_delay: int = 30
+    ) -> bool:
         """POST to the Signal API with retry logic. Returns True on success."""
         url = f"{self.signal_api_url}/v2/send"
         for attempt in range(1, retries + 1):
@@ -269,12 +277,19 @@ class OsiaOrchestrator:
             except httpx.HTTPStatusError as e:
                 logger.error(
                     "Signal API returned %s for %s (attempt %d/%d): %s",
-                    e.response.status_code, label, attempt, retries, e.response.text,
+                    e.response.status_code,
+                    label,
+                    attempt,
+                    retries,
+                    e.response.text,
                 )
             except httpx.RequestError as e:
                 logger.error(
                     "Failed to reach Signal API for %s (attempt %d/%d): %s",
-                    label, attempt, retries, e,
+                    label,
+                    attempt,
+                    retries,
+                    e,
                 )
             if attempt < retries:
                 logger.info("Retrying Signal %s in %ds...", label, retry_delay)
@@ -353,6 +368,7 @@ class OsiaOrchestrator:
                     continue
                 if part.inline_data is not None:
                     import base64
+
                     return base64.b64encode(part.inline_data.data).decode()
             logger.warning("Gemini image generation returned no image parts.")
         except Exception as e:
@@ -366,6 +382,7 @@ class OsiaOrchestrator:
     async def _generate_infographic_via_phone(self, image_prompt: str) -> str | None:
         """Drives the Gemini Android app via ADB to generate an infographic image."""
         import base64
+
         try:
             png_bytes = await self.social_agent.generate_infographic_via_phone(image_prompt)
             if png_bytes:
@@ -404,15 +421,21 @@ class OsiaOrchestrator:
         args = dict(call.args) if call.args else {}
 
         if name == "search_wikipedia":
-            return _extract_mcp_text(await self.mcp.call_tool("wikipedia", "search_pages", {"input": {"query": args["query"]}}))
+            return _extract_mcp_text(
+                await self.mcp.call_tool("wikipedia", "search_pages", {"input": {"query": args["query"]}})
+            )
         elif name == "search_arxiv":
             return _extract_mcp_text(await self.mcp.call_tool("arxiv", "search_papers", {"query": args["query"]}))
         elif name == "search_semantic_scholar":
-            return _extract_mcp_text(await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": args["query"]}))
+            return _extract_mcp_text(
+                await self.mcp.call_tool("semantic-scholar", "search_paper", {"query": args["query"]})
+            )
         elif name == "get_youtube_transcript":
             return await self._extract_youtube_transcript(args["url"])
         elif name == "get_current_time":
-            return _extract_mcp_text(await self.mcp.call_tool("time", "get_current_time", {"timezone": args.get("timezone", "Etc/UTC")}))
+            return _extract_mcp_text(
+                await self.mcp.call_tool("time", "get_current_time", {"timezone": args.get("timezone", "Etc/UTC")})
+            )
         elif name == "search_web":
             return _extract_mcp_text(await self.mcp.call_tool("tavily", "tavily_search", {"query": args["query"]}))
         elif name == "read_social_comments":
@@ -449,9 +472,18 @@ class OsiaOrchestrator:
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             cmd = [
-                str(yt_dlp_bin), "--skip-download",
-                "--write-auto-subs", "--sub-lang", "en.*", "--convert-subs", "srt",
-                "--output", str(tmp_dir / "yt_intel"), "--user-agent", user_agent, "--geo-bypass",
+                str(yt_dlp_bin),
+                "--skip-download",
+                "--write-auto-subs",
+                "--sub-lang",
+                "en.*",
+                "--convert-subs",
+                "srt",
+                "--output",
+                str(tmp_dir / "yt_intel"),
+                "--user-agent",
+                user_agent,
+                "--geo-bypass",
             ]
             cookies_path = self.base_dir / "config" / "youtube_cookies.txt"
             if cookies_path.exists():
@@ -460,8 +492,11 @@ class OsiaOrchestrator:
             cmd.append(video_url)
 
             proc = await asyncio.to_thread(
-                __import__("subprocess").run, cmd,
-                capture_output=True, text=True, cwd=str(self.base_dir),
+                __import__("subprocess").run,
+                cmd,
+                capture_output=True,
+                text=True,
+                cwd=str(self.base_dir),
             )
             srt_path = tmp_dir / "yt_intel.en.srt"
             if srt_path.exists():
@@ -484,6 +519,7 @@ class OsiaOrchestrator:
             logger.info("yt-dlp failed. Trying youtube-transcript-api...")
             try:
                 from youtube_transcript_api import YouTubeTranscriptApi
+
                 video_id = None
                 if "youtu.be/" in video_url:
                     video_id = video_url.split("youtu.be/")[1].split("?")[0]
@@ -491,12 +527,8 @@ class OsiaOrchestrator:
                     video_id = video_url.split("v=")[1].split("&")[0]
                 if video_id:
                     ytt_api = YouTubeTranscriptApi()
-                    fetched = await asyncio.to_thread(
-                        ytt_api.fetch, video_id, languages=["en"]
-                    )
-                    transcript = "\n".join(
-                        f"[{snippet.start:.1f}s] {snippet.text}" for snippet in fetched
-                    )
+                    fetched = await asyncio.to_thread(ytt_api.fetch, video_id, languages=["en"])
+                    transcript = "\n".join(f"[{snippet.start:.1f}s] {snippet.text}" for snippet in fetched)
             except Exception as e:
                 logger.warning("youtube-transcript-api failed: %s", e)
 
@@ -520,11 +552,13 @@ class OsiaOrchestrator:
                     contents=types.Content(
                         parts=[
                             types.Part(file_data=types.FileData(file_uri=video_url)),
-                            types.Part(text=(
-                                "Produce a detailed transcript of this video. Include timestamps "
-                                "in [MM:SS] format. Capture all spoken words verbatim, describe "
-                                "key visual elements, and note any on-screen text."
-                            )),
+                            types.Part(
+                                text=(
+                                    "Produce a detailed transcript of this video. Include timestamps "
+                                    "in [MM:SS] format. Capture all spoken words verbatim, describe "
+                                    "key visual elements, and note any on-screen text."
+                                )
+                            ),
                         ]
                     ),
                 )
@@ -559,7 +593,9 @@ class OsiaOrchestrator:
         max_rounds = 5
         for _round in range(max_rounds):
             response = self.client.models.generate_content(
-                model=self.model_id, contents=contents, config=config,
+                model=self.model_id,
+                contents=contents,
+                config=config,
             )
 
             candidate = response.candidates[0]
@@ -587,10 +623,12 @@ class OsiaOrchestrator:
                 tracker.record(call.name, tool_query, result_str)
                 logger.info("Tool '%s' returned data (length: %d)", call.name, len(result_str))
                 response_parts.append(
-                    types.Part(function_response=types.FunctionResponse(
-                        name=call.name,
-                        response={"result": result_str},
-                    ))
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            name=call.name,
+                            response={"result": result_str},
+                        )
+                    )
                 )
 
             contents.append(types.Content(role="user", parts=response_parts))
@@ -612,8 +650,11 @@ class OsiaOrchestrator:
         cmd = [str(yt_dlp_bin), "--dump-json", "--no-playlist", url]
         try:
             proc = await asyncio.to_thread(
-                subprocess.run, cmd,
-                capture_output=True, text=True, timeout=15,
+                subprocess.run,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if proc.returncode == 0 and proc.stdout.strip():
                 data = json.loads(proc.stdout)
@@ -673,9 +714,7 @@ class OsiaOrchestrator:
             "describe the visual context, identify any text on screen, and summarize "
             "the core message or propaganda narrative."
         )
-        response = self.client.models.generate_content(
-            model=self.model_id, contents=[video_file, prompt]
-        )
+        response = self.client.models.generate_content(model=self.model_id, contents=[video_file, prompt])
 
         capture_path = Path(local_path)
         if capture_path.exists():
@@ -713,9 +752,7 @@ class OsiaOrchestrator:
         cross_results = []
         if entity_names:
             try:
-                cross_results = await self.qdrant.cross_desk_search(
-                    " ".join(entity_names), top_k=3
-                )
+                cross_results = await self.qdrant.cross_desk_search(" ".join(entity_names), top_k=3)
             except Exception as e:
                 logger.warning("Qdrant cross-desk search unavailable (%s)", e)
 
@@ -735,9 +772,7 @@ class OsiaOrchestrator:
         for r in combined:
             reliability = r.metadata.get("reliability_tier", "?")
             timestamp = r.metadata.get("timestamp", "")
-            lines.append(
-                f"[{r.collection}] (Reliability: {reliability}) {timestamp}\n{r.text}\n"
-            )
+            lines.append(f"[{r.collection}] (Reliability: {reliability}) {timestamp}\n{r.text}\n")
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
@@ -800,7 +835,7 @@ class OsiaOrchestrator:
         entities = []
         entity_names: list[str] = []
         text_for_extraction = research_summary or media_analysis or original_query
-        triggered_by = url or (source[len("signal:"):] if source.startswith("signal:") else source)
+        triggered_by = url or (source[len("signal:") :] if source.startswith("signal:") else source)
         try:
             entities = await self.entity_extractor.extract(text_for_extraction, "collection-directorate")
             entity_names = [e.name for e in entities]
@@ -833,7 +868,8 @@ class OsiaOrchestrator:
             if assigned_desk not in self.valid_desks:
                 logger.warning(
                     "Gemini returned invalid desk '%s', routing to default '%s'",
-                    assigned_desk, self.default_desk,
+                    assigned_desk,
+                    self.default_desk,
                 )
                 assigned_desk = self.default_desk
 
@@ -844,9 +880,7 @@ class OsiaOrchestrator:
 
             # 6. Invoke desk via DeskRegistry
             try:
-                response_data = await self.desk_registry.invoke(
-                    assigned_desk, query, context_block
-                )
+                response_data = await self.desk_registry.invoke(assigned_desk, query, context_block)
                 # invoke returns (text, metadata) tuple per design
                 if isinstance(response_data, tuple):
                     analysis, invoke_meta = response_data
@@ -858,7 +892,9 @@ class OsiaOrchestrator:
                 model_id_used = invoke_meta.get("model_id", "unknown")
                 logger.info(
                     "Desk '%s' responded via %s model (%s).",
-                    assigned_desk, model_used, model_id_used,
+                    assigned_desk,
+                    model_used,
+                    model_id_used,
                 )
             except Exception as desk_err:
                 logger.error("Desk '%s' invocation failed: %s", assigned_desk, desk_err)
@@ -870,7 +906,7 @@ class OsiaOrchestrator:
             analysis += audit_report(analysis, source_tracker)
 
             if source.startswith("signal:"):
-                recipient = source[len("signal:"):]
+                recipient = source[len("signal:") :]
                 await self.send_signal_message(recipient, analysis)
                 try:
                     infographic_b64 = await self.generate_infographic(analysis)
@@ -882,20 +918,20 @@ class OsiaOrchestrator:
         except Exception as e:
             logger.exception("Orchestration or desk analysis failed: %s", e)
             if source.startswith("signal:"):
-                recipient = source[len("signal:"):]
+                recipient = source[len("signal:") :]
 
                 error_type = type(e).__name__
                 raw_error = str(e)
 
-                sanitized_error = re.sub(r'(/home/|/var/|/tmp/|C:\\)[^\s]+', '[REDACTED_PATH]', raw_error)
-                sanitized_error = re.sub(r'sk-[A-Za-z0-9_-]{20,}', '[REDACTED_KEY]', sanitized_error)
-                sanitized_error = re.sub(r'AIza[0-9A-Za-z-_]{35}', '[REDACTED_KEY]', sanitized_error)
-                sanitized_error = re.sub(r'(https?://)[^\s]+', r'\1[REDACTED_URL]', sanitized_error)
+                sanitized_error = re.sub(r"(/home/|/var/|/tmp/|C:\\)[^\s]+", "[REDACTED_PATH]", raw_error)
+                sanitized_error = re.sub(r"sk-[A-Za-z0-9_-]{20,}", "[REDACTED_KEY]", sanitized_error)
+                sanitized_error = re.sub(r"AIza[0-9A-Za-z-_]{35}", "[REDACTED_KEY]", sanitized_error)
+                sanitized_error = re.sub(r"(https?://)[^\s]+", r"\1[REDACTED_URL]", sanitized_error)
 
                 error_msg = (
                     f"⚠️ OSIA System Error ({error_type})\n\n"
                     f"An error occurred while processing your request:\n"
-                    f"\"{sanitized_error}\"\n\n"
+                    f'"{sanitized_error}"\n\n'
                     "This could be due to a temporary issue with our intelligence desks or a timeout. "
                     "Please try your query again later."
                 )

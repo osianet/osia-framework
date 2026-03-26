@@ -32,9 +32,7 @@ class ADBDevice:
     async def _run(self, args: list[str], **kwargs) -> subprocess.CompletedProcess:
         """Run an ADB command in a thread so we don't block the event loop."""
         cmd = self._build_cmd(args)
-        return await asyncio.to_thread(
-            subprocess.run, cmd, capture_output=True, text=True, **kwargs
-        )
+        return await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, **kwargs)
 
     async def _run_checked(self, args: list[str]) -> str:
         result = await self._run(args)
@@ -87,33 +85,23 @@ class ADBDevice:
             await self._run_checked(["shell", "input", "keyevent", "26"])
             await asyncio.sleep(1)
 
-        await self._run_checked(
-            ["shell", "input", "swipe", "500", "1500", "500", "500", "200"]
-        )
+        await self._run_checked(["shell", "input", "swipe", "500", "1500", "500", "500", "200"])
         await asyncio.sleep(1)
 
     async def open_url(self, url: str):
         await self.wake_and_unlock()
         logger.info("Opening URL %s on device...", url)
-        await self._run_checked(
-            ["shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url]
-        )
+        await self._run_checked(["shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url])
 
-    async def record_screen(
-        self, remote_path: str = "/sdcard/screen_capture.mp4", time_limit: int = 30
-    ):
+    async def record_screen(self, remote_path: str = "/sdcard/screen_capture.mp4", time_limit: int = 30):
         await self.wake_and_unlock()
         logger.info("Recording screen for %d seconds...", time_limit)
-        cmd = self._build_cmd(
-            ["shell", "screenrecord", "--time-limit", str(time_limit), remote_path]
-        )
+        cmd = self._build_cmd(["shell", "screenrecord", "--time-limit", str(time_limit), remote_path])
         await asyncio.to_thread(subprocess.run, cmd)
 
     async def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
         """Perform a swipe gesture between two points."""
-        await self._run_checked(
-            ["shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms)]
-        )
+        await self._run_checked(["shell", "input", "swipe", str(x1), str(y1), str(x2), str(y2), str(duration_ms)])
 
     async def press_back(self):
         """Press the Android back button."""
@@ -185,16 +173,18 @@ class ADBDevice:
             x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
             if x1 == 0 and y1 == 0 and x2 == 0 and y2 == 0:
                 continue  # invisible / unmeasured element
-            nodes.append({
-                "text": node.get("text", ""),
-                "content_desc": node.get("content-desc", ""),
-                "resource_id": node.get("resource-id", ""),
-                "class_name": node.get("class", ""),
-                "clickable": node.get("clickable", "false") == "true",
-                "bounds": bounds_str,
-                "cx": (x1 + x2) // 2,
-                "cy": (y1 + y2) // 2,
-            })
+            nodes.append(
+                {
+                    "text": node.get("text", ""),
+                    "content_desc": node.get("content-desc", ""),
+                    "resource_id": node.get("resource-id", ""),
+                    "class_name": node.get("class", ""),
+                    "clickable": node.get("clickable", "false") == "true",
+                    "bounds": bounds_str,
+                    "cx": (x1 + x2) // 2,
+                    "cy": (y1 + y2) // 2,
+                }
+            )
         return nodes
 
     def find_element(
@@ -213,6 +203,7 @@ class ADBDevice:
         Matching is case-insensitive. With fuzzy=True, a substring match is used;
         with fuzzy=False, an exact match is required.
         """
+
         def _match(value: str, target: str) -> bool:
             v, t = value.lower(), target.lower()
             return t in v if fuzzy else v == t
@@ -254,7 +245,10 @@ class ADBDevice:
             return False
         logger.debug(
             "Tapping element '%s' / '%s' at (%d, %d)",
-            node["content_desc"], node["resource_id"], node["cx"], node["cy"],
+            node["content_desc"],
+            node["resource_id"],
+            node["cx"],
+            node["cy"],
         )
         await self.tap(node["cx"], node["cy"])
         return True

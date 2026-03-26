@@ -55,6 +55,7 @@ DEFAULT_APPS = [
 @dataclass
 class SessionStats:
     """Tracks activity to enforce daily limits."""
+
     likes: int = 0
     comments: int = 0
     shares: int = 0
@@ -90,8 +91,7 @@ class PersonaDaemon:
         # Persona-specific config from env
         self.persona_name = os.getenv(f"PERSONA_{persona_id}_NAME", f"Persona {persona_id}")
         device_id = os.getenv(f"ADB_DEVICE_PERSONA_{persona_id}") or None
-        self._tz_offset = int(os.getenv(f"PERSONA_{persona_id}_TZ_OFFSET",
-                                         os.getenv("PERSONA_TZ_OFFSET", "10")))
+        self._tz_offset = int(os.getenv(f"PERSONA_{persona_id}_TZ_OFFSET", os.getenv("PERSONA_TZ_OFFSET", "10")))
 
         # Daily limits — configurable per persona
         self._daily_like_cap = int(os.getenv(f"PERSONA_{persona_id}_LIKE_CAP", "80"))
@@ -127,8 +127,13 @@ class PersonaDaemon:
 
         logger.info(
             "Persona '%s' (id=%s) initialized — device=%s, tz=%+d, caps=%d likes/%d comments/%d posts",
-            self.persona_name, persona_id, device_id or "any",
-            self._tz_offset, self._daily_like_cap, self._daily_comment_cap, self._daily_post_cap,
+            self.persona_name,
+            persona_id,
+            device_id or "any",
+            self._tz_offset,
+            self._daily_like_cap,
+            self._daily_comment_cap,
+            self._daily_post_cap,
         )
 
     def _persona_file(self, filename: str) -> Path:
@@ -330,8 +335,11 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         cmd = [str(yt_dlp_bin), "--dump-json", "--no-playlist", url]
         try:
             proc = await asyncio.to_thread(
-                subprocess.run, cmd,
-                capture_output=True, text=True, timeout=15,
+                subprocess.run,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if proc.returncode == 0 and proc.stdout.strip():
                 data = json.loads(proc.stdout)
@@ -359,11 +367,15 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         cmd = [
             str(yt_dlp_bin),
             "--no-playlist",
-            "--max-filesize", "50m",
-            "-f", "best[filesize<50M]/best",
-            "--user-agent", user_agent,
+            "--max-filesize",
+            "50m",
+            "-f",
+            "best[filesize<50M]/best",
+            "--user-agent",
+            user_agent,
             "--geo-bypass",
-            "-o", local_path,
+            "-o",
+            local_path,
             url,
         ]
         # Use cookies if available (helps with age-gated / login-walled content)
@@ -375,8 +387,11 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         try:
             logger.info("[%s] Attempting yt-dlp download: %s", self.persona_name, url[:80])
             proc = await asyncio.to_thread(
-                subprocess.run, cmd,
-                capture_output=True, text=True, timeout=60,
+                subprocess.run,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
             )
             if proc.returncode == 0 and Path(local_path).exists():
                 logger.info("[%s] yt-dlp download succeeded (%s)", self.persona_name, local_path)
@@ -409,9 +424,15 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             await asyncio.sleep(0.3)
 
             logger.info("[%s] Screen recording fallback for %ds...", self.persona_name, duration)
-            cmd = self.adb._build_cmd([
-                "shell", "screenrecord", "--time-limit", str(duration), remote_path,
-            ])
+            cmd = self.adb._build_cmd(
+                [
+                    "shell",
+                    "screenrecord",
+                    "--time-limit",
+                    str(duration),
+                    remote_path,
+                ]
+            )
             await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
             await self.adb.pull_file(remote_path, local_path)
             await self.adb._run(["shell", "rm", "-f", remote_path])
@@ -557,7 +578,10 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         alignment = parsed.get("values_alignment", "none")
         logger.info(
             "[%s] Video verdict: %s (alignment=%s) — %s",
-            name, action, alignment, parsed.get("reasoning", "")[:80],
+            name,
+            action,
+            alignment,
+            parsed.get("reasoning", "")[:80],
         )
 
         # Execute the engagement
@@ -647,7 +671,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 if not commented:
                     result = await self.agent.execute_custom(
                         "",
-                        f"Tap the comment button, type this comment in the input field, then submit it:\n\"{comment}\"",
+                        f'Tap the comment button, type this comment in the input field, then submit it:\n"{comment}"',
                     )
                     commented = result.success
                 if commented:
@@ -687,11 +711,31 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
     # Post types the persona can create, with platform suitability
     _POST_TYPES = [
-        {"type": "opinion", "desc": "a short opinion or hot take on something in the news", "platforms": ["Facebook", "Instagram", "Upscrolled"]},
-        {"type": "observation", "desc": "a casual observation about daily life, tech, or something funny", "platforms": ["Facebook", "Instagram", "YouTube", "Upscrolled"]},
-        {"type": "share_article", "desc": "sharing a link or summarizing an interesting article you read", "platforms": ["Facebook", "Upscrolled"]},
-        {"type": "question", "desc": "asking your followers a genuine question to spark discussion", "platforms": ["Facebook", "Instagram", "Upscrolled"]},
-        {"type": "reaction", "desc": "reacting to a trending topic or current event", "platforms": ["Facebook", "Instagram", "Upscrolled"]},
+        {
+            "type": "opinion",
+            "desc": "a short opinion or hot take on something in the news",
+            "platforms": ["Facebook", "Instagram", "Upscrolled"],
+        },
+        {
+            "type": "observation",
+            "desc": "a casual observation about daily life, tech, or something funny",
+            "platforms": ["Facebook", "Instagram", "YouTube", "Upscrolled"],
+        },
+        {
+            "type": "share_article",
+            "desc": "sharing a link or summarizing an interesting article you read",
+            "platforms": ["Facebook", "Upscrolled"],
+        },
+        {
+            "type": "question",
+            "desc": "asking your followers a genuine question to spark discussion",
+            "platforms": ["Facebook", "Instagram", "Upscrolled"],
+        },
+        {
+            "type": "reaction",
+            "desc": "reacting to a trending topic or current event",
+            "platforms": ["Facebook", "Instagram", "Upscrolled"],
+        },
     ]
 
     async def _get_post_inspiration(self) -> str:
@@ -704,9 +748,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             items = await self.redis.lrange("osia:rss:daily_digest", 0, 9)
             if items:
                 summaries = [item.decode() if isinstance(item, bytes) else item for item in items[:5]]
-                return "Recent news headlines you've been reading:\n" + "\n".join(
-                    f"- {s[:200]}" for s in summaries
-                )
+                return "Recent news headlines you've been reading:\n" + "\n".join(f"- {s[:200]}" for s in summaries)
         except Exception as e:
             logger.debug("[%s] Could not fetch RSS digest for post inspiration: %s", self.persona_name, e)
         return ""
@@ -733,7 +775,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
 It's {time_context} and you're on {app_name}. You want to make a post.
 
-Post type: {post_type['desc']}
+Post type: {post_type["desc"]}
 
 {inspiration}
 
@@ -750,7 +792,7 @@ Write a post that {self.persona_name} would naturally make. Rules:
 Respond with ONLY valid JSON (no markdown, no code fences):
 {{
     "text": "The actual post text",
-    "type": "{post_type['type']}",
+    "type": "{post_type["type"]}",
     "reasoning": "Why this feels natural right now"
 }}"""
 
@@ -776,7 +818,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 "You are on the Facebook app home feed. Find and tap the 'What's on your mind?' "
                 "text box at the top of the feed (or the create post button). "
                 "Once the post composer opens, tap the text input area and type this post:\n\n"
-                f"\"{post_text}\"\n\n"
+                f'"{post_text}"\n\n'
                 "Then tap the 'Post' button to publish it. Once posted, use 'done'."
             )
         elif app_name == "Instagram":
@@ -786,7 +828,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 "If it asks to select a photo, just pick the most recent photo in the gallery "
                 "(or take a quick photo if needed — the text is what matters). "
                 "On the caption screen, tap the caption field and type:\n\n"
-                f"\"{post_text}\"\n\n"
+                f'"{post_text}"\n\n'
                 "Then tap 'Share' or 'Post' to publish. Once posted, use 'done'. "
                 "If you can't create a text-only post, use 'fail'."
             )
@@ -795,7 +837,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 "You are on YouTube. Tap the '+' create button at the bottom center. "
                 "Select 'Create a post' (community post). "
                 "Tap the text area and type:\n\n"
-                f"\"{post_text}\"\n\n"
+                f'"{post_text}"\n\n'
                 "Then tap 'Post' to publish. Once posted, use 'done'. "
                 "If community posts aren't available, use 'fail'."
             )
@@ -803,7 +845,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             instruction = (
                 f"You are on {app_name}. Find the create post / new post button. "
                 "Tap it to open the post composer. Type this post:\n\n"
-                f"\"{post_text}\"\n\n"
+                f'"{post_text}"\n\n'
                 "Then tap Post/Share/Submit to publish. Once posted, use 'done'."
             )
 
@@ -952,7 +994,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                         f"   near the BOTTOM of the screen.\n"
                         f"3. Use 'tap_and_type' to tap the CENTER of that input field and type "
                         f"   this comment exactly:\n\n"
-                        f"   \"{comment}\"\n\n"
+                        f'   "{comment}"\n\n'
                         f"4. Tap the Post/Send button to submit.\n"
                         f"5. Once the comment appears in the list, use 'done'.\n\n"
                         f"IMPORTANT: Do NOT tap anywhere on the post image or video.",
@@ -1054,18 +1096,30 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         num_posts = random.randint(5, 18)
 
         logger.info(
-            "[%s] Session #%d — Opening %s, browsing ~%d posts "
-            "(today: %d likes, %d comments, %d shares, %d posts)",
-            self.persona_name, self.stats.sessions, app["name"], num_posts,
-            self.stats.likes, self.stats.comments, self.stats.shares, self.stats.posts,
+            "[%s] Session #%d — Opening %s, browsing ~%d posts (today: %d likes, %d comments, %d shares, %d posts)",
+            self.persona_name,
+            self.stats.sessions,
+            app["name"],
+            num_posts,
+            self.stats.likes,
+            self.stats.comments,
+            self.stats.shares,
+            self.stats.posts,
         )
 
         # Open the app
         await self.adb.wake_and_unlock()
-        await self.adb._run_checked([
-            "shell", "monkey", "-p", app["package"],
-            "-c", "android.intent.category.LAUNCHER", "1",
-        ])
+        await self.adb._run_checked(
+            [
+                "shell",
+                "monkey",
+                "-p",
+                app["package"],
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "1",
+            ]
+        )
         await asyncio.sleep(random.uniform(3, 6))
 
         # Facebook opens with suggested friends / stories at the top — scroll
@@ -1093,7 +1147,9 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
                 logger.info(
                     "[%s] Post %d/%d — %s → %s",
-                    self.persona_name, i + 1, num_posts,
+                    self.persona_name,
+                    i + 1,
+                    num_posts,
                     decision.get("post_summary", "?")[:50],
                     decision.get("action", "scroll"),
                 )
@@ -1107,7 +1163,9 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             except HomeScreenError:
                 logger.warning(
                     "[%s] Post %d/%d — landed on home screen, abandoning task.",
-                    self.persona_name, i + 1, num_posts,
+                    self.persona_name,
+                    i + 1,
+                    num_posts,
                 )
                 # Re-check ADB lock — orchestrator may have grabbed the phone
                 await self._wait_for_adb_lock()
@@ -1116,20 +1174,29 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 if queue_len > 0:
                     logger.info(
                         "[%s] %d task(s) pending in orchestrator queue — pausing 30s to yield phone.",
-                        self.persona_name, queue_len,
+                        self.persona_name,
+                        queue_len,
                     )
                     await asyncio.sleep(30)
                 # Re-open a random social app so the session can continue
                 recovery_app = self._pick_app()
                 logger.info(
                     "[%s] Re-launching %s to recover from home screen.",
-                    self.persona_name, recovery_app["name"],
+                    self.persona_name,
+                    recovery_app["name"],
                 )
                 await self.adb.wake_and_unlock()
-                await self.adb._run_checked([
-                    "shell", "monkey", "-p", recovery_app["package"],
-                    "-c", "android.intent.category.LAUNCHER", "1",
-                ])
+                await self.adb._run_checked(
+                    [
+                        "shell",
+                        "monkey",
+                        "-p",
+                        recovery_app["package"],
+                        "-c",
+                        "android.intent.category.LAUNCHER",
+                        "1",
+                    ]
+                )
                 app = recovery_app
                 await asyncio.sleep(random.uniform(3, 6))
                 continue
@@ -1146,7 +1213,11 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         await self.adb._run_checked(["shell", "input", "keyevent", "3"])
         logger.info(
             "[%s] Session complete — today: %d likes, %d comments, %d shares, %d posts",
-            self.persona_name, self.stats.likes, self.stats.comments, self.stats.shares, self.stats.posts,
+            self.persona_name,
+            self.stats.likes,
+            self.stats.comments,
+            self.stats.shares,
+            self.stats.posts,
         )
 
     async def _wait_for_adb_lock(self, poll_interval: int = 15) -> None:
@@ -1157,7 +1228,9 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 return
             logger.info(
                 "[%s] ADB lock held by '%s' — waiting %ds before retrying.",
-                self.persona_name, locked.decode() if isinstance(locked, bytes) else locked, poll_interval,
+                self.persona_name,
+                locked.decode() if isinstance(locked, bytes) else locked,
+                poll_interval,
             )
             await asyncio.sleep(poll_interval)
 
@@ -1180,9 +1253,11 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 def main():
     """Entry point — reads PERSONA_ID env var to support multiple instances."""
     import argparse
+
     parser = argparse.ArgumentParser(description="OSIA Persona Daemon")
-    parser.add_argument("--persona", default=os.getenv("PERSONA_ID", "1"),
-                        help="Persona ID (reads PERSONA_<id>_* env vars)")
+    parser.add_argument(
+        "--persona", default=os.getenv("PERSONA_ID", "1"), help="Persona ID (reads PERSONA_<id>_* env vars)"
+    )
     args = parser.parse_args()
 
     logging.basicConfig(

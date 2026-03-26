@@ -95,6 +95,7 @@ def _get_redis() -> aioredis.Redis:
 # Middleware — strip server fingerprint
 # ---------------------------------------------------------------------------
 
+
 @app.middleware("http")
 async def _remove_server_header(request: Request, call_next):
     response = await call_next(request)
@@ -106,6 +107,7 @@ async def _remove_server_header(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
+
 
 def _check_auth(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     if not QUEUE_API_TOKEN:
@@ -123,6 +125,7 @@ def _check_auth(request: Request, credentials: HTTPAuthorizationCredentials = De
 # ---------------------------------------------------------------------------
 # Request / response models
 # ---------------------------------------------------------------------------
+
 
 class PushRequest(BaseModel):
     queue: str
@@ -147,6 +150,7 @@ class SeenAddRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
 
 @app.get("/health")
 @limiter.limit("60/minute")

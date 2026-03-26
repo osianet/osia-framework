@@ -76,6 +76,7 @@ MAX_ROUNDS = 6
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ResearchJob:
     job_id: str
@@ -102,6 +103,7 @@ class ResearchJob:
 # ---------------------------------------------------------------------------
 # Queue API client
 # ---------------------------------------------------------------------------
+
 
 class QueueClient:
     def __init__(self, http: httpx.AsyncClient):
@@ -142,6 +144,7 @@ class QueueClient:
 # ---------------------------------------------------------------------------
 # Qdrant client (minimal — just upsert and collection bootstrap)
 # ---------------------------------------------------------------------------
+
 
 class QdrantClient:
     def __init__(self, http: httpx.AsyncClient):
@@ -186,6 +189,7 @@ class QdrantClient:
 # Embedding — uses the same model as AnythingLLM (all-MiniLM-L6-v2 via HF API)
 # ---------------------------------------------------------------------------
 
+
 async def embed_texts(texts: list[str], http: httpx.AsyncClient) -> list[list[float]]:
     """
     Embed a batch of texts using HuggingFace Inference API (all-MiniLM-L6-v2).
@@ -212,6 +216,7 @@ async def embed_texts(texts: list[str], http: httpx.AsyncClient) -> list[list[fl
 # Research tools (direct HTTP, no MCP dependency)
 # ---------------------------------------------------------------------------
 
+
 async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
     if not TAVILY_API_KEY:
         return "Tavily API key not configured."
@@ -224,10 +229,7 @@ async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
         resp.raise_for_status()
         data = resp.json()
         results = data.get("results", [])
-        return "\n\n".join(
-            f"[{r.get('title','')}]({r.get('url','')})\n{r.get('content','')[:500]}"
-            for r in results
-        )
+        return "\n\n".join(f"[{r.get('title', '')}]({r.get('url', '')})\n{r.get('content', '')[:500]}" for r in results)
     except Exception as e:
         return f"Web search error: {e}"
 
@@ -237,8 +239,12 @@ async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
         resp = await http.get(
             "https://en.wikipedia.org/w/api.php",
             params={
-                "action": "query", "list": "search", "srsearch": query,
-                "srlimit": 3, "format": "json", "utf8": 1,
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "srlimit": 3,
+                "format": "json",
+                "utf8": 1,
             },
             timeout=10.0,
         )
@@ -251,8 +257,12 @@ async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
         extract_resp = await http.get(
             "https://en.wikipedia.org/w/api.php",
             params={
-                "action": "query", "prop": "extracts", "exintro": True,
-                "explaintext": True, "titles": title, "format": "json",
+                "action": "query",
+                "prop": "extracts",
+                "exintro": True,
+                "explaintext": True,
+                "titles": title,
+                "format": "json",
             },
             timeout=10.0,
         )
@@ -276,11 +286,12 @@ async def tool_search_arxiv(query: str, http: httpx.AsyncClient) -> str:
         text = resp.text
         results = []
         import re
+
         entries = re.findall(r"<entry>(.*?)</entry>", text, re.DOTALL)
         for entry in entries[:3]:
             title = re.search(r"<title>(.*?)</title>", entry, re.DOTALL)
             summary = re.search(r"<summary>(.*?)</summary>", entry, re.DOTALL)
-            link = re.search(r'<id>(.*?)</id>', entry)
+            link = re.search(r"<id>(.*?)</id>", entry)
             t = title.group(1).strip() if title else "Unknown"
             s = summary.group(1).strip()[:400] if summary else ""
             url = link.group(1).strip() if link else ""
@@ -306,8 +317,7 @@ async def tool_search_semantic_scholar(query: str, http: httpx.AsyncClient) -> s
             authors = ", ".join(a["name"] for a in p.get("authors", [])[:3])
             abstract = (p.get("abstract") or "")[:400]
             results.append(
-                f"**{p.get('title','')}** ({p.get('year','')})\n"
-                f"Authors: {authors}\n{p.get('url','')}\n{abstract}"
+                f"**{p.get('title', '')}** ({p.get('year', '')})\nAuthors: {authors}\n{p.get('url', '')}\n{abstract}"
             )
         return "\n\n---\n\n".join(results)
     except Exception as e:
@@ -324,50 +334,53 @@ TOOL_REGISTRY = {
 
 # Gemini function declarations for the research loop
 RESEARCH_TOOLS = [
-    types.Tool(function_declarations=[
-        types.FunctionDeclaration(
-            name="search_web",
-            description="Search the live web for current events, news, and real-time information.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={"query": types.Schema(type="STRING", description="Search query")},
-                required=["query"],
+    types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name="search_web",
+                description="Search the live web for current events, news, and real-time information.",
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={"query": types.Schema(type="STRING", description="Search query")},
+                    required=["query"],
+                ),
             ),
-        ),
-        types.FunctionDeclaration(
-            name="search_wikipedia",
-            description="Search Wikipedia for factual background and context.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={"query": types.Schema(type="STRING", description="Search term")},
-                required=["query"],
+            types.FunctionDeclaration(
+                name="search_wikipedia",
+                description="Search Wikipedia for factual background and context.",
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={"query": types.Schema(type="STRING", description="Search term")},
+                    required=["query"],
+                ),
             ),
-        ),
-        types.FunctionDeclaration(
-            name="search_arxiv",
-            description="Search ArXiv for academic papers and technical pre-prints.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={"query": types.Schema(type="STRING", description="Academic search query")},
-                required=["query"],
+            types.FunctionDeclaration(
+                name="search_arxiv",
+                description="Search ArXiv for academic papers and technical pre-prints.",
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={"query": types.Schema(type="STRING", description="Academic search query")},
+                    required=["query"],
+                ),
             ),
-        ),
-        types.FunctionDeclaration(
-            name="search_semantic_scholar",
-            description="Search Semantic Scholar for peer-reviewed scientific literature.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={"query": types.Schema(type="STRING", description="Scientific search query")},
-                required=["query"],
+            types.FunctionDeclaration(
+                name="search_semantic_scholar",
+                description="Search Semantic Scholar for peer-reviewed scientific literature.",
+                parameters=types.Schema(
+                    type="OBJECT",
+                    properties={"query": types.Schema(type="STRING", description="Scientific search query")},
+                    required=["query"],
+                ),
             ),
-        ),
-    ])
+        ]
+    )
 ]
 
 
 # ---------------------------------------------------------------------------
 # Research loop
 # ---------------------------------------------------------------------------
+
 
 async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
     """
@@ -376,10 +389,14 @@ async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
     gemini = genai.Client(api_key=GEMINI_API_KEY)
 
     directives_note = (
-        "\n\nAnalytical lens: Apply a decolonial and socialist materialist perspective. "
-        "Prioritize labor rights, anti-imperialism, ecological impact, and data sovereignty. "
-        "Avoid Washington Consensus framing."
-    ) if job.directives_lens else ""
+        (
+            "\n\nAnalytical lens: Apply a decolonial and socialist materialist perspective. "
+            "Prioritize labor rights, anti-imperialism, ecological impact, and data sovereignty. "
+            "Avoid Washington Consensus framing."
+        )
+        if job.directives_lens
+        else ""
+    )
 
     system_prompt = (
         f"You are an OSINT research analyst for the {job.desk}. "
@@ -430,10 +447,12 @@ async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
                 result_text = f"Unknown tool: {call.name}"
 
             response_parts.append(
-                types.Part(function_response=types.FunctionResponse(
-                    name=call.name,
-                    response={"result": result_text},
-                ))
+                types.Part(
+                    function_response=types.FunctionResponse(
+                        name=call.name,
+                        response={"result": result_text},
+                    )
+                )
             )
 
         contents.append(types.Content(role="user", parts=response_parts))
@@ -448,6 +467,7 @@ async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
 # Chunking and storage
 # ---------------------------------------------------------------------------
 
+
 def _chunk_text(text: str, chunk_words: int = CHUNK_SIZE) -> list[str]:
     """Split text into overlapping word-count chunks."""
     words = text.split()
@@ -455,7 +475,7 @@ def _chunk_text(text: str, chunk_words: int = CHUNK_SIZE) -> list[str]:
     overlap = chunk_words // 5  # 20% overlap
     step = chunk_words - overlap
     for i in range(0, len(words), step):
-        chunk = " ".join(words[i: i + chunk_words])
+        chunk = " ".join(words[i : i + chunk_words])
         if chunk:
             chunks.append(chunk)
     return chunks
@@ -476,21 +496,23 @@ async def store_research(job: ResearchJob, research_text: str, http: httpx.Async
     for i, (chunk, vector) in enumerate(zip(chunks, embeddings, strict=False)):
         # Deterministic ID from job_id + chunk index — md5 is fine here (not security-sensitive)
         point_id = int(hashlib.md5(f"{job.job_id}:{i}".encode()).hexdigest()[:8], 16)  # noqa: S324
-        points.append({
-            "id": point_id,
-            "vector": vector,
-            "payload": {
-                "text": chunk,
-                "topic": job.topic,
-                "desk": job.desk,
-                "job_id": job.job_id,
-                "chunk_index": i,
-                "total_chunks": len(chunks),
-                "triggered_by": job.triggered_by,
-                "collected_at": now,
-                "source": "research_worker",
-            },
-        })
+        points.append(
+            {
+                "id": point_id,
+                "vector": vector,
+                "payload": {
+                    "text": chunk,
+                    "topic": job.topic,
+                    "desk": job.desk,
+                    "job_id": job.job_id,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "triggered_by": job.triggered_by,
+                    "collected_at": now,
+                    "source": "research_worker",
+                },
+            }
+        )
 
     await qdrant.upsert_points(points)
     logger.info("Stored %d chunks for topic: %s", len(points), job.topic)
@@ -499,6 +521,7 @@ async def store_research(job: ResearchJob, research_text: str, http: httpx.Async
 # ---------------------------------------------------------------------------
 # Main worker loop
 # ---------------------------------------------------------------------------
+
 
 async def worker_loop():
     logger.info("OSIA Research Worker starting up...")

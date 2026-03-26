@@ -47,6 +47,7 @@ class HomeScreenError(Exception):
 @dataclass
 class ScreenState:
     """Snapshot of what the agent currently sees."""
+
     screenshot_path: str
     description: str = ""
     elements: list[dict] = field(default_factory=list)
@@ -55,6 +56,7 @@ class ScreenState:
 @dataclass
 class ActionResult:
     """Outcome of a high-level agent action."""
+
     success: bool
     data: str = ""
     error: str = ""
@@ -81,9 +83,7 @@ class SocialMediaAgent:
         self.adb = adb
         self.gemini = gemini_client
         self.model_id = model_id
-        self.base_dir = Path(base_dir or os.getenv(
-            "OSIA_BASE_DIR", Path(__file__).resolve().parent.parent.parent
-        ))
+        self.base_dir = Path(base_dir or os.getenv("OSIA_BASE_DIR", Path(__file__).resolve().parent.parent.parent))
         self._scratch_dir = self.base_dir / "tmp" / "social_agent"
         self._scratch_dir.mkdir(parents=True, exist_ok=True)
         # Cached screen dimensions — fetched lazily on first use
@@ -226,7 +226,10 @@ Rules:
             if swipe:
                 logger.info("Swiping — %s", action.get("reasoning", ""))
                 await self.adb.swipe(
-                    swipe["x1"], swipe["y1"], swipe["x2"], swipe["y2"],
+                    swipe["x1"],
+                    swipe["y1"],
+                    swipe["x2"],
+                    swipe["y2"],
                 )
             else:
                 # Fallback: generic scroll in the center of the screen
@@ -293,7 +296,8 @@ Rules:
 
             logger.info(
                 "Step %d/%d — screen: %s | action: %s",
-                step + 1, _MAX_STEPS,
+                step + 1,
+                _MAX_STEPS,
                 description[:80],
                 action,
             )
@@ -319,7 +323,10 @@ Rules:
                 if back_presses < _MAX_BACK_PRESSES:
                     logger.warning(
                         "Agent stuck (action=%s, stuck_count=%d) — pressing back button (attempt %d/%d)",
-                        action, stuck_count, back_presses + 1, _MAX_BACK_PRESSES,
+                        action,
+                        stuck_count,
+                        back_presses + 1,
+                        _MAX_BACK_PRESSES,
                     )
                     await self.adb.press_back()
                     await asyncio.sleep(1)
@@ -381,15 +388,13 @@ Rules:
             f"Use 'tap_and_type' to tap the CENTER of that input field and type the comment. "
             f"Do NOT tap anywhere in the post image or content area above the comment bar. "
             f"After typing, tap the Post/Send button to submit.\n\n"
-            f"Comment to post: \"{comment_text}\"\n\n"
+            f'Comment to post: "{comment_text}"\n\n'
             f"Once the comment is successfully posted (you can see it appear in the list), use 'done'. "
             f"If the comment fails to post, use 'fail' with the reason."
         )
         return await self._run_goal(goal, pre_url=post_url)
 
-    async def reply_to_comment(
-        self, post_url: str, target_author: str, reply_text: str
-    ) -> ActionResult:
+    async def reply_to_comment(self, post_url: str, target_author: str, reply_text: str) -> ActionResult:
         """
         Navigate to a post, find a specific comment by author, and reply to it.
 
@@ -407,7 +412,7 @@ Rules:
             f"Tap the Reply button on that specific comment — it is a small text link below the comment, NOT in the post image area. "
             f"The reply input field will appear near the BOTTOM of the screen. "
             f"Use 'tap_and_type' to tap the CENTER of the reply input field and type the reply, then submit it:\n\n"
-            f"Reply: \"{reply_text}\"\n\n"
+            f'Reply: "{reply_text}"\n\n'
             f"Once the reply is posted, use 'done'. "
             f"If you cannot find the comment by '{target_author}', scroll down to look for it. "
             f"If still not found after scrolling, use 'fail'."
@@ -459,60 +464,65 @@ Rules:
         return await self._run_goal(instruction, pre_url=url if url else None)
 
     async def generate_infographic_via_phone(self, image_prompt: str) -> bytes | None:
-            """
-            Fallback infographic generator: drives the Gemini Android app via ADB
-            to produce an image when the Gemini API is over capacity.
+        """
+        Fallback infographic generator: drives the Gemini Android app via ADB
+        to produce an image when the Gemini API is over capacity.
 
-            Opens the Gemini app, submits the image prompt, waits for generation,
-            screenshots the result, and returns the PNG bytes.
-            Returns None if the flow fails.
-            """
-            GEMINI_APP = "com.google.android.apps.bard"
-            logger.info("Infographic API unavailable — falling back to Gemini phone app.")
+        Opens the Gemini app, submits the image prompt, waits for generation,
+        screenshots the result, and returns the PNG bytes.
+        Returns None if the flow fails.
+        """
+        GEMINI_APP = "com.google.android.apps.bard"
+        logger.info("Infographic API unavailable — falling back to Gemini phone app.")
 
-            # Launch the Gemini app fresh
-            await self.adb.wake_and_unlock()
-            await self.adb._run_checked([
-                "shell", "am", "start", "-n",
+        # Launch the Gemini app fresh
+        await self.adb.wake_and_unlock()
+        await self.adb._run_checked(
+            [
+                "shell",
+                "am",
+                "start",
+                "-n",
                 f"{GEMINI_APP}/com.google.android.apps.bard.ui.BardActivity",
-            ])
-            await asyncio.sleep(3)
+            ]
+        )
+        await asyncio.sleep(3)
 
-            # Use the vision loop to navigate to a new chat and submit the prompt
-            setup_result = await self._run_goal(
-                goal=(
-                    "Open a new chat if one is not already open. "
-                    "Tap the message input field, type the following prompt exactly, "
-                    "then tap the send button. "
-                    f"PROMPT: {image_prompt[:800]}"
-                )
+        # Use the vision loop to navigate to a new chat and submit the prompt
+        setup_result = await self._run_goal(
+            goal=(
+                "Open a new chat if one is not already open. "
+                "Tap the message input field, type the following prompt exactly, "
+                "then tap the send button. "
+                f"PROMPT: {image_prompt[:800]}"
             )
+        )
 
-            if not setup_result.success:
-                logger.warning("Phone Gemini prompt submission failed: %s", setup_result.error)
-                return None
+        if not setup_result.success:
+            logger.warning("Phone Gemini prompt submission failed: %s", setup_result.error)
+            return None
 
-            # Wait for image generation — Gemini app typically takes 10–30s
-            logger.info("Waiting for Gemini app to generate image...")
-            await asyncio.sleep(20)
+        # Wait for image generation — Gemini app typically takes 10–30s
+        logger.info("Waiting for Gemini app to generate image...")
+        await asyncio.sleep(20)
 
-            # Use the vision loop to confirm the image is visible and capture it
-            confirm_result = await self._run_goal(
-                goal=(
-                    "An AI-generated image should now be visible in the chat. "
-                    "If it is still loading, wait and check again. "
-                    "Once the image is fully rendered, report done. "
-                    "If an error message is shown instead, report fail."
-                )
+        # Use the vision loop to confirm the image is visible and capture it
+        confirm_result = await self._run_goal(
+            goal=(
+                "An AI-generated image should now be visible in the chat. "
+                "If it is still loading, wait and check again. "
+                "Once the image is fully rendered, report done. "
+                "If an error message is shown instead, report fail."
             )
+        )
 
-            if not confirm_result.success:
-                logger.warning("Gemini app did not produce an image: %s", confirm_result.error)
-                return None
+        if not confirm_result.success:
+            logger.warning("Gemini app did not produce an image: %s", confirm_result.error)
+            return None
 
-            # Take a final clean screenshot and return the raw PNG bytes
-            screenshot_path = str(self._scratch_dir / "infographic_capture.png")
-            await self.adb.take_screenshot(screenshot_path)
+        # Take a final clean screenshot and return the raw PNG bytes
+        screenshot_path = str(self._scratch_dir / "infographic_capture.png")
+        await self.adb.take_screenshot(screenshot_path)
 
-            with open(screenshot_path, "rb") as f:
-                return f.read()
+        with open(screenshot_path, "rb") as f:
+            return f.read()

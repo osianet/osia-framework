@@ -25,6 +25,7 @@ mcp_args = args.remainder or []
 mcp_server = Server(args.name)
 sse_transport = SseServerTransport("/messages")
 
+
 @mcp_server.list_tools()
 async def handle_list_tools():
     """Proxies the tool list from the underlying STDIO server."""
@@ -32,6 +33,7 @@ async def handle_list_tools():
         async with ClientSession(read, write) as session:
             await session.initialize()
             return await session.list_tools()
+
 
 @mcp_server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None):
@@ -41,20 +43,22 @@ async def handle_call_tool(name: str, arguments: dict | None):
             await session.initialize()
             return await session.call_tool(name, arguments)
 
+
 app = FastAPI(title=f"OSIA Bridge: {args.name}")
+
 
 @app.get("/sse")
 async def sse(request: Request):
     async with sse_transport.connect_scope(request.scope, request.receive, request.send):
         await mcp_server.run(
-            sse_transport.read_socket,
-            sse_transport.write_socket,
-            mcp_server.create_initialization_options()
+            sse_transport.read_socket, sse_transport.write_socket, mcp_server.create_initialization_options()
         )
+
 
 @app.post("/messages")
 async def messages(request: Request):
     await sse_transport.handle_post_request(request.scope, request.receive, request.send)
+
 
 if __name__ == "__main__":
     # Configure the underlying STDIO server parameters
@@ -62,11 +66,7 @@ if __name__ == "__main__":
     if args.env_path:
         env["PYTHONPATH"] = args.env_path
 
-    server_params = StdioServerParameters(
-        command=args.command,
-        args=mcp_args,
-        env=env
-    )
+    server_params = StdioServerParameters(command=args.command, args=mcp_args, env=env)
 
     print(f"[*] OSIA: Bridging {args.name} (stdio) to SSE on port {args.port}...")
     uvicorn.run(app, host="0.0.0.0", port=args.port)

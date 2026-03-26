@@ -85,9 +85,15 @@ class HFEndpointManager:
                         return True
                 except (httpx.ConnectError, httpx.ReadTimeout):
                     pass
-                logger.debug("Endpoint '%s' not yet serving, retrying in %ds...", endpoint_name, READINESS_PROBE_INTERVAL)
+                logger.debug(
+                    "Endpoint '%s' not yet serving, retrying in %ds...", endpoint_name, READINESS_PROBE_INTERVAL
+                )
                 await asyncio.sleep(READINESS_PROBE_INTERVAL)
-        logger.error("Endpoint '%s' reported running but model never became ready within %ds", endpoint_name, READINESS_PROBE_TIMEOUT)
+        logger.error(
+            "Endpoint '%s' reported running but model never became ready within %ds",
+            endpoint_name,
+            READINESS_PROBE_TIMEOUT,
+        )
         return False
 
     def _wake_and_wait(self, endpoint_name: str) -> str | None:

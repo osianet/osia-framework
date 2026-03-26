@@ -6,11 +6,11 @@ import httpx
 from dotenv import load_dotenv
 from google import genai
 
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # Load .env file
-load_dotenv(Path(__file__).parent.parent / '.env')
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 ANYTHINGLLM_BASE_URL = os.getenv("ANYTHINGLLM_BASE_URL", "http://localhost:3001")
 ANYTHINGLLM_API_KEY = os.getenv("ANYTHINGLLM_API_KEY")
@@ -38,75 +38,81 @@ DESK_MODELS = {
         "chatModel": "NousResearch/Hermes-3-Llama-3.1-70B",
         "agentProvider": "generic-openai",
         "agentModel": "NousResearch/Hermes-3-Llama-3.1-70B",
-        "vectorTag": "cyber_intel"
-    } if os.getenv("HF_ENDPOINT_HERMES_70B") else {
+        "vectorTag": "cyber_intel",
+    }
+    if os.getenv("HF_ENDPOINT_HERMES_70B")
+    else {
         "chatProvider": "anthropic",
         "chatModel": "claude-sonnet-4-6",
         "agentProvider": "anthropic",
         "agentModel": "claude-sonnet-4-6",
-        "vectorTag": "cyber_intel"
+        "vectorTag": "cyber_intel",
     },
     "geopolitical-and-security-desk": {
         "chatProvider": "gemini",
         "chatModel": "gemini-3-flash",
         "agentProvider": "gemini",
         "agentModel": "gemini-3-flash",
-        "vectorTag": "geopolitical_intel"
+        "vectorTag": "geopolitical_intel",
     },
     "cultural-and-theological-intelligence-desk": {
         "chatProvider": "generic-openai",
         "chatModel": "cognitivecomputations/Dolphin3.0-R1-Mistral-24B",
         "agentProvider": "generic-openai",
         "agentModel": "cognitivecomputations/Dolphin3.0-R1-Mistral-24B",
-        "vectorTag": "cultural_intel"
-    } if os.getenv("HF_ENDPOINT_DOLPHIN_24B") else {
+        "vectorTag": "cultural_intel",
+    }
+    if os.getenv("HF_ENDPOINT_DOLPHIN_24B")
+    else {
         "chatProvider": "gemini",
         "chatModel": "gemini-3-flash",
         "agentProvider": "gemini",
         "agentModel": "gemini-3-flash",
-        "vectorTag": "cultural_intel"
+        "vectorTag": "cultural_intel",
     },
     "science-technology-and-commercial-desk": {
         "chatProvider": "anthropic",
         "chatModel": "claude-sonnet-4-6",
         "agentProvider": "anthropic",
         "agentModel": "claude-sonnet-4-6",
-        "vectorTag": "science_intel"
+        "vectorTag": "science_intel",
     },
     "human-intelligence-and-profiling-desk": {
         "chatProvider": "generic-openai",
         "chatModel": "cognitivecomputations/Dolphin3.0-R1-Mistral-24B",
         "agentProvider": "generic-openai",
         "agentModel": "cognitivecomputations/Dolphin3.0-R1-Mistral-24B",
-        "vectorTag": "human_intel"
-    } if os.getenv("HF_ENDPOINT_DOLPHIN_24B") else {
+        "vectorTag": "human_intel",
+    }
+    if os.getenv("HF_ENDPOINT_DOLPHIN_24B")
+    else {
         "chatProvider": "ollama",
         "chatModel": "nchapman/dolphin3.0-llama3:latest",
         "agentProvider": "ollama",
         "agentModel": "nchapman/dolphin3.0-llama3:latest",
-        "vectorTag": "human_intel"
+        "vectorTag": "human_intel",
     },
     "finance-and-economics-directorate": {
         "chatProvider": "openai",
         "chatModel": "gpt-5.4-mini",
         "agentProvider": "openai",
         "agentModel": "gpt-5.4-mini",
-        "vectorTag": "finance_intel"
+        "vectorTag": "finance_intel",
     },
     "the-watch-floor": {
         "chatProvider": "gemini",
         "chatModel": "gemini-3.1-pro-preview",
         "agentProvider": "gemini",
         "agentModel": "gemini-3.1-pro-preview",
-        "vectorTag": "watch_floor"
+        "vectorTag": "watch_floor",
     },
     "collection-directorate": {
         "chatProvider": "generic-openai",
         "chatModel": "Pleias-RAG-350M",
         "agentProvider": "generic-openai",
         "agentModel": "Pleias-RAG-350M",
-        "vectorTag": "collection_raw"
-    }
+        "vectorTag": "collection_raw",
+    },
 }
 
 # Apply HF URLs if they exist
@@ -118,6 +124,7 @@ if os.getenv("HF_ENDPOINT_DOLPHIN_24B"):
     url = os.getenv("HF_ENDPOINT_DOLPHIN_24B").rstrip("/") + "/v1"
     DESK_MODELS["human-intelligence-and-profiling-desk"]["basePath"] = url
     DESK_MODELS["cultural-and-theological-intelligence-desk"]["basePath"] = url
+
 
 def generate_prompt(template: str, directives: str) -> str:
     prompt = f"""You are an expert system prompt engineer for an AI system called OSIA.
@@ -142,9 +149,11 @@ Rules:
     )
     return response.text.strip()
 
+
 def activate_global_skills():
     """Update AnythingLLM sqlite to ensure all custom skills are loaded into default_agent_skills"""
     import sqlite3
+
     db_path = "/home/ubuntu/osia-knowledge-base/anythingllm.db"
 
     if not os.path.exists(db_path):
@@ -170,6 +179,7 @@ def activate_global_skills():
     except Exception as e:
         logger.error(f"Failed to activate custom skills in db: {e}")
 
+
 def main():
     if not DIRECTIVES_PATH.exists():
         logger.error(f"Directives file not found at {DIRECTIVES_PATH}")
@@ -180,10 +190,7 @@ def main():
 
     directives = DIRECTIVES_PATH.read_text()
 
-    headers = {
-        "Authorization": f"Bearer {ANYTHINGLLM_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {ANYTHINGLLM_API_KEY}", "Content-Type": "application/json"}
 
     # Fetch workspaces
     workspaces_url = f"{ANYTHINGLLM_BASE_URL.rstrip('/')}/api/v1/workspaces"
@@ -231,6 +238,7 @@ def main():
 
         except Exception as e:
             logger.error(f"Failed to push updates for {slug}: {e}")
+
 
 if __name__ == "__main__":
     main()

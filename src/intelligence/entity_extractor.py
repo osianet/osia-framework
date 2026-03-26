@@ -55,8 +55,8 @@ ENTITY_DESK_ROUTING: dict[str, str] = {
 @dataclass
 class Entity:
     name: str
-    entity_type: str    # "Person" | "Organisation" | "Location" | "Event" | "Technology"
-    context: str        # sentence/phrase where entity appeared
+    entity_type: str  # "Person" | "Organisation" | "Location" | "Event" | "Technology"
+    context: str  # sentence/phrase where entity appeared
     source_desk: str
 
 
@@ -126,10 +126,7 @@ class EntityExtractor:
         # Strip markdown code fences if present
         if raw.startswith("```"):
             lines = raw.splitlines()
-            raw = "\n".join(
-                line for line in lines
-                if not line.startswith("```")
-            ).strip()
+            raw = "\n".join(line for line in lines if not line.startswith("```")).strip()
 
         try:
             data = json.loads(raw)
@@ -160,12 +157,14 @@ class EntityExtractor:
             if not name or entity_type not in ENTITY_DESK_ROUTING:
                 continue
 
-            entities.append(Entity(
-                name=name,
-                entity_type=entity_type,
-                context=context,
-                source_desk=source_desk,
-            ))
+            entities.append(
+                Entity(
+                    name=name,
+                    entity_type=entity_type,
+                    context=context,
+                    source_desk=source_desk,
+                )
+            )
 
         logger.info(
             "Extracted %d entities from %d chars of text (desk: %s)",
@@ -204,14 +203,16 @@ class EntityExtractor:
                     continue
 
                 desk = ENTITY_DESK_ROUTING[entity.entity_type]
-                payload = json.dumps({
-                    "job_id": str(uuid.uuid4()),
-                    "topic": entity.name,
-                    "desk": desk,
-                    "priority": "normal",
-                    "directives_lens": True,
-                    "triggered_by": triggered_by,
-                })
+                payload = json.dumps(
+                    {
+                        "job_id": str(uuid.uuid4()),
+                        "topic": entity.name,
+                        "desk": desk,
+                        "priority": "normal",
+                        "directives_lens": True,
+                        "triggered_by": triggered_by,
+                    }
+                )
 
                 await redis.rpush(RESEARCH_QUEUE_KEY, payload)
                 await redis.sadd(SEEN_TOPICS_KEY, normalised)
