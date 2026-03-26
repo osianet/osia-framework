@@ -1,0 +1,33 @@
+slug: science-technology-and-commercial-desk
+name: "Science, Technology & Commercial Desk"
+prompt_file: templates/prompts/science-technology-and-commercial-desk.txt
+
+model:
+  primary:
+    provider: anthropic
+    model_id: claude-sonnet-4-6
+    temperature: 0.3
+    max_tokens: 8192
+  fallback:
+    provider: gemini
+    model_id: gemini-3-flash
+    temperature: 0.3
+    max_tokens: 8192
+
+qdrant:
+  collection: science_intel
+  context_top_k: 5
+  cross_desk_search: true
+  cross_desk_top_k: 3
+
+tools:
+  - search_web
+  - search_arxiv
+  - search_semantic_scholar
+
+mcp_servers:
+  - tavily
+  - arxiv
+  - semantic-scholar
+
+entity_research_target: true

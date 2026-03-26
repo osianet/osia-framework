@@ -1,0 +1,32 @@
+slug: cyber-intelligence-and-warfare-desk
+name: "Cyber Intelligence & Warfare Desk"
+prompt_file: templates/prompts/cyber-intelligence-and-warfare-desk.txt
+
+model:
+  primary:
+    provider: hf_endpoint
+    model_id: Hermes-3-Llama-3.1-70B
+    hf_endpoint_name: osia-hermes-70b
+    temperature: 0.4
+    max_tokens: 4096
+  fallback:
+    provider: gemini
+    model_id: gemini-3-flash
+    temperature: 0.3
+    max_tokens: 4096
+
+qdrant:
+  collection: cyber_intel
+  context_top_k: 5
+  cross_desk_search: true
+  cross_desk_top_k: 3
+
+tools:
+  - search_web
+  - search_arxiv
+
+mcp_servers:
+  - tavily
+  - arxiv
+
+entity_research_target: true

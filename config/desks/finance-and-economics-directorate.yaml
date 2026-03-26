@@ -1,0 +1,31 @@
+slug: finance-and-economics-directorate
+name: "Finance & Economics Directorate"
+prompt_file: templates/prompts/finance-and-economics-directorate.txt
+
+model:
+  primary:
+    provider: openai
+    model_id: gpt-5.4-mini
+    temperature: 0.3
+    max_tokens: 8192
+  fallback:
+    provider: gemini
+    model_id: gemini-3-flash
+    temperature: 0.3
+    max_tokens: 8192
+
+qdrant:
+  collection: finance_intel
+  context_top_k: 5
+  cross_desk_search: true
+  cross_desk_top_k: 3
+
+tools:
+  - search_web
+  - search_wikipedia
+
+mcp_servers:
+  - tavily
+  - wikipedia
+
+entity_research_target: true
