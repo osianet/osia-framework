@@ -412,9 +412,15 @@ async def run_research_loop(
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            # Log the full response body so we can diagnose 422s etc.
+            logger.error(
+                "Endpoint HTTP %d on round %d — body: %s",
+                status, round_num, e.response.text[:1000],
+            )
             # 503 = model still cold-starting, retry
-            if e.response.status_code == 503:
-                logger.warning("Endpoint 503 on round %d, retrying in 15s...", round_num)
+            if status == 503:
+                logger.warning("Retrying in 15s...")
                 await asyncio.sleep(15)
                 continue
             raise
