@@ -51,6 +51,13 @@ if ! $HF_CLI --version &>/dev/null; then
     exit 1
 fi
 
+echo -e "${YELLOW}Ensuring HF dataset repo exists: ${REPO}${NC}"
+if ! HF_TOKEN="$HF_TOKEN" $HF_CLI repo create osia-jobs --type dataset --private 2>/dev/null; then
+    echo -e "  ${GREEN}OK${NC}    repo already exists"
+else
+    echo -e "  ${GREEN}OK${NC}    repo created"
+fi
+echo ""
 echo -e "${YELLOW}Syncing secrets to HF dataset repo: ${REPO}${NC}"
 echo ""
 
