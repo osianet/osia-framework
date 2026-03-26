@@ -25,22 +25,23 @@ jobs:
           python-version-file: ".python-version"
 
       # --frozen ensures uv.lock is the source of truth — fails if lock is stale
+      # --extra dev installs ruff, pyright, pytest, hypothesis
       - name: Install dependencies
-        run: uv sync --frozen --all-extras
+        run: uv sync --frozen --extra dev
 
       - name: Lint with ruff
-        run: uv run ruff check src/ scripts/ hf-spaces/
+        run: uv run --extra dev ruff check src/ scripts/ hf-spaces/
 
       - name: Format check with ruff
-        run: uv run ruff format --check src/ scripts/ hf-spaces/
+        run: uv run --extra dev ruff format --check src/ scripts/ hf-spaces/
 
       # Informational only until type coverage improves — won't block merges
       - name: Type check with pyright
-        run: uv run pyright src/
+        run: uv run --extra dev pyright src/
         continue-on-error: true
 
       - name: Run tests
-        run: uv run pytest --tb=short -q
+        run: uv run --extra dev pytest --tb=short -q
         env:
           # Dummy values so modules that read env at import time don't crash
           GEMINI_API_KEY: dummy
