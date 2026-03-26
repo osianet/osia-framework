@@ -54,7 +54,7 @@ BOOTSTRAP_COLLECTIONS = [
     "cyber_intel",
     "watch_floor",
     "collection_raw",
-    "osia:research_cache",
+    # NOTE: osia:research_cache excluded — managed by research worker, colon invalid in qdrant-client SDK
 ]
 
 
