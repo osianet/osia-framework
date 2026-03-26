@@ -33,9 +33,7 @@ logger = logging.getLogger("osia.qdrant_store")
 
 EMBEDDING_DIM = 384
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-HF_EMBEDDING_URL = (
-    "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
-)
+HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 
 # All desk collections + research cache — used by cross_desk_search
 DESK_COLLECTIONS: list[str] = [
