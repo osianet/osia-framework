@@ -8,13 +8,17 @@ import redis.asyncio as redis
 from bs4 import BeautifulSoup
 from google import genai
 from dotenv import load_dotenv
-from src.desks.anythingllm_client import AnythingLLMDesk
+from src.intelligence.qdrant_store import QdrantStore
+from src.intelligence.entity_extractor import EntityExtractor
 
 logger = logging.getLogger("osia.rss")
 
 # Redis keys
 SEEN_KEY = "osia:rss:seen_links"
 DAILY_DIGEST_KEY = "osia:rss:daily_digest"  # list of summaries collected today
+
+qdrant_store = QdrantStore()
+entity_extractor = EntityExtractor()
 
 
 class RSSIngress:
@@ -23,7 +27,6 @@ class RSSIngress:
         self.redis = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
         self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
-        self.desk_client = AnythingLLMDesk()
         base_dir = Path(os.getenv("OSIA_BASE_DIR", Path(__file__).resolve().parent.parent.parent))
         self.feeds_file = base_dir / "config" / "feeds.txt"
 
@@ -37,7 +40,7 @@ class RSSIngress:
     async def process_feeds(self) -> int:
         """
         Poll all RSS feeds, summarize new articles, ingest into the Collection
-        Directorate, and stage summaries in Redis for the daily SITREP.
+        Directorate via Qdrant, and stage summaries in Redis for the daily SITREP.
 
         Returns the number of new articles processed.
         """
@@ -108,21 +111,38 @@ class RSSIngress:
                         f"{ai_summary}"
                     )
 
-                    # 1. Ingest into AnythingLLM Collection Directorate (long-term vector store)
+                    # 1. Extract entities from the summary
                     try:
-                        safe_title = (title[:50] + "...") if len(title) > 50 else title
-                        await self.desk_client.ingest_raw_data(
-                            workspace_slug="collection-directorate",
-                            text_content=intel_record,
-                            title=f"RSS: {safe_title}",
+                        entities = await entity_extractor.extract(ai_summary, "collection-directorate")
+                    except Exception as e:
+                        logger.warning("Entity extraction failed for '%s': %s", title, e)
+                        entities = []
+
+                    # 2. Enqueue research jobs for extracted entities
+                    await entity_extractor.enqueue_research_jobs(entities, triggered_by=url)
+
+                    # 3. Upsert into Qdrant collection_raw (long-term vector store)
+                    try:
+                        await qdrant_store.upsert(
+                            "collection_raw",
+                            intel_record,
+                            metadata={
+                                "desk": "collection-directorate",
+                                "topic": title,
+                                "source": url,
+                                "reliability_tier": "B",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "entity_tags": [e.name for e in entities],
+                                "triggered_by": "rss_ingress",
+                            },
                         )
                     except Exception as e:
-                        logger.error("AnythingLLM ingestion failed for '%s': %s", title, e)
+                        logger.error("Qdrant upsert failed for '%s': %s", title, e)
 
-                    # 2. Stage in Redis daily digest (consumed by SITREP generator)
+                    # 4. Stage in Redis daily digest (consumed by SITREP generator)
                     await self.redis.rpush(DAILY_DIGEST_KEY, intel_record)
 
-                    # 3. Mark as seen
+                    # 5. Mark as seen
                     await self.redis.sadd(SEEN_KEY, link)
                     new_count += 1
 
@@ -130,7 +150,6 @@ class RSSIngress:
                 logger.error("Failed to process feed %s: %s", url, e)
 
         logger.info("RSS scan complete. %d new articles processed.", new_count)
-        await self.desk_client.close()
         return new_count
 
 

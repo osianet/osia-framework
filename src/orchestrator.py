@@ -6,15 +6,18 @@ import logging
 import subprocess
 from pathlib import Path
 import httpx
+import yaml
 import redis.asyncio as redis
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from src.desks.anythingllm_client import AnythingLLMDesk
+from src.desks.desk_registry import DeskRegistry
 from src.desks.hf_endpoint_manager import HFEndpointManager
 from src.gateways.adb_device import ADBDevice
 from src.gateways.mcp_dispatcher import MCPDispatcher
 from src.agents.social_media_agent import SocialMediaAgent
+from src.intelligence.qdrant_store import QdrantStore
+from src.intelligence.entity_extractor import EntityExtractor
 from src.intelligence.source_tracker import (
     SourceTracker,
     build_citation_protocol,
@@ -34,21 +37,39 @@ def _extract_mcp_text(result) -> str:
         )
     return str(result)
 
+
 # Domains that trigger the ADB media-capture pipeline
 MEDIA_DOMAINS = ("instagram.com", "facebook.com", "tiktok.com")
 
 # YouTube domains get transcript extraction instead of ADB screen-record
 YOUTUBE_DOMAINS = ("youtube.com", "youtu.be")
 
-# Valid desk slugs the Chief of Staff can route to
-VALID_DESKS = {
-    "geopolitical-and-security-desk",
-    "cultural-and-theological-intelligence-desk",
-    "science-technology-and-commercial-desk",
-    "human-intelligence-and-profiling-desk",
-    "finance-and-economics-directorate",
-    "cyber-intelligence-and-warfare-desk",
-}
+# Qdrant collections bootstrapped at startup
+BOOTSTRAP_COLLECTIONS = [
+    "geopolitical_intel",
+    "cultural_intel",
+    "science_intel",
+    "human_intel",
+    "finance_intel",
+    "cyber_intel",
+    "watch_floor",
+    "collection_raw",
+    "osia:research_cache",
+]
+
+
+def _load_default_desk(base_dir: Path) -> str:
+    """Load default_desk from config/osia.yaml, falling back to the-watch-floor."""
+    config_path = base_dir / "config" / "osia.yaml"
+    try:
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        return cfg.get("default_desk", "the-watch-floor")
+    except FileNotFoundError:
+        return "the-watch-floor"
+    except Exception as e:
+        logger.warning("Failed to load config/osia.yaml: %s — using default desk", e)
+        return "the-watch-floor"
 
 
 class OsiaOrchestrator:
@@ -74,8 +95,18 @@ class OsiaOrchestrator:
         self.client = genai.Client(api_key=api_key)
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
 
-        # API Clients
-        self.desk_client = AnythingLLMDesk()
+        # New architecture: DeskRegistry, QdrantStore, EntityExtractor
+        self.desk_registry = DeskRegistry()
+        self.qdrant = QdrantStore()
+        self.entity_extractor = EntityExtractor()
+
+        # Populate valid desks dynamically from registry
+        self.valid_desks: set[str] = set(self.desk_registry.list_slugs())
+
+        # Load default desk from config/osia.yaml
+        self.default_desk = _load_default_desk(self.base_dir)
+
+        # Other infrastructure
         self.hf_endpoints = HFEndpointManager()
         self.adb = ADBDevice(device_id=os.getenv("ADB_DEVICE_MEDIA_INTERCEPT"))
         self.mcp = MCPDispatcher()
@@ -196,13 +227,28 @@ class OsiaOrchestrator:
         ]
 
     # ------------------------------------------------------------------
+    # Startup bootstrap
+    # ------------------------------------------------------------------
+
+    async def bootstrap(self) -> None:
+        """Bootstrap Qdrant collections and log startup state."""
+        logger.info("Bootstrapping Qdrant collections...")
+        for collection in BOOTSTRAP_COLLECTIONS:
+            await self.qdrant.ensure_collection(collection)
+        logger.info(
+            "Startup complete. Valid desks: %s. Default desk: %s",
+            sorted(self.valid_desks),
+            self.default_desk,
+        )
+
+    # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
     async def shutdown(self):
         """Gracefully close shared clients."""
         await self._signal_client.aclose()
-        await self.desk_client.close()
+        await self.desk_registry.close()
         await self.mcp.close_all()
 
     # ------------------------------------------------------------------
@@ -266,8 +312,6 @@ class OsiaOrchestrator:
 
         Returns the image as a base64-encoded PNG string, or None on failure.
         """
-        # Ask a text model to distil the report into a tight visual brief first.
-        # This keeps the image prompt focused and avoids token-limit issues.
         brief_prompt = (
             "You are a graphic designer briefing an AI image generator. "
             "Read the following intelligence report and extract 4–6 key findings. "
@@ -310,7 +354,6 @@ class OsiaOrchestrator:
                     return base64.b64encode(part.inline_data.data).decode()
             logger.warning("Gemini image generation returned no image parts.")
         except Exception as e:
-            # High-demand / capacity errors — fall back to driving the Gemini Android app
             _capacity_markers = ("high demand", "overloaded", "503", "resource_exhausted", "RESOURCE_EXHAUSTED")
             if any(m.lower() in str(e).lower() for m in _capacity_markers):
                 logger.warning("Gemini image API over capacity (%s) — trying phone fallback.", e)
@@ -334,6 +377,7 @@ class OsiaOrchestrator:
     # ------------------------------------------------------------------
 
     async def run_forever(self):
+        await self.bootstrap()
         logger.info("OSIA Orchestrator online. Listening to Redis queue: %s", self.queue_name)
         while True:
             try:
@@ -428,7 +472,6 @@ class OsiaOrchestrator:
                     proc.stdout[-500:] if proc.stdout else "(empty)",
                     proc.stderr[-500:] if proc.stderr else "(empty)",
                 )
-            # Clean up any leftover subtitle files (vtt, srt, etc.)
             for leftover in tmp_dir.glob("yt_intel*"):
                 leftover.unlink(missing_ok=True)
         except Exception as e:
@@ -439,7 +482,6 @@ class OsiaOrchestrator:
             logger.info("yt-dlp failed. Trying youtube-transcript-api...")
             try:
                 from youtube_transcript_api import YouTubeTranscriptApi
-                # Extract video ID from URL
                 video_id = None
                 if "youtu.be/" in video_url:
                     video_id = video_url.split("youtu.be/")[1].split("?")[0]
@@ -475,9 +517,7 @@ class OsiaOrchestrator:
                     model=self.model_id,
                     contents=types.Content(
                         parts=[
-                            types.Part(
-                                file_data=types.FileData(file_uri=video_url)
-                            ),
+                            types.Part(file_data=types.FileData(file_uri=video_url)),
                             types.Part(text=(
                                 "Produce a detailed transcript of this video. Include timestamps "
                                 "in [MM:SS] format. Capture all spoken words verbatim, describe "
@@ -507,35 +547,27 @@ class OsiaOrchestrator:
     # ------------------------------------------------------------------
 
     async def handle_research(self, query: str) -> tuple[str, SourceTracker]:
-        """Executes a multi-turn research loop, feeding tool results back to Gemini.
-
-        Returns the final research text and a SourceTracker containing
-        provenance metadata for every tool call made during the loop.
-        """
+        """Executes a multi-turn research loop, feeding tool results back to Gemini."""
         logger.info("Chief of Staff initiating research loop for: %s", query)
         tracker = SourceTracker()
 
         config = types.GenerateContentConfig(tools=self.tools)
         contents = [types.Content(role="user", parts=[types.Part(text=query)])]
 
-        max_rounds = 5  # safety cap to avoid infinite tool loops
+        max_rounds = 5
         for _round in range(max_rounds):
             response = self.client.models.generate_content(
                 model=self.model_id, contents=contents, config=config,
             )
 
             candidate = response.candidates[0]
-            # Append the model's response to the conversation
             contents.append(candidate.content)
 
-            # Collect all function calls from this turn
             function_calls = [p for p in candidate.content.parts if p.function_call]
             if not function_calls:
-                # Model is done calling tools — return its final text
                 text_parts = [p.text for p in candidate.content.parts if p.text]
                 return "\n".join(text_parts), tracker
 
-            # Execute each tool and build FunctionResponse parts
             response_parts = []
             for part in function_calls:
                 call = part.function_call
@@ -550,9 +582,7 @@ class OsiaOrchestrator:
                     logger.error("Tool %s failed: %s", call.name, e)
                     result_str = f"Tool error: {e}"
 
-                # Record source provenance
                 tracker.record(call.name, tool_query, result_str)
-
                 logger.info("Tool '%s' returned data (length: %d)", call.name, len(result_str))
                 response_parts.append(
                     types.Part(function_response=types.FunctionResponse(
@@ -561,10 +591,8 @@ class OsiaOrchestrator:
                     ))
                 )
 
-            # Feed tool results back to Gemini for the next round
             contents.append(types.Content(role="user", parts=response_parts))
 
-        # If we exhausted rounds, summarize what we have
         logger.warning("Research loop hit max rounds (%d)", max_rounds)
         text_parts = [p.text for p in contents[-1].parts if hasattr(p, "text") and p.text]
         return ("\n".join(text_parts) if text_parts else ""), tracker
@@ -574,14 +602,10 @@ class OsiaOrchestrator:
     # ------------------------------------------------------------------
 
     async def _detect_video_duration(self, url: str) -> int | None:
-        """
-        Use yt-dlp --dump-json to fetch video metadata without downloading.
-        Returns duration in seconds, or None if unavailable.
-        Much more reliable than trying to read a timestamp from a screenshot.
-        """
+        """Use yt-dlp --dump-json to fetch video metadata without downloading."""
         yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
         if not yt_dlp_bin.exists():
-            yt_dlp_bin = Path("yt-dlp")  # fall back to system PATH
+            yt_dlp_bin = Path("yt-dlp")
 
         cmd = [str(yt_dlp_bin), "--dump-json", "--no-playlist", url]
         try:
@@ -602,11 +626,10 @@ class OsiaOrchestrator:
         """Uses ADB to capture media from a URL, then analyzes it with Gemini."""
         logger.info("Triggering ADB capture for URL: %s", url)
 
-        _FALLBACK_DURATION = 60  # sane fallback for short-form content
-        _MAX_DURATION = 180      # hard cap — no point recording more than 3 min
+        _FALLBACK_DURATION = 60
+        _MAX_DURATION = 180
         _BUFFER_SECS = 3
 
-        # Probe duration via yt-dlp metadata before touching the phone
         detected = await self._detect_video_duration(url)
         if detected and 3 <= detected <= _MAX_DURATION:
             record_duration = min(detected + _BUFFER_SECS, _MAX_DURATION)
@@ -616,9 +639,8 @@ class OsiaOrchestrator:
             logger.info("Could not detect duration (got %r) — using fallback %ds", detected, record_duration)
 
         await self.adb.open_url(url)
-        await asyncio.sleep(5)  # wait for player to render
+        await asyncio.sleep(5)
 
-        # TTL covers the full record window plus upload headroom.
         lock_ttl = record_duration + 120
         await self.redis.set("osia:adb:lock", "orchestrator", ex=lock_ttl)
         try:
@@ -626,14 +648,10 @@ class OsiaOrchestrator:
             local_path = str(self.base_dir / "osia_capture.mp4")
 
             async def _press_back_after(delay: float):
-                """Press back just before recording ends to stop the video looping."""
                 await asyncio.sleep(delay)
                 logger.info("Pressing back to stop video playback.")
                 await self.adb.press_back()
 
-            # Run recording and the back-press concurrently.
-            # Back fires 1s before time_limit so the video stops before the
-            # recorder finishes — prevents the reel looping into a second play.
             await asyncio.gather(
                 self.adb.record_screen(remote_path=remote_path, time_limit=record_duration),
                 _press_back_after(max(record_duration - 1, 1)),
@@ -663,6 +681,64 @@ class OsiaOrchestrator:
         return response.text
 
     # ------------------------------------------------------------------
+    # Qdrant context injection
+    # ------------------------------------------------------------------
+
+    async def _build_context_block(
+        self,
+        assigned_desk: str,
+        query: str,
+        entity_names: list[str],
+    ) -> str | None:
+        """
+        Fetch desk-specific and cross-desk Qdrant results, deduplicate by point ID,
+        and format an ## INTELLIGENCE CONTEXT block. Returns None if no results.
+        """
+        try:
+            desk_cfg = self.desk_registry.get(assigned_desk)
+            collection = desk_cfg.qdrant.collection
+            top_k = desk_cfg.qdrant.context_top_k
+        except KeyError:
+            collection = "geopolitical_intel"
+            top_k = 5
+
+        results = []
+        try:
+            results = await self.qdrant.search(collection, query, top_k)
+        except Exception as e:
+            logger.warning("Qdrant desk search unavailable (%s) — proceeding without context", e)
+
+        cross_results = []
+        if entity_names:
+            try:
+                cross_results = await self.qdrant.cross_desk_search(
+                    " ".join(entity_names), top_k=3
+                )
+            except Exception as e:
+                logger.warning("Qdrant cross-desk search unavailable (%s)", e)
+
+        # Deduplicate by point ID (SearchResult has no id field; deduplicate by text+collection)
+        seen: set[tuple[str, str]] = set()
+        combined = []
+        for r in results + cross_results:
+            key = (r.collection, r.text[:120])
+            if key not in seen:
+                seen.add(key)
+                combined.append(r)
+
+        if not combined:
+            return None
+
+        lines = ["## INTELLIGENCE CONTEXT\n"]
+        for r in combined:
+            reliability = r.metadata.get("reliability_tier", "?")
+            timestamp = r.metadata.get("timestamp", "")
+            lines.append(
+                f"[{r.collection}] (Reliability: {reliability}) {timestamp}\n{r.text}\n"
+            )
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
     # Task processing
     # ------------------------------------------------------------------
 
@@ -677,6 +753,7 @@ class OsiaOrchestrator:
         media_analysis = None
         research_summary = None
         source_tracker: SourceTracker | None = None
+        url: str | None = None
 
         logger.info("Received new task from %s: %s", source, query)
 
@@ -686,29 +763,17 @@ class OsiaOrchestrator:
             url = url_match.group(1)
             url_lower = url.lower()
 
-            # YouTube → transcript extraction (full-length support)
             if any(domain in url_lower for domain in YOUTUBE_DOMAINS):
                 try:
                     media_analysis = await self._extract_youtube_transcript(url)
                     if media_analysis:
-                        await self.desk_client.ingest_raw_data(
-                            "collection-directorate",
-                            media_analysis,
-                            f"YouTube Transcript: {self._safe_title(url)}",
-                        )
                         query = f"A YouTube transcript from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
                 except Exception as e:
                     logger.error("YouTube transcript extraction failed: %s", e)
 
-            # Other social media → ADB screen-record capture
             elif any(domain in url_lower for domain in MEDIA_DOMAINS):
                 try:
                     media_analysis = await self.process_media_link(url)
-                    await self.desk_client.ingest_raw_data(
-                        "collection-directorate",
-                        media_analysis,
-                        f"Media Intercept: {self._safe_title(url)}",
-                    )
                     query = f"A media intercept from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
                 except Exception as e:
                     logger.error("Media interception failed: %s", e)
@@ -717,13 +782,7 @@ class OsiaOrchestrator:
         try:
             research_summary, source_tracker = await self.handle_research(original_query)
             if research_summary:
-                logger.info("Research complete. Injecting into Collection Desk...")
-                await self.desk_client.ingest_raw_data(
-                    "collection-directorate",
-                    research_summary,
-                    f"Research: {self._safe_title(original_query)}",
-                )
-                # Build source manifest for desk consumption
+                logger.info("Research complete.")
                 manifest = source_tracker.format_manifest() if source_tracker else ""
                 citation_block = build_citation_protocol()
                 query = (
@@ -735,10 +794,23 @@ class OsiaOrchestrator:
         except Exception as e:
             logger.error("Automated research failed: %s", e)
 
-        # 3. Chief of Staff routes to the appropriate desk
+        # 3. Entity extraction + research job enqueuing
+        entities = []
+        entity_names: list[str] = []
+        text_for_extraction = research_summary or media_analysis or original_query
+        triggered_by = url or (source[len("signal:"):] if source.startswith("signal:") else source)
+        try:
+            entities = await self.entity_extractor.extract(text_for_extraction, "collection-directorate")
+            entity_names = [e.name for e in entities]
+            await self.entity_extractor.enqueue_research_jobs(entities, triggered_by=triggered_by)
+        except Exception as e:
+            logger.error("Entity extraction/enqueuing failed: %s", e)
+
+        # 4. Chief of Staff routes to the appropriate desk
         directives_path = self.base_dir / "DIRECTIVES.md"
         mandate = directives_path.read_text()
 
+        valid_desks_list = "\n".join(f"- {s}" for s in sorted(self.valid_desks))
         plan_prompt = f"""
         {mandate}
 
@@ -746,13 +818,8 @@ class OsiaOrchestrator:
 
         You are the Chief of Staff for OSIA. A new Request for Information (RFI) has come in: '{query}'
 
-        Which of our specialized desks should analyze this? Choose ONE:
-        - geopolitical-and-security-desk: Geopolitical forecasting, conflict analysis, and national sovereignty. (Has Country Intel tools)
-        - cultural-and-theological-intelligence-desk: Sociological drivers, religious movements, and cultural drivers. (Has Cultural Observatory)
-        - science-technology-and-commercial-desk: Technical breakthroughs, software analysis, and ecological tech. (Has GitHub Intel)
-        - human-intelligence-and-profiling-desk: Behavioral profiling, digital personas, and tracking individuals. (Has Username Recon)
-        - finance-and-economics-directorate: Capital flows, labor rights, and market dynamics. (Has Stock Market Intel)
-        - cyber-intelligence-and-warfare-desk: Digital infrastructure, state-sponsored cyber-warfare, and technical network reconnaissance. (Has Kali Linux Sandbox for Nmap/Whois/Dig)
+        Which of our specialized desks should analyze this? Choose ONE from the following list:
+{valid_desks_list}
 
         Reply with ONLY the slug of the desk, nothing else.
         """
@@ -761,67 +828,39 @@ class OsiaOrchestrator:
             route_res = self.client.models.generate_content(model=self.model_id, contents=plan_prompt)
             assigned_desk = (route_res.text or "").strip()
 
-            # Validate the desk slug to avoid routing to a non-existent workspace
-            if assigned_desk not in VALID_DESKS:
-                logger.warning("Gemini returned invalid desk '%s', defaulting to geopolitical", assigned_desk)
-                assigned_desk = "geopolitical-and-security-desk"
+            if assigned_desk not in self.valid_desks:
+                logger.warning(
+                    "Gemini returned invalid desk '%s', routing to default '%s'",
+                    assigned_desk, self.default_desk,
+                )
+                assigned_desk = self.default_desk
 
             logger.info("Task routed to: %s", assigned_desk)
 
-            # Ingest media analysis into the assigned desk so it's available in its vector DB
-            if media_analysis:
-                try:
-                    await self.desk_client.ingest_raw_data(
-                        assigned_desk,
-                        media_analysis,
-                        f"Media Intercept: {self._safe_title(url)}",
-                    )
-                except Exception as e:
-                    logger.warning("Failed to ingest media into desk '%s': %s", assigned_desk, e)
+            # 5. Qdrant context injection
+            context_block = await self._build_context_block(assigned_desk, original_query, entity_names)
 
-            # Ingest research summary into the assigned desk
-            if research_summary:
-                try:
-                    await self.desk_client.ingest_raw_data(
-                        assigned_desk,
-                        research_summary,
-                        f"Research: {self._safe_title(original_query)}",
-                    )
-                except Exception as e:
-                    logger.warning("Failed to ingest research into desk '%s': %s", assigned_desk, e)
-
-            # Wake up HF endpoint if this desk uses one (no-op for cloud-API desks)
-            hf_ready = await self.hf_endpoints.ensure_ready(assigned_desk)
-            if not hf_ready:
-                logger.warning("HF endpoint for '%s' not ready — proceeding with existing desk config", assigned_desk)
-
+            # 6. Invoke desk via DeskRegistry
             try:
-                analysis = await self.desk_client.send_task(assigned_desk, query)
-            except Exception as desk_err:
-                logger.warning(
-                    "Desk '%s' failed (%s), falling back to Gemini direct analysis",
-                    assigned_desk, desk_err,
+                response_data = await self.desk_registry.invoke(
+                    assigned_desk, query, context_block
                 )
-                # Load the desk-specific prompt template if available
-                desk_prompt_path = self.base_dir / "templates" / "prompts" / f"{assigned_desk}.txt"
-                desk_persona = ""
-                if desk_prompt_path.exists():
-                    desk_persona = desk_prompt_path.read_text()
+                # invoke returns (text, metadata) tuple per design
+                if isinstance(response_data, tuple):
+                    analysis, invoke_meta = response_data
+                else:
+                    analysis = response_data
+                    invoke_meta = {}
 
-                fallback_prompt = (
-                    f"{mandate}\n\n"
-                    f"--- DESK PERSONA ---\n{desk_persona}\n\n" if desk_persona else f"{mandate}\n\n"
-                ) + (
-                    f"You are acting as the {assigned_desk} for OSIA. "
-                    f"Analyze the following intelligence request and provide a thorough report.\n\n"
-                    f"{build_citation_protocol()}\n\n"
-                    f"{query}"
+                model_used = invoke_meta.get("model_used", "primary")
+                model_id_used = invoke_meta.get("model_id", "unknown")
+                logger.info(
+                    "Desk '%s' responded via %s model (%s).",
+                    assigned_desk, model_used, model_id_used,
                 )
-                fallback_res = self.client.models.generate_content(
-                    model=self.model_id, contents=fallback_prompt
-                )
-                analysis = fallback_res.text
-                logger.info("Gemini fallback analysis complete (desk '%s' was bypassed).", assigned_desk)
+            except Exception as desk_err:
+                logger.error("Desk '%s' invocation failed: %s", assigned_desk, desk_err)
+                raise
 
             logger.info("Intelligence synthesis complete.")
 
@@ -831,7 +870,6 @@ class OsiaOrchestrator:
             if source.startswith("signal:"):
                 recipient = source[len("signal:"):]
                 await self.send_signal_message(recipient, analysis)
-                # Generate and send a social-media infographic alongside the text report
                 try:
                     infographic_b64 = await self.generate_infographic(analysis)
                     if infographic_b64:
@@ -843,11 +881,10 @@ class OsiaOrchestrator:
             logger.exception("Orchestration or desk analysis failed: %s", e)
             if source.startswith("signal:"):
                 recipient = source[len("signal:"):]
-                
+
                 error_type = type(e).__name__
                 raw_error = str(e)
-                
-                # Basic sanitization to prevent leaking local paths or common sensitive patterns
+
                 sanitized_error = re.sub(r'(/home/|/var/|/tmp/|C:\\)[^\s]+', '[REDACTED_PATH]', raw_error)
                 sanitized_error = re.sub(r'sk-[A-Za-z0-9_-]{20,}', '[REDACTED_KEY]', sanitized_error)
                 sanitized_error = re.sub(r'AIza[0-9A-Za-z-_]{35}', '[REDACTED_KEY]', sanitized_error)

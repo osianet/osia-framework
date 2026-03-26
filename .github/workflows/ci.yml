@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    name: Lint, type-check & test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+
+      # --frozen ensures uv.lock is the source of truth — fails if lock is stale
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras
+
+      - name: Lint with ruff
+        run: uv run ruff check src/ scripts/ hf-spaces/
+
+      - name: Format check with ruff
+        run: uv run ruff format --check src/ scripts/ hf-spaces/
+
+      # Informational only until type coverage improves — won't block merges
+      - name: Type check with pyright
+        run: uv run pyright src/
+        continue-on-error: true
+
+      - name: Run tests
+        run: uv run pytest --tb=short -q
+        env:
+          # Dummy values so modules that read env at import time don't crash
+          GEMINI_API_KEY: dummy
+          ANTHROPIC_API_KEY: dummy
+          OPENAI_API_KEY: dummy
+          HF_TOKEN: dummy
+          QDRANT_URL: http://localhost:6333
+          QDRANT_API_KEY: dummy
+          REDIS_URL: redis://localhost:6379/0

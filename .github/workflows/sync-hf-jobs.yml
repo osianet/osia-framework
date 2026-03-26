@@ -19,14 +19,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Push job scripts to HuggingFace dataset repo
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_NAMESPACE: ${{ secrets.HF_NAMESPACE }}
         run: |
-          pip install huggingface_hub
+          # Pinned to match hf-spaces/research-worker/requirements.txt
+          pip install "huggingface_hub==1.0.0"
 
           python - <<'EOF'
           import os

@@ -1,0 +1,40 @@
+version: 2
+
+updates:
+  # GitHub Actions — keeps all workflow action versions current
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+    commit-message:
+      prefix: "chore(actions)"
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  # pip — covers hf-spaces/research-worker/requirements.txt
+  - package-ecosystem: "pip"
+    directory: "/hf-spaces/research-worker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+    commit-message:
+      prefix: "chore(hf-worker)"
+    labels:
+      - "dependencies"
+      - "hf-worker"
+
+  # uv / pip — covers pyproject.toml (Dependabot reads it as pip ecosystem)
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"

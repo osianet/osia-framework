@@ -5,6 +5,7 @@ description = "Event-driven multi-agent intelligence orchestration framework for
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.40.0",
     "beautifulsoup4>=4.14.3",
     "fastapi>=0.135.1",
     "feedparser>=6.0.12",
@@ -16,6 +17,8 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pandas>=3.0.1",
     "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.2",
+    "qdrant-client>=1.12.0",
     "redis>=7.3.0",
     "slowapi>=0.1.9",
     "starlette-context>=0.5.1",
@@ -24,3 +27,40 @@ dependencies = [
     "yt-dlp>=2026.3.17",
     "youtube-transcript-api>=1.0.0",
 ]
+
+[project.optional-dependencies]
+dev = [
+    "hypothesis",
+    "pytest",
+    "pytest-asyncio",
+    "pyright",
+    "ruff",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes (unused imports, undefined names)
+    "I",   # isort
+    "S",   # flake8-bandit (security)
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "S101",  # assert statements (used in tests)
+    "S603",  # subprocess calls (used intentionally for ADB)
+    "S607",  # partial executable path (ADB)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S"]  # relax security rules in test files
+
+[tool.pyright]
+pythonVersion = "3.11"
+include = ["src"]
+typeCheckingMode = "basic"
