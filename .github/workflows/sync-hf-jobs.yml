@@ -15,6 +15,11 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Push job scripts to HuggingFace dataset repo
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
