@@ -1,0 +1,32 @@
+slug: human-intelligence-and-profiling-desk
+name: "Human Intelligence & Profiling Desk"
+prompt_file: templates/prompts/human-intelligence-and-profiling-desk.txt
+
+model:
+  primary:
+    provider: hf_endpoint
+    model_id: Dolphin3.0-R1-Mistral-24B
+    hf_endpoint_name: osia-dolphin-r1-24b
+    temperature: 0.4
+    max_tokens: 4096
+  fallback:
+    provider: gemini
+    model_id: gemini-3-flash
+    temperature: 0.3
+    max_tokens: 4096
+
+qdrant:
+  collection: human_intel
+  context_top_k: 5
+  cross_desk_search: true
+  cross_desk_top_k: 3
+
+tools:
+  - search_web
+  - search_wikipedia
+
+mcp_servers:
+  - tavily
+  - wikipedia
+
+entity_research_target: true

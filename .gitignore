@@ -18,8 +18,7 @@ dist/
 build/
 
 # Config & Sensitive Data
-config/
-!config/*.example
+config/feeds.txt
 signal-data/
 storage/
 
@@ -33,7 +32,6 @@ tmp/
 
 # IDE & Tool Artifacts
 view.xml
-*.xml
 .idea/
 .vscode/
 *.swp

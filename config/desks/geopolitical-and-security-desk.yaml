@@ -1,0 +1,33 @@
+slug: geopolitical-and-security-desk
+name: "Geopolitical & Security Desk"
+prompt_file: templates/prompts/geopolitical-and-security-desk.txt
+
+model:
+  primary:
+    provider: gemini
+    model_id: gemini-3-flash
+    temperature: 0.3
+    max_tokens: 8192
+  fallback:
+    provider: gemini
+    model_id: gemini-2.5-flash
+    temperature: 0.3
+    max_tokens: 8192
+
+qdrant:
+  collection: geopolitical_intel
+  context_top_k: 5
+  cross_desk_search: true
+  cross_desk_top_k: 3
+
+tools:
+  - search_web
+  - search_wikipedia
+  - search_arxiv
+
+mcp_servers:
+  - tavily
+  - wikipedia
+  - arxiv
+
+entity_research_target: true
