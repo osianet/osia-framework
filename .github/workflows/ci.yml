@@ -41,7 +41,14 @@ jobs:
         continue-on-error: true
 
       - name: Run tests
-        run: uv run --extra dev pytest --tb=short -q
+        run: |
+          uv run --extra dev pytest --tb=short -q || exit_code=$?
+          # Exit code 5 = no tests collected — acceptable until test suite grows
+          if [ "${exit_code:-0}" -eq 5 ]; then
+            echo "No tests collected (exit 5) — passing."
+            exit 0
+          fi
+          exit ${exit_code:-0}
         env:
           # Dummy values so modules that read env at import time don't crash
           GEMINI_API_KEY: dummy
