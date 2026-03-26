@@ -41,22 +41,13 @@ if [ -z "$HF_NAMESPACE" ] || [[ "$HF_NAMESPACE" == *"your_"* ]]; then
 fi
 
 REPO="${HF_NAMESPACE}/osia-jobs"
-# Find the HF CLI — try venv first, then common names on PATH
-HF_CLI=""
-for candidate in \
-    "$SCRIPT_DIR/../.venv/bin/huggingface-cli" \
-    "$SCRIPT_DIR/../.venv/bin/hf" \
-    "$(command -v huggingface-cli 2>/dev/null)" \
-    "$(command -v hf 2>/dev/null)"; do
-    if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-        HF_CLI="$candidate"
-        break
-    fi
-done
+# Use uv run to invoke hf within the project's managed environment
+HF_CLI="uv run hf"
 
-if [ -z "$HF_CLI" ]; then
-    echo -e "${RED}ERROR: HuggingFace CLI not found.${NC}"
-    echo "Try: uv sync  or  pip install huggingface_hub[cli]"
+# Verify it works
+if ! $HF_CLI --version &>/dev/null; then
+    echo -e "${RED}ERROR: 'hf' CLI not available via uv run.${NC}"
+    echo "Try: uv sync"
     exit 1
 fi
 
