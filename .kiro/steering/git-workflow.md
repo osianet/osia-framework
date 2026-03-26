@@ -105,7 +105,7 @@ gh pr create \
 <how this was verified — unit tests, manual checks, etc.>"
 ```
 
-> **Note:** `gh` must be authenticated as the `osianet` account. Check with `gh auth status` — the active account must be `osianet`. If it shows a different user, run `gh auth switch --user osianet` first. To add the account initially: `gh auth login --hostname github.com`.
+> **Note:** `gh` must be authenticated as `BadRory` — a collaborator account on the `osianet/osia-framework` repo. Check with `gh auth status`. If the active account is wrong, run `gh auth switch --user BadRory` first.
 
 ### Step 6 — Report to the user
 After the PR is open, provide:
