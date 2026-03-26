@@ -36,3 +36,12 @@ view.xml
 .vscode/
 *.swp
 *.swo
+
+# Claude Code tooling (local only)
+CLAUDE.md
+
+# Captured media (local working files)
+*.mp4
+*.mp3
+*.wav
+osia_capture.*

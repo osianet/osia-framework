@@ -155,15 +155,22 @@ class QueueClient:
         }
 
     async def pop(self, timeout: int = 2) -> dict | None:
-        """Non-blocking pop — timeout=2 so we drain quickly."""
-        resp = await self._http.post(
-            f"{QUEUE_API_URL}/queue/pop",
-            headers=self._headers,
-            json={"queue": "osia:research_queue", "timeout": timeout},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        return resp.json().get("payload")
+        """Non-blocking pop — timeout=2 so we drain quickly. Retries on 429."""
+        for attempt in range(5):
+            resp = await self._http.post(
+                f"{QUEUE_API_URL}/queue/pop",
+                headers=self._headers,
+                json={"queue": "osia:research_queue", "timeout": timeout},
+                timeout=15,
+            )
+            if resp.status_code == 429:
+                backoff = 2 ** attempt
+                logger.warning("Queue API rate-limited (429) — backing off %ds", backoff)
+                await asyncio.sleep(backoff)
+                continue
+            resp.raise_for_status()
+            return resp.json().get("payload")
+        raise RuntimeError("Queue API rate-limited after 5 retries")
 
     async def depth(self) -> int:
         resp = await self._http.get(
@@ -542,13 +549,15 @@ async def main():
 
         await _ensure_collection(http)
 
-        # Drain the queue, grouping jobs by endpoint to minimise cold starts
+        # Drain the queue, grouping jobs by endpoint to minimise cold starts.
+        # 0.25s between pops keeps us well under the queue API rate limit.
         jobs: list[dict] = []
         while True:
             payload = await queue.pop(timeout=2)
             if payload is None:
                 break
             jobs.append(payload)
+            await asyncio.sleep(0.25)
         logger.info("Drained %d jobs from queue", len(jobs))
 
         if not jobs:
