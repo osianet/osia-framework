@@ -1,17 +1,18 @@
 #!/bin/bash
 # Syncs required HF Jobs secrets from .env to the HuggingFace dataset repo.
-# Uses the huggingface_hub Python library directly (no CLI needed).
+# Run once after initial setup, or whenever secrets rotate.
 #
 # Usage:
 #   ./scripts/sync_hf_secrets.sh
 #
-# Requires: uv sync (huggingface-hub must be in the project dependencies)
+# Requires: huggingface-cli (installed via uv sync)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/../.env"
 
+# ANSI colours
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -22,77 +23,77 @@ if [ ! -f "$ENV_FILE" ]; then
     exit 1
 fi
 
-echo -e "${YELLOW}Syncing HF Jobs secrets from .env...${NC}"
+# Load .env (strip comments and blank lines)
+_env_val() {
+    grep -E "^${1}=" "$ENV_FILE" | head -1 | cut -d'=' -f2- | sed 's/[[:space:]]*#.*//' | xargs
+}
+
+HF_TOKEN=$(_env_val "HF_TOKEN")
+HF_NAMESPACE=$(_env_val "HF_NAMESPACE")
+
+if [ -z "$HF_TOKEN" ] || [[ "$HF_TOKEN" == *"your_"* ]]; then
+    echo -e "${RED}ERROR: HF_TOKEN not set in .env${NC}"
+    exit 1
+fi
+if [ -z "$HF_NAMESPACE" ] || [[ "$HF_NAMESPACE" == *"your_"* ]]; then
+    echo -e "${RED}ERROR: HF_NAMESPACE not set in .env${NC}"
+    exit 1
+fi
+
+REPO="${HF_NAMESPACE}/osia-jobs"
+# Use uv run to invoke hf within the project's managed environment
+HF_CLI="uv run hf"
+
+# Verify it works
+if ! $HF_CLI --version &>/dev/null; then
+    echo -e "${RED}ERROR: 'hf' CLI not available via uv run.${NC}"
+    echo "Try: uv sync"
+    exit 1
+fi
+
+echo -e "${YELLOW}Syncing secrets to HF dataset repo: ${REPO}${NC}"
 echo ""
 
-uv run python - <<'EOF'
-import os
-import sys
-from pathlib import Path
+# Secrets to sync: ENV_VAR_NAME -> HF secret name (same name)
+SECRETS=(
+    "QUEUE_API_TOKEN"
+    "QUEUE_API_UA_SENTINEL"
+    "QDRANT_API_KEY"
+    "HF_TOKEN"
+    "TAVILY_API_KEY"
+    "HF_ENDPOINT_DOLPHIN_24B"
+    "HF_ENDPOINT_HERMES_70B"
+)
 
-# Load .env manually so we don't need python-dotenv in this context
-env_file = Path(__file__).resolve().parent.parent / ".env"
-env = {}
-for line in env_file.read_text().splitlines():
-    line = line.strip()
-    if not line or line.startswith("#") or "=" not in line:
+ok=0
+skipped=0
+failed=0
+
+for secret in "${SECRETS[@]}"; do
+    value=$(_env_val "$secret")
+
+    if [ -z "$value" ] || [[ "$value" == *"your_"* ]]; then
+        echo -e "  ${YELLOW}SKIP${NC}  $secret (not set in .env)"
+        skipped=$((skipped + 1))
         continue
-    key, _, val = line.partition("=")
-    val = val.split("#")[0].strip()  # strip inline comments
-    env[key.strip()] = val
+    fi
 
-HF_TOKEN = env.get("HF_TOKEN", "")
-HF_NAMESPACE = env.get("HF_NAMESPACE", "")
+    if HF_TOKEN="$HF_TOKEN" "$HF_CLI" secret set "$secret" \
+        --repo "$REPO" \
+        --repo-type dataset \
+        --value "$value" 2>/dev/null; then
+        echo -e "  ${GREEN}OK${NC}    $secret"
+        ok=$((ok + 1))
+    else
+        echo -e "  ${RED}FAIL${NC}  $secret"
+        failed=$((failed + 1))
+    fi
+done
 
-if not HF_TOKEN or "your_" in HF_TOKEN:
-    print("ERROR: HF_TOKEN not set in .env")
-    sys.exit(1)
-if not HF_NAMESPACE or "your_" in HF_NAMESPACE:
-    print("ERROR: HF_NAMESPACE not set in .env")
-    sys.exit(1)
+echo ""
+echo -e "Done: ${GREEN}${ok} synced${NC}, ${YELLOW}${skipped} skipped${NC}, ${RED}${failed} failed${NC}"
 
-from huggingface_hub import HfApi
-from huggingface_hub.utils import HfHubHTTPError
-
-api = HfApi(token=HF_TOKEN)
-repo_id = f"{HF_NAMESPACE}/osia-jobs"
-
-# Ensure repo exists
-try:
-    api.create_repo(repo_id=repo_id, repo_type="dataset", private=True, exist_ok=True)
-    print(f"  \033[0;32mOK\033[0m    repo: {repo_id}")
-except Exception as e:
-    print(f"  \033[0;31mFAIL\033[0m  repo creation: {e}")
-    sys.exit(1)
-
-# Secrets to sync
-SECRETS = [
-    "QUEUE_API_TOKEN",
-    "QUEUE_API_UA_SENTINEL",
-    "QDRANT_API_KEY",
-    "HF_TOKEN",
-    "TAVILY_API_KEY",
-    "HF_ENDPOINT_DOLPHIN_24B",
-    "HF_ENDPOINT_HERMES_70B",
-]
-
-ok = skipped = failed = 0
-
-for secret in SECRETS:
-    value = env.get(secret, "")
-    if not value or "your_" in value:
-        print(f"  \033[1;33mSKIP\033[0m  {secret} (not set in .env)")
-        skipped += 1
-        continue
-    try:
-        api.add_space_secret(repo_id=repo_id, key=secret, value=value, repo_type="dataset")
-        print(f"  \033[0;32mOK\033[0m    {secret}")
-        ok += 1
-    except Exception as e:
-        print(f"  \033[0;31mFAIL\033[0m  {secret}: {e}")
-        failed += 1
-
-print(f"\nDone: {ok} synced, {skipped} skipped, {failed} failed")
-if failed:
-    sys.exit(1)
-EOF
+if [ "$failed" -gt 0 ]; then
+    echo -e "${YELLOW}Tip: make sure the repo exists — run: huggingface-cli repo create osia-jobs --type dataset --private${NC}"
+    exit 1
+fi
