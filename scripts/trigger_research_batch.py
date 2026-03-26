@@ -65,28 +65,26 @@ def _fire_hf_job() -> str:
 
     api = HfApi(token=HF_TOKEN)
 
-    # Secrets passed to the job — these are HF repo secrets, set once via:
-    #   huggingface-cli secret set QUEUE_API_TOKEN <value> --repo BadIdeasRory/osia-jobs --repo-type dataset
-    secrets = [
-        "QUEUE_API_TOKEN",
-        "QDRANT_API_KEY",
-        "HF_TOKEN",
-        "TAVILY_API_KEY",
-        "HF_ENDPOINT_DOLPHIN_24B",
-        "HF_ENDPOINT_HERMES_70B",
-    ]
-
+    # All secrets are passed inline from .env at submission time.
+    # HF Jobs has no persistent secret storage — secrets must be provided per-run.
+    # The Pi has all these values in .env, so we just pass them directly.
     env = {
         "QUEUE_API_URL": QUEUE_API_URL,
+        "QUEUE_API_TOKEN": QUEUE_API_TOKEN,
         "QUEUE_API_UA_SENTINEL": QUEUE_API_UA,
         "QDRANT_URL": os.getenv("QDRANT_URL", "https://qdrant.osia.dev"),
+        "QDRANT_API_KEY": os.getenv("QDRANT_API_KEY", ""),
+        "HF_TOKEN": HF_TOKEN,
         "HF_NAMESPACE": HF_NAMESPACE,
         "HF_WAKE_TIMEOUT": os.getenv("HF_WAKE_TIMEOUT", "600"),
+        "HF_ENDPOINT_DOLPHIN_24B": os.getenv("HF_ENDPOINT_DOLPHIN_24B", ""),
+        "HF_ENDPOINT_HERMES_70B": os.getenv("HF_ENDPOINT_HERMES_70B", ""),
+        "TAVILY_API_KEY": os.getenv("TAVILY_API_KEY", ""),
         "UV_SCRIPT_URL": SCRIPT_URL,
     }
 
-    # hf jobs uv run equivalent via Python API
-    # The job downloads the script from the dataset repo and runs it with uv
+    # The job downloads research_batch.py from the private HF dataset repo
+    # (synced from GitHub via Actions) and runs it with uv.
     job = api.run_job(
         command=[
             "bash", "-c",
@@ -101,7 +99,6 @@ def _fire_hf_job() -> str:
             ),
         ],
         flavor=JOB_FLAVOR,
-        secrets=secrets,
         environment=env,
         timeout=JOB_TIMEOUT,
         namespace=HF_NAMESPACE,
