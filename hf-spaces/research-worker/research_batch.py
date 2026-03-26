@@ -570,14 +570,14 @@ async def main():
         await _ensure_collection(http)
 
         # Drain the queue, grouping jobs by endpoint to minimise cold starts.
-        # 0.25s between pops keeps us well under the queue API rate limit.
+        # Queue API rate limit is 120/minute — 0.6s between pops keeps us safely under it.
         jobs: list[dict] = []
         while True:
             payload = await queue.pop(timeout=2)
             if payload is None:
                 break
             jobs.append(payload)
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.6)
         logger.info("Drained %d jobs from queue", len(jobs))
 
         if not jobs:

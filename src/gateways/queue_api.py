@@ -130,6 +130,7 @@ def _check_auth(request: Request, credentials: HTTPAuthorizationCredentials = De
 class PushRequest(BaseModel):
     queue: str
     payload: dict[str, Any]
+    dedup_key: str | None = None  # if set, skip push if already in seen_topics
 
 
 class PopRequest(BaseModel):
@@ -164,13 +165,24 @@ async def health(request: Request):
 @app.post("/queue/push")
 @limiter.limit("120/minute")
 async def push(request: Request, body: PushRequest, _=Depends(_check_auth)):
-    """Push a job payload onto a queue (rpush)."""
+    """Push a job payload onto a queue (rpush).
+
+    If dedup_key is provided, the push is skipped if that key already exists
+    in osia:research:seen_topics (idempotent enqueue).
+    """
     if body.queue not in ALLOWED_QUEUES:
         raise HTTPException(status_code=400, detail="Queue not permitted")
     r = _get_redis()
+    if body.dedup_key:
+        already_seen = await r.sismember("osia:research:seen_topics", body.dedup_key)
+        if already_seen:
+            logger.debug("Dedup skip: %r already in seen_topics", body.dedup_key)
+            depth = await r.llen(body.queue)
+            return {"ok": True, "queue": body.queue, "depth": depth, "skipped": True}
+        await r.sadd("osia:research:seen_topics", body.dedup_key)
     length = await r.rpush(body.queue, json.dumps(body.payload))
     logger.info("Pushed job to %s (depth now %d)", body.queue, length)
-    return {"ok": True, "queue": body.queue, "depth": length}
+    return {"ok": True, "queue": body.queue, "depth": length, "skipped": False}
 
 
 @app.post("/queue/pop")
