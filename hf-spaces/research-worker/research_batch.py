@@ -57,7 +57,7 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 ENDPOINT_DOLPHIN = os.getenv("HF_ENDPOINT_DOLPHIN_24B", "")
 ENDPOINT_HERMES = os.getenv("HF_ENDPOINT_HERMES_70B", "")
 
-RESEARCH_COLLECTION = "osia:research_cache"
+RESEARCH_COLLECTION = "osia_research_cache"
 EMBEDDING_DIM = 384
 CHUNK_SIZE = 400  # words
 MAX_ROUNDS = 6
@@ -132,7 +132,7 @@ async def _probe_endpoint(url: str, timeout: int = 60) -> bool:
                     f"{url}/v1/models",
                     headers={"Authorization": f"Bearer {HF_TOKEN}"},
                 )
-                if resp.status_code < 500:
+                if resp.status_code == 200:
                     return True
             except (httpx.ConnectError, httpx.ReadTimeout):
                 pass
@@ -154,39 +154,50 @@ class QueueClient:
             "Content-Type": "application/json",
         }
 
+    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """Make a request to the queue API, retrying on 429 with exponential backoff."""
+        for attempt in range(5):
+            resp = await self._http.request(
+                method,
+                f"{QUEUE_API_URL}{path}",
+                headers=self._headers,
+                **kwargs,
+            )
+            if resp.status_code == 429:
+                backoff = 2 ** attempt
+                logger.warning("Queue API rate-limited (429) — backing off %ds", backoff)
+                await asyncio.sleep(backoff)
+                continue
+            resp.raise_for_status()
+            return resp
+        raise RuntimeError("Queue API rate-limited after 5 retries")
+
     async def pop(self, timeout: int = 2) -> dict | None:
         """Non-blocking pop — timeout=2 so we drain quickly."""
-        resp = await self._http.post(
-            f"{QUEUE_API_URL}/queue/pop",
-            headers=self._headers,
+        resp = await self._request(
+            "POST", "/queue/pop",
             json={"queue": "osia:research_queue", "timeout": timeout},
             timeout=15,
         )
-        resp.raise_for_status()
         return resp.json().get("payload")
 
     async def depth(self) -> int:
-        resp = await self._http.get(
-            f"{QUEUE_API_URL}/queue/length",
-            headers=self._headers,
+        resp = await self._request(
+            "GET", "/queue/length",
             params={"queue": "osia:research_queue"},
         )
-        resp.raise_for_status()
         return resp.json().get("depth", 0)
 
     async def is_seen(self, key: str) -> bool:
-        resp = await self._http.post(
-            f"{QUEUE_API_URL}/queue/seen/check",
-            headers=self._headers,
+        resp = await self._request(
+            "POST", "/queue/seen/check",
             json={"key": "osia:research:seen_topics", "member": key},
         )
-        resp.raise_for_status()
         return resp.json().get("seen", False)
 
     async def mark_seen(self, key: str):
-        await self._http.post(
-            f"{QUEUE_API_URL}/queue/seen/add",
-            headers=self._headers,
+        await self._request(
+            "POST", "/queue/seen/add",
             json={"key": "osia:research:seen_topics", "members": [key]},
         )
 
@@ -542,13 +553,15 @@ async def main():
 
         await _ensure_collection(http)
 
-        # Drain the queue, grouping jobs by endpoint to minimise cold starts
+        # Drain the queue, grouping jobs by endpoint to minimise cold starts.
+        # 0.25s between pops keeps us well under the queue API rate limit.
         jobs: list[dict] = []
         while True:
             payload = await queue.pop(timeout=2)
             if payload is None:
                 break
             jobs.append(payload)
+            await asyncio.sleep(0.25)
         logger.info("Drained %d jobs from queue", len(jobs))
 
         if not jobs:

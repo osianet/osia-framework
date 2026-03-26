@@ -26,7 +26,7 @@ services:
     ports:
       - "8081:8080"
     volumes:
-      - ./signal-data:/home/signalapi/.local/share/signal-cli
+      - ./signal-data:/home/.local/share/signal-cli
     restart: always
 
   kali-sandbox:
@@ -36,6 +36,12 @@ services:
     stdin_open: true
     restart: always
     command: >
-      sh -c "apt-get update && 
-             apt-get install -y nmap whois dnsutils iputils-ping curl && 
+      sh -c "apt-get update &&
+             apt-get install -y nmap whois dnsutils iputils-ping curl &&
              tail -f /dev/null"
+
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1400"

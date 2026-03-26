@@ -11,7 +11,7 @@ model:
     max_tokens: 4096
   fallback:
     provider: gemini
-    model_id: gemini-3-flash
+    model_id: gemini-2.5-flash
     temperature: 0.3
     max_tokens: 4096
 

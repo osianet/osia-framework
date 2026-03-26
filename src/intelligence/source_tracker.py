@@ -125,12 +125,14 @@ def build_citation_protocol() -> str:
     )
 
 
-def audit_report(report_text: str, tracker: SourceTracker | None = None) -> str:
+def audit_report(report_text: str | None, tracker: SourceTracker | None = None) -> str:
     """Append a source audit summary to a finished report.
 
     Checks for citation markers in the report body and cross-references
     against the research source manifest when available.
     """
+    if not report_text:
+        return ""
     # Count inline citations like [1], [2], etc.
     citation_refs = set(re.findall(r"\[(\d+)\]", report_text))
     has_sources_section = bool(re.search(r"##\s*Sources", report_text, re.IGNORECASE))

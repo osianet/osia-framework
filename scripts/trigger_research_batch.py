@@ -86,6 +86,7 @@ def _fire_hf_job() -> str:
     # The job downloads research_batch.py from the private HF dataset repo
     # (synced from GitHub via Actions) and runs it with uv.
     job = api.run_job(
+        image="ghcr.io/astral-sh/uv:python3.11-bookworm-slim",
         command=[
             "bash",
             "-c",
@@ -100,12 +101,12 @@ def _fire_hf_job() -> str:
             ),
         ],
         flavor=JOB_FLAVOR,
-        environment=env,
+        env=env,
         timeout=JOB_TIMEOUT,
         namespace="osianet",
     )
 
-    return job.job_id
+    return job.id
 
 
 def main():
@@ -123,24 +124,28 @@ def main():
         logger.error("HF_NAMESPACE not set")
         sys.exit(1)
 
-    # Check queue depth
+    # Check queue depth — non-fatal: if the queue API is unreachable we fire anyway
+    # rather than silently skipping research when the network is flaky.
+    depth = None
     try:
         depth = _get_queue_depth()
         logger.info("Research queue depth: %d (threshold: %d)", depth, BATCH_THRESHOLD)
     except Exception as e:
-        logger.error("Failed to check queue depth: %s", e)
-        sys.exit(1)
+        logger.warning("Could not check queue depth (%s) — proceeding anyway", e)
 
-    if not args.force and depth < BATCH_THRESHOLD:
+    if not args.force and depth is not None and depth < BATCH_THRESHOLD:
         logger.info("Queue below threshold — no job needed.")
         sys.exit(0)
 
-    logger.info("Threshold met (%d >= %d) — firing HF Job...", depth, BATCH_THRESHOLD)
+    if depth is None:
+        logger.info("Queue depth unknown — firing HF Job unconditionally...")
+    else:
+        logger.info("Threshold met (%d >= %d) — firing HF Job...", depth, BATCH_THRESHOLD)
 
     try:
         job_id = _fire_hf_job()
         logger.info("HF Job submitted: %s", job_id)
-        logger.info("Monitor: https://huggingface.co/jobs/%s/%s", HF_NAMESPACE, job_id)
+        logger.info("Monitor: https://huggingface.co/osianet/jobs/%s", job_id)
     except Exception as e:
         logger.error("Failed to submit HF Job: %s", e)
         sys.exit(1)

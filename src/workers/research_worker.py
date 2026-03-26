@@ -196,7 +196,7 @@ async def embed_texts(texts: list[str], http: httpx.AsyncClient) -> list[list[fl
     Falls back to a zero vector on failure so the worker doesn't crash.
     """
     hf_token = os.getenv("HF_TOKEN", "")
-    model_url = "https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
+    model_url = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 
     try:
         resp = await http.post(
