@@ -34,7 +34,7 @@ logger = logging.getLogger("osia.qdrant_store")
 EMBEDDING_DIM = 384
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 HF_EMBEDDING_URL = (
-    "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+    "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 )
 
 # All desk collections + research cache — used by cross_desk_search
@@ -214,13 +214,14 @@ class QdrantStore:
             ]
             qdrant_filter = qdrant_models.Filter(must=must_conditions)
 
-        hits = await self._client.search(
+        hits_result = await self._client.query_points(
             collection_name=collection,
-            query_vector=vector,
+            query=vector,
             limit=top_k,
             query_filter=qdrant_filter,
             with_payload=True,
         )
+        hits = hits_result.points
 
         results = []
         for hit in hits:
@@ -267,13 +268,14 @@ class QdrantStore:
         async def _search_one(col: str) -> list[tuple[str, SearchResult]]:
             """Search a single collection; return (point_id, result) pairs."""
             try:
-                hits = await self._client.search(
+                hits_result = await self._client.query_points(
                     collection_name=col,
-                    query_vector=vector,
+                    query=vector,
                     limit=top_k,
                     query_filter=qdrant_filter,
                     with_payload=True,
                 )
+                hits = hits_result.points
                 out = []
                 for hit in hits:
                     payload = dict(hit.payload or {})

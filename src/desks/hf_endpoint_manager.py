@@ -17,7 +17,7 @@ import httpx
 logger = logging.getLogger("osia.hf_endpoints")
 
 # Seconds to wait after "running" status for the model to actually serve requests
-READINESS_PROBE_TIMEOUT = 60
+READINESS_PROBE_TIMEOUT = 180
 READINESS_PROBE_INTERVAL = 5
 
 # Map desk slugs → HF endpoint names. Only desks backed by HF endpoints
@@ -76,11 +76,11 @@ class HFEndpointManager:
         async with httpx.AsyncClient(timeout=10.0) as client:
             while asyncio.get_event_loop().time() < deadline:
                 try:
-                    resp = await client.post(
+                    resp = await client.get(
                         f"{url}/v1/models",
                         headers={"Authorization": f"Bearer {self.token}"},
                     )
-                    if resp.status_code < 500:
+                    if resp.status_code == 200:
                         logger.info("Endpoint '%s' model is warm and serving.", endpoint_name)
                         return True
                 except (httpx.ConnectError, httpx.ReadTimeout):

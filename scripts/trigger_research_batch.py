@@ -86,6 +86,7 @@ def _fire_hf_job() -> str:
     # The job downloads research_batch.py from the private HF dataset repo
     # (synced from GitHub via Actions) and runs it with uv.
     job = api.run_job(
+        image="ghcr.io/astral-sh/uv:python3.11-bookworm-slim",
         command=[
             "bash",
             "-c",
@@ -100,12 +101,12 @@ def _fire_hf_job() -> str:
             ),
         ],
         flavor=JOB_FLAVOR,
-        environment=env,
+        env=env,
         timeout=JOB_TIMEOUT,
         namespace="osianet",
     )
 
-    return job.job_id
+    return job.id
 
 
 def main():
@@ -140,7 +141,7 @@ def main():
     try:
         job_id = _fire_hf_job()
         logger.info("HF Job submitted: %s", job_id)
-        logger.info("Monitor: https://huggingface.co/jobs/%s/%s", HF_NAMESPACE, job_id)
+        logger.info("Monitor: https://huggingface.co/%s/jobs/%s", HF_NAMESPACE, job_id)
     except Exception as e:
         logger.error("Failed to submit HF Job: %s", e)
         sys.exit(1)

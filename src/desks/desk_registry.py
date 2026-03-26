@@ -43,6 +43,13 @@ REQUEST_TIMEOUT = 300.0
 RETRY_COUNT = 3
 RETRY_DELAY = 15.0
 
+# HF endpoints can take several minutes to load a 70B model after reporting
+# "running" — use a longer delay and more attempts, and also retry on 422
+# which HF returns while the model server is still warming up.
+HF_RETRY_COUNT = 6
+HF_RETRY_DELAY = 30.0
+HF_RETRIABLE_STATUSES = frozenset({422, 503})
+
 # ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
@@ -396,21 +403,28 @@ class DeskRegistry:
         else:
             raise ValueError(f"Unknown provider: {model_cfg.provider}")
 
-    async def _invoke_with_retry(self, fn) -> str:
-        """Call fn up to RETRY_COUNT times, retrying on HTTP 503."""
+    async def _invoke_with_retry(
+        self,
+        fn,
+        retry_count: int = RETRY_COUNT,
+        retry_delay: float = RETRY_DELAY,
+        retriable_statuses: frozenset[int] = frozenset({503}),
+    ) -> str:
+        """Call fn up to retry_count times, retrying on retriable_statuses."""
         last_exc: Exception | None = None
-        for attempt in range(1, RETRY_COUNT + 1):
+        for attempt in range(1, retry_count + 1):
             try:
                 return await fn()
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 503 and attempt < RETRY_COUNT:
+                if exc.response.status_code in retriable_statuses and attempt < retry_count:
                     logger.warning(
-                        "HTTP 503 on attempt %d/%d — retrying in %ds",
+                        "HTTP %d on attempt %d/%d — retrying in %ds",
+                        exc.response.status_code,
                         attempt,
-                        RETRY_COUNT,
-                        RETRY_DELAY,
+                        retry_count,
+                        retry_delay,
                     )
-                    await asyncio.sleep(RETRY_DELAY)
+                    await asyncio.sleep(retry_delay)
                     last_exc = exc
                 else:
                     raise
@@ -520,7 +534,10 @@ class DeskRegistry:
                 assembled_message,
                 base_url=endpoint_url,
                 api_key=os.getenv("HF_TOKEN", ""),
-            )
+            ),
+            retry_count=HF_RETRY_COUNT,
+            retry_delay=HF_RETRY_DELAY,
+            retriable_statuses=HF_RETRIABLE_STATUSES,
         )
 
     async def _resolve_hf_endpoint_url(self, model_cfg: ModelConfig) -> str:

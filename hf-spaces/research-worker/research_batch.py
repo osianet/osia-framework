@@ -57,7 +57,7 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 ENDPOINT_DOLPHIN = os.getenv("HF_ENDPOINT_DOLPHIN_24B", "")
 ENDPOINT_HERMES = os.getenv("HF_ENDPOINT_HERMES_70B", "")
 
-RESEARCH_COLLECTION = "osia:research_cache"
+RESEARCH_COLLECTION = "osia_research_cache"
 EMBEDDING_DIM = 384
 CHUNK_SIZE = 400  # words
 MAX_ROUNDS = 6
@@ -132,7 +132,7 @@ async def _probe_endpoint(url: str, timeout: int = 60) -> bool:
                     f"{url}/v1/models",
                     headers={"Authorization": f"Bearer {HF_TOKEN}"},
                 )
-                if resp.status_code < 500:
+                if resp.status_code == 200:
                     return True
             except (httpx.ConnectError, httpx.ReadTimeout):
                 pass

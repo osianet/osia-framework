@@ -33,6 +33,7 @@ SERVICES=(
 TIMERS=(
     "osia-daily-sitrep.timer"
     "osia-rss-ingress.timer"
+    "osia-research-trigger.timer"
 )
 
 CONTAINERS=(
@@ -478,6 +479,73 @@ case $command in
             fi
         else
             echo -e "  ${DIM}Redis unavailable — cannot inspect queue${NC}"
+        fi
+
+        # --- Research Batch ---
+        section_header "RESEARCH BATCH"
+
+        # Timer status
+        check_timer "osia-research-trigger.timer"
+
+        # Queue depths
+        if docker exec osia-redis redis-cli ping 2>/dev/null | grep -q PONG; then
+            research_depth=$(docker exec osia-redis redis-cli LLEN osia:research_queue 2>/dev/null | tr -d '\r')
+            seen_count=$(docker exec osia-redis redis-cli SCARD osia:research:seen_topics 2>/dev/null | tr -d '\r')
+            echo -e "  Pending topics:  ${BOLD}${research_depth:-0}${NC} queued, ${seen_count:-0} already researched"
+        else
+            echo -e "  ${DIM}Redis unavailable — cannot inspect research queue${NC}"
+        fi
+
+        # HF Jobs status
+        HF_TOKEN_VAL=$(grep -E '^HF_TOKEN=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+        HF_NAMESPACE_VAL=$(grep -E '^HF_NAMESPACE=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
+        if [ -n "$HF_TOKEN_VAL" ]; then
+            hf_jobs_out=$(cd "$SCRIPT_DIR" && HF_TOKEN="$HF_TOKEN_VAL" HF_NAMESPACE="$HF_NAMESPACE_VAL" \
+                .venv/bin/python -c "
+import os, sys
+from huggingface_hub import HfApi
+api = HfApi(token=os.environ.get('HF_TOKEN',''))
+try:
+    jobs = list(api.list_jobs())
+    running = [j for j in jobs if getattr(j,'status','') in ('running','pending')]
+    if running:
+        j = running[0]
+        print('RUNNING ' + getattr(j,'job_id',str(j)))
+    elif jobs:
+        j = jobs[0]
+        status = getattr(j,'status','?')
+        jid = getattr(j,'job_id',str(j))
+        print('LAST ' + status + ' ' + jid)
+    else:
+        print('NONE')
+except Exception as e:
+    print('ERROR ' + str(e))
+" 2>/dev/null)
+            case "$hf_jobs_out" in
+                RUNNING*)
+                    job_id="${hf_jobs_out#RUNNING }"
+                    echo -e "[${GREEN}OK${NC}]   HF Job running ${DIM}(${job_id})${NC}"
+                    ;;
+                LAST*)
+                    rest="${hf_jobs_out#LAST }"
+                    job_status="${rest%% *}"
+                    job_id="${rest#* }"
+                    [ "$job_status" = "completed" ] && status_color="$GREEN" || status_color="$DIM"
+                    [ "$job_status" = "failed" ]    && status_color="$RED"
+                    echo -e "[${DIM}--${NC}]   Last HF Job: ${status_color}${job_status}${NC} ${DIM}(${job_id})${NC}"
+                    ;;
+                NONE)
+                    echo -e "[${YELLOW}WARN${NC}] No HF Jobs found — batch has never run"
+                    ;;
+                ERROR*)
+                    echo -e "[${YELLOW}SKIP${NC}] Could not query HF Jobs ${DIM}(${hf_jobs_out#ERROR })${NC}"
+                    ;;
+                *)
+                    echo -e "[${YELLOW}SKIP${NC}] HF Jobs status unknown"
+                    ;;
+            esac
+        else
+            echo -e "[${YELLOW}SKIP${NC}] HF_TOKEN not set — cannot check job status"
         fi
 
         echo ""
