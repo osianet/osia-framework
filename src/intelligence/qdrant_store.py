@@ -47,7 +47,9 @@ DESK_COLLECTIONS: list[str] = [
     "cyber_intel",
     "watch_floor",
     "collection_raw",
-    "osia:research_cache",
+    # NOTE: osia:research_cache is NOT bootstrapped here — it's managed by the
+    # research worker via raw httpx calls. The qdrant-client SDK rejects colons
+    # in collection names. Cross-desk search still reads from it.
 ]
 
 # ---------------------------------------------------------------------------
