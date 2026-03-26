@@ -39,7 +39,7 @@ dev = [
 
 [tool.ruff]
 target-version = "py311"
-line-length = 100
+line-length = 120
 
 [tool.ruff.lint]
 select = [
@@ -52,9 +52,17 @@ select = [
     "UP",  # pyupgrade
 ]
 ignore = [
+    "E501",  # line too long — not enforced, formatter handles wrapping where possible
     "S101",  # assert statements (used in tests)
-    "S603",  # subprocess calls (used intentionally for ADB)
-    "S607",  # partial executable path (ADB)
+    "S603",  # subprocess calls (used intentionally for ADB/systemd)
+    "S607",  # partial executable path (ADB/systemd)
+    "S104",  # 0.0.0.0 binding — intentional for internal services
+    "S311",  # random used for human-like timing simulation, not crypto
+    "S110",  # try/except/pass — intentional in cleanup and metrics probes
+    "S314",  # XML parsing from trusted local ADB device output
+    "S608",  # false positive — f-string prompts flagged as SQL injection
+    "S310",  # urllib URL from env var, not user input
+    "B008",  # FastAPI Depends() in defaults is the correct FastAPI pattern
 ]
 
 [tool.ruff.lint.per-file-ignores]

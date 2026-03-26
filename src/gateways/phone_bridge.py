@@ -1,12 +1,13 @@
-import os
-import logging
-import subprocess
-from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-import uvicorn
 import asyncio
+import logging
+import os
+from pathlib import Path
+
+import uvicorn
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
+
 from src.gateways.adb_device import ADBDevice
 
 # This bridge allows AnythingLLM (Docker) to request physical phone actions

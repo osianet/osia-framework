@@ -1,27 +1,29 @@
-import os
-import json
-import re
 import asyncio
+import json
 import logging
+import os
+import re
 import subprocess
 from pathlib import Path
+
 import httpx
-import yaml
 import redis.asyncio as redis
+import yaml
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
+
+from src.agents.social_media_agent import SocialMediaAgent
 from src.desks.desk_registry import DeskRegistry
 from src.desks.hf_endpoint_manager import HFEndpointManager
 from src.gateways.adb_device import ADBDevice
 from src.gateways.mcp_dispatcher import MCPDispatcher
-from src.agents.social_media_agent import SocialMediaAgent
-from src.intelligence.qdrant_store import QdrantStore
 from src.intelligence.entity_extractor import EntityExtractor
+from src.intelligence.qdrant_store import QdrantStore
 from src.intelligence.source_tracker import (
     SourceTracker,
-    build_citation_protocol,
     audit_report,
+    build_citation_protocol,
 )
 
 logger = logging.getLogger("osia.orchestrator")

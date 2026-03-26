@@ -31,8 +31,7 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
@@ -476,10 +475,10 @@ async def _store(job_id: str, topic: str, desk: str, triggered_by: str,
     if not chunks:
         return
     embeddings = await _embed(chunks, http)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     points = []
-    for i, (chunk, vector) in enumerate(zip(chunks, embeddings)):
-        point_id = int(hashlib.md5(f"{job_id}:{i}".encode()).hexdigest()[:8], 16)
+    for i, (chunk, vector) in enumerate(zip(chunks, embeddings, strict=False)):
+        point_id = int(hashlib.md5(f"{job_id}:{i}".encode()).hexdigest()[:8], 16)  # noqa: S324
         points.append({
             "id": point_id,
             "vector": vector,
@@ -575,7 +574,7 @@ async def main():
                 if not topic:
                     continue
 
-                topic_key = hashlib.md5(topic.lower().strip().encode()).hexdigest()
+                topic_key = hashlib.md5(topic.lower().strip().encode()).hexdigest()  # noqa: S324
                 if await queue.is_seen(topic_key):
                     logger.info("Already researched, skipping: %s", topic)
                     continue

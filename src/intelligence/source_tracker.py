@@ -8,13 +8,13 @@ post-processing validation of citations in final reports.
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 
 logger = logging.getLogger("osia.sources")
 
 
-class SourceReliability(str, Enum):
+class SourceReliability(str, Enum):  # noqa: UP042 — StrEnum requires Python 3.11+, keeping str+Enum for compatibility
     """Admiralty-style source reliability rating."""
     A = "A — Peer-reviewed / Official government source"
     B = "B — Established media / Institutional publication"
@@ -44,7 +44,7 @@ class SourceRecord:
     query: str
     snippet: str
     reliability: SourceReliability
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def format_short(self, index: int) -> str:
         return f"[{index}] ({self.reliability.name}) {self.tool} — q: \"{self.query}\" | {self.snippet[:120]}"

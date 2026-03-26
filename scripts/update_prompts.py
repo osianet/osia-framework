@@ -1,8 +1,8 @@
-import os
-import json
-import httpx
 import logging
+import os
 from pathlib import Path
+
+import httpx
 from dotenv import load_dotenv
 from google import genai
 
@@ -120,8 +120,8 @@ if os.getenv("HF_ENDPOINT_DOLPHIN_24B"):
     DESK_MODELS["cultural-and-theological-intelligence-desk"]["basePath"] = url
 
 def generate_prompt(template: str, directives: str) -> str:
-    prompt = f"""You are an expert system prompt engineer for an AI system called OSIA. 
-I will provide you with a base template for a specific AI agent desk, and the core organizational directives. 
+    prompt = f"""You are an expert system prompt engineer for an AI system called OSIA.
+I will provide you with a base template for a specific AI agent desk, and the core organizational directives.
 Your job is to create a unified, clear, and comprehensive system prompt.
 
 Rules:
@@ -146,24 +146,24 @@ def activate_global_skills():
     """Update AnythingLLM sqlite to ensure all custom skills are loaded into default_agent_skills"""
     import sqlite3
     db_path = "/home/ubuntu/osia-knowledge-base/anythingllm.db"
-    
+
     if not os.path.exists(db_path):
         logger.warning("Could not find anythingllm.db to update global skills.")
         return
-        
+
     try:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
-        
+
         # This exact JSON array defines the default enabled skills across all agents
         # We REMOVE "web-scraping" because AnythingLLM sometimes injects it twice, causing Claude tool errors.
         skills_json = '["web-browsing","save-file-to-browser","create-chart","osia-cyber-ip-intel","osia-finance-stock-intel","osia-stash-writer","osia-geopol-country-intel","osia-social-username-recon","osia-culture-observatory","osia-github-repo-intel","osia-report-broadcast","osia-cyber-kali-tools"]'
-        
+
         cursor.execute("UPDATE system_settings SET value = ? WHERE label = 'default_agent_skills';", (skills_json,))
-        
+
         # Explicitly disable web-scraping to ensure it doesn't appear twice
         cursor.execute("UPDATE system_settings SET value = '[\"web-scraping\"]' WHERE label = 'disabled_agent_skills';")
-        
+
         conn.commit()
         conn.close()
         logger.info("Successfully activated all OSIA custom skills globally in the database.")
@@ -179,7 +179,7 @@ def main():
     activate_global_skills()
 
     directives = DIRECTIVES_PATH.read_text()
-    
+
     headers = {
         "Authorization": f"Bearer {ANYTHINGLLM_API_KEY}",
         "Content-Type": "application/json"
@@ -198,15 +198,15 @@ def main():
     for ws in workspaces:
         slug = ws.get("slug")
         template_file = TEMPLATES_DIR / f"{slug}.txt"
-        
+
         # Base update payload
         update_data = {}
-        
+
         # Inject Model Configurations if we have them mapped
         if slug in DESK_MODELS:
             logger.info(f"Injecting model configurations for {slug}")
             update_data.update(DESK_MODELS[slug])
-        
+
         # Generate new prompt if template exists
         if template_file.exists():
             logger.info(f"Processing prompt for workspace: {slug}")
@@ -217,18 +217,18 @@ def main():
                 logger.info(f"Generated new prompt for {slug} ({len(new_prompt)} chars)")
             except Exception as e:
                 logger.error(f"Failed to generate prompt for {slug}: {e}")
-        
+
         if not update_data:
             logger.info(f"Skipping {slug} - no updates to push.")
             continue
-            
+
         # Push the unified update
         try:
             update_url = f"{ANYTHINGLLM_BASE_URL.rstrip('/')}/api/v1/workspace/{slug}/update"
             update_response = httpx.post(update_url, headers=headers, json=update_data)
             update_response.raise_for_status()
             logger.info(f"Successfully updated AnythingLLM workspace: {slug}")
-            
+
         except Exception as e:
             logger.error(f"Failed to push updates for {slug}: {e}")
 

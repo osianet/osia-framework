@@ -21,24 +21,23 @@ Security posture:
   - No shell=True anywhere
 """
 
+import asyncio
 import hmac
+import json
 import logging
 import os
 import re
-import secrets
 import subprocess
-import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
-from fastapi import FastAPI, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
 import uvicorn
+from dotenv import load_dotenv
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 load_dotenv()
 
@@ -258,7 +257,7 @@ def _docker_container_info(name: str) -> dict:
 
 def _system_metrics() -> dict:
     metrics: dict = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "hostname": "",
         "uptime": "",
         "load": [],
@@ -346,8 +345,8 @@ def _system_metrics() -> dict:
 
 def _qdrant_info() -> dict:
     """Query Qdrant HTTP API directly and return collection stats per desk."""
-    import urllib.request
     import urllib.error
+    import urllib.request
 
     headers = {"Content-Type": "application/json"}
     if QDRANT_API_KEY:
@@ -372,7 +371,6 @@ def _qdrant_info() -> dict:
     for name in sorted(existing):
         info = _get(f"/collections/{name}")
         result = (info or {}).get("result", {})
-        config = result.get("config", {})
         points = result.get("points_count", 0) or 0
         vectors = result.get("vectors_count", 0) or 0
         segments = result.get("segments_count", 0) or 0

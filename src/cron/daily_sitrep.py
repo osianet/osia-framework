@@ -12,7 +12,8 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 import redis.asyncio as redis
 from dotenv import load_dotenv
 
@@ -44,7 +45,7 @@ async def trigger_sitrep():
         logger.error("No SIGNAL_GROUP_ID or SIGNAL_SENDER_NUMBER set. Cannot deliver SITREP.")
         return
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     logger.info("Triggering Daily SITREP for %s targeting %s", today, recipient)
 
     r = redis.from_url(redis_url)

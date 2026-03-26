@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -11,7 +11,6 @@ logger = logging.getLogger("osia.mcp")
 def _build_server_configs() -> dict[str, StdioServerParameters]:
     """Build MCP server configs from env vars so paths aren't hardcoded."""
     mcp_base = os.getenv("MCP_TOOLS_BASE", "/home/ubuntu")
-    osia_base = os.getenv("OSIA_BASE_DIR", "/home/ubuntu/osia-framework")
 
     return {
         "arxiv": StdioServerParameters(

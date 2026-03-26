@@ -1,15 +1,17 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
 import feedparser
 import redis.asyncio as redis
 from bs4 import BeautifulSoup
-from google import genai
 from dotenv import load_dotenv
-from src.intelligence.qdrant_store import QdrantStore
+from google import genai
+
 from src.intelligence.entity_extractor import EntityExtractor
+from src.intelligence.qdrant_store import QdrantStore
 
 logger = logging.getLogger("osia.rss")
 
@@ -34,7 +36,7 @@ class RSSIngress:
         if not self.feeds_file.exists():
             logger.warning("Feeds file not found at %s — no feeds to poll.", self.feeds_file)
             return []
-        with open(self.feeds_file, "r") as f:
+        with open(self.feeds_file) as f:
             return [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
     async def process_feeds(self) -> int:
@@ -107,7 +109,7 @@ class RSSIngress:
                         f"SOURCE: {url}\n"
                         f"LINK: {link}\n"
                         f"PUBLISHED: {published}\n"
-                        f"COLLECTED: {datetime.now(timezone.utc).isoformat()}\n\n"
+                        f"COLLECTED: {datetime.now(UTC).isoformat()}\n\n"
                         f"{ai_summary}"
                     )
 
@@ -131,7 +133,7 @@ class RSSIngress:
                                 "topic": title,
                                 "source": url,
                                 "reliability_tier": "B",
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "timestamp": datetime.now(UTC).isoformat(),
                                 "entity_tags": [e.name for e in entities],
                                 "triggered_by": "rss_ingress",
                             },

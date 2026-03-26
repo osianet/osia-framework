@@ -1,7 +1,8 @@
-import os
-import httpx
 import logging
+import os
 from pathlib import Path
+
+import httpx
 from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -34,7 +35,7 @@ def main():
     }
 
     # 1. Update Global System Skills (Internal API method using update-env or preferences if needed)
-    # Note: We manually injected these into the sqlite DB for the moment, but normally 
+    # Note: We manually injected these into the sqlite DB for the moment, but normally
     # AnythingLLM auto-enables any custom skill where active: true in plugin.json.
     logger.info("Custom skills loaded. Since they have active: true, AnythingLLM automatically detects them on next agent boot.")
 
@@ -82,7 +83,7 @@ def main():
             config = desk_configs[slug]
             logger.info(f"Updating models for {slug}...")
             update_url = f"{ANYTHINGLLM_BASE_URL.rstrip('/')}/api/v1/workspace/{slug}/update"
-            
+
             try:
                 update_response = httpx.post(update_url, headers=headers, json=config)
                 update_response.raise_for_status()

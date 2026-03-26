@@ -1,13 +1,12 @@
-import asyncio
 import argparse
 import os
-import sys
+
+import uvicorn
 from fastapi import FastAPI, Request
+from mcp.client.session import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-from mcp.client.stdio import stdio_client, StdioServerParameters
-from mcp.client.session import ClientSession
-import uvicorn
 
 # This bridge takes a local STDIO MCP tool and maps it 1:1 to an SSE endpoint.
 # This allows AnythingLLM (Docker) to use tools that only exist on the host.

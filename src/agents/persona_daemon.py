@@ -31,13 +31,15 @@ import random
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from google import genai
-from dotenv import load_dotenv
+
 import redis.asyncio as aioredis
+from dotenv import load_dotenv
+from google import genai
+
+from src.agents.social_media_agent import HomeScreenError, SocialMediaAgent
 from src.gateways.adb_device import ADBDevice
-from src.agents.social_media_agent import SocialMediaAgent, HomeScreenError
 
 logger = logging.getLogger("osia.persona")
 
@@ -61,7 +63,7 @@ class SessionStats:
     date: str = ""
 
     def reset_if_new_day(self):
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         if self.date != today:
             self.likes = 0
             self.comments = 0
@@ -160,7 +162,7 @@ class PersonaDaemon:
         if path.exists():
             return path.read_text().strip()
         logger.warning("No bio.txt found for persona %s", self.persona_id)
-        return f"a social media user"
+        return "a social media user"
 
     def _build_persona(self) -> str:
         """Build the persona prompt from personas/{id}/prompt.md or personas/default/prompt.md."""
@@ -181,7 +183,7 @@ class PersonaDaemon:
         )
 
     def _is_quiet_hours(self) -> bool:
-        local_hour = (datetime.now(timezone.utc) + timedelta(hours=self._tz_offset)).hour
+        local_hour = (datetime.now(UTC) + timedelta(hours=self._tz_offset)).hour
         if self._quiet_start > self._quiet_end:
             return local_hour >= self._quiet_start or local_hour < self._quiet_end
         return self._quiet_start <= local_hour < self._quiet_end
@@ -722,7 +724,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
         inspiration = await self._get_post_inspiration()
 
-        local_time = datetime.now(timezone.utc) + timedelta(hours=self._tz_offset)
+        local_time = datetime.now(UTC) + timedelta(hours=self._tz_offset)
         time_context = local_time.strftime("%A, %I:%M %p")
 
         prompt = f"""{self._persona_prompt}

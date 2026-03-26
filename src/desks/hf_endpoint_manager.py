@@ -94,6 +94,7 @@ class HFEndpointManager:
         """Synchronous blocking call (run via to_thread) that wakes and polls the endpoint.
         Returns the endpoint URL on success, None on failure."""
         import time
+
         from huggingface_hub import get_inference_endpoint
         from huggingface_hub.utils import HfHubHTTPError
 

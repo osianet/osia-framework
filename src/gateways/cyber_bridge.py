@@ -1,11 +1,12 @@
-import os
-import subprocess
 import logging
-from fastapi import FastAPI, Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-import uvicorn
+import os
 import re
+import subprocess
+
+import uvicorn
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
 
 # This bridge allows AnythingLLM (Docker) to execute whitelisted cyber tools
 # inside the Kali Sandbox (Docker) via host-level 'docker exec'.
@@ -50,18 +51,18 @@ async def execute_tool(cmd: CyberCommand, _=Depends(verify_token)):
 
     # Construct the command
     full_cmd = ["docker", "exec", KALI_CONTAINER] + WHITELIST[cmd.tool] + [cmd.target]
-    
+
     logger.info("Executing cyber tool: %s", " ".join(full_cmd))
-    
+
     try:
         result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             return {
-                "status": "error", 
-                "message": f"Tool execution failed.",
+                "status": "error",
+                "message": "Tool execution failed.",
                 "output": result.stderr
             }
-        
+
         return {
             "status": "success",
             "tool": cmd.tool,

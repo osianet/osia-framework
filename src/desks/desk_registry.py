@@ -16,7 +16,7 @@ Environment variables:
 import asyncio
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -118,7 +118,7 @@ def _parse_desk_yaml(path: Path, mandate_text: str, citation_protocol: str) -> D
     """Load and validate a single desk YAML file into a DeskConfig."""
     file_str = str(path)
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
     if not isinstance(raw, dict):

@@ -28,6 +28,7 @@ import os
 from typing import Any
 
 import redis.asyncio as aioredis
+import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -35,7 +36,6 @@ from pydantic import BaseModel
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
-import uvicorn
 
 load_dotenv()
 

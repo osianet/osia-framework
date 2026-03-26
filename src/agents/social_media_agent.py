@@ -11,11 +11,11 @@ import json
 import logging
 import os
 import random
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+
 from google import genai
-from google.genai import types
+
 from src.gateways.adb_device import ADBDevice
 
 logger = logging.getLogger("osia.social_agent")

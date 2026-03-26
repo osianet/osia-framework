@@ -24,14 +24,12 @@ Deploy to HuggingFace Spaces:
 
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
 import httpx
 from dotenv import load_dotenv
@@ -285,8 +283,8 @@ async def tool_search_arxiv(query: str, http: httpx.AsyncClient) -> str:
             link = re.search(r'<id>(.*?)</id>', entry)
             t = title.group(1).strip() if title else "Unknown"
             s = summary.group(1).strip()[:400] if summary else ""
-            l = link.group(1).strip() if link else ""
-            results.append(f"**{t}**\n{l}\n{s}")
+            url = link.group(1).strip() if link else ""
+            results.append(f"**{t}**\n{url}\n{s}")
         return "\n\n---\n\n".join(results) if results else "No ArXiv results found."
     except Exception as e:
         return f"ArXiv error: {e}"
@@ -473,11 +471,11 @@ async def store_research(job: ResearchJob, research_text: str, http: httpx.Async
     logger.info("Embedding %d chunks for job %s", len(chunks), job.job_id)
     embeddings = await embed_texts(chunks, http)
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     points = []
-    for i, (chunk, vector) in enumerate(zip(chunks, embeddings)):
-        # Deterministic ID from job_id + chunk index
-        point_id = int(hashlib.md5(f"{job.job_id}:{i}".encode()).hexdigest()[:8], 16)
+    for i, (chunk, vector) in enumerate(zip(chunks, embeddings, strict=False)):
+        # Deterministic ID from job_id + chunk index — md5 is fine here (not security-sensitive)
+        point_id = int(hashlib.md5(f"{job.job_id}:{i}".encode()).hexdigest()[:8], 16)  # noqa: S324
         points.append({
             "id": point_id,
             "vector": vector,
@@ -538,8 +536,8 @@ async def worker_loop():
                 job = ResearchJob.from_dict(payload)
                 logger.info("Received job %s: %r (desk: %s)", job.job_id, job.topic, job.desk)
 
-                # Deduplication — skip if we've researched this topic recently
-                topic_key = hashlib.md5(job.topic.lower().strip().encode()).hexdigest()
+                # Deduplication — skip if we've researched this topic recently (md5 is fine, not security-sensitive)
+                topic_key = hashlib.md5(job.topic.lower().strip().encode()).hexdigest()  # noqa: S324
                 if await queue.is_seen(topic_key):
                     logger.info("Topic already researched, skipping: %s", job.topic)
                     continue

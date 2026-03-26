@@ -1,9 +1,10 @@
 import asyncio
-import websockets
+import base64
 import json
 import os
-import base64
+
 import redis.asyncio as redis
+import websockets
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,9 +21,9 @@ TASK_QUEUE = os.getenv("OSIA_TASK_QUEUE", "osia:task_queue")
 async def listen_to_signal():
     """Connects to the Signal REST API WebSocket and listens for incoming messages."""
     redis_client = redis.from_url(REDIS_URL)
-    
+
     print(f"Signal Gateway starting... Listening on {SIGNAL_WS_URL}")
-    
+
     while True:
         try:
             async with websockets.connect(SIGNAL_WS_URL) as websocket:
@@ -31,11 +32,11 @@ async def listen_to_signal():
                     message_str = await websocket.recv()
                     try:
                         data = json.loads(message_str)
-                        
+
                         if "envelope" in data:
                             envelope = data["envelope"]
                             source = envelope.get("source")
-                            
+
                             group_id = None
                             if "dataMessage" in envelope:
                                 group_info = envelope["dataMessage"].get("groupInfo")
@@ -54,24 +55,24 @@ async def listen_to_signal():
                             if "dataMessage" in envelope:
                                 data_msg = envelope["dataMessage"]
                                 text = data_msg.get("message", "")
-                                
+
                                 if text:
                                     print(f"[Signal] New message from {source} (Resolved Group: {group_id}): {text}")
-                                    
+
                                     # If group_id is found, it is the source for replies
                                     task_source = f"signal:{group_id}" if group_id else f"signal:{source}"
-                                    
+
                                     task = {
                                         "source": task_source,
                                         "query": text
                                     }
-                                    
+
                                     await redis_client.rpush(TASK_QUEUE, json.dumps(task))
                                     print(f"[*] Task pushed to {TASK_QUEUE}")
-                                    
+
                     except json.JSONDecodeError:
                         pass
-                        
+
         except Exception as e:
             print(f"WebSocket connection dropped: {e}. Reconnecting in 5 seconds...")
             await asyncio.sleep(5)
