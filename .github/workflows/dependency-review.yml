@@ -22,3 +22,5 @@ jobs:
           fail-on-severity: moderate
           # Post a summary comment on the PR
           comment-summary-in-pr: always
+        # Gracefully skip if Dependency Graph is not enabled on the repo
+        continue-on-error: true
