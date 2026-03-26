@@ -154,14 +154,14 @@ class QueueClient:
             "Content-Type": "application/json",
         }
 
-    async def pop(self, timeout: int = 2) -> dict | None:
-        """Non-blocking pop — timeout=2 so we drain quickly. Retries on 429."""
+    async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """Make a request to the queue API, retrying on 429 with exponential backoff."""
         for attempt in range(5):
-            resp = await self._http.post(
-                f"{QUEUE_API_URL}/queue/pop",
+            resp = await self._http.request(
+                method,
+                f"{QUEUE_API_URL}{path}",
                 headers=self._headers,
-                json={"queue": "osia:research_queue", "timeout": timeout},
-                timeout=15,
+                **kwargs,
             )
             if resp.status_code == 429:
                 backoff = 2 ** attempt
@@ -169,31 +169,35 @@ class QueueClient:
                 await asyncio.sleep(backoff)
                 continue
             resp.raise_for_status()
-            return resp.json().get("payload")
+            return resp
         raise RuntimeError("Queue API rate-limited after 5 retries")
 
+    async def pop(self, timeout: int = 2) -> dict | None:
+        """Non-blocking pop — timeout=2 so we drain quickly."""
+        resp = await self._request(
+            "POST", "/queue/pop",
+            json={"queue": "osia:research_queue", "timeout": timeout},
+            timeout=15,
+        )
+        return resp.json().get("payload")
+
     async def depth(self) -> int:
-        resp = await self._http.get(
-            f"{QUEUE_API_URL}/queue/length",
-            headers=self._headers,
+        resp = await self._request(
+            "GET", "/queue/length",
             params={"queue": "osia:research_queue"},
         )
-        resp.raise_for_status()
         return resp.json().get("depth", 0)
 
     async def is_seen(self, key: str) -> bool:
-        resp = await self._http.post(
-            f"{QUEUE_API_URL}/queue/seen/check",
-            headers=self._headers,
+        resp = await self._request(
+            "POST", "/queue/seen/check",
             json={"key": "osia:research:seen_topics", "member": key},
         )
-        resp.raise_for_status()
         return resp.json().get("seen", False)
 
     async def mark_seen(self, key: str):
-        await self._http.post(
-            f"{QUEUE_API_URL}/queue/seen/add",
-            headers=self._headers,
+        await self._request(
+            "POST", "/queue/seen/add",
             json={"key": "osia:research:seen_topics", "members": [key]},
         )
 
