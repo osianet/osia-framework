@@ -155,22 +155,32 @@ class QueueClient:
         }
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        """Make a request to the queue API, retrying on 429 with exponential backoff."""
-        for attempt in range(5):
-            resp = await self._http.request(
-                method,
-                f"{QUEUE_API_URL}{path}",
-                headers=self._headers,
-                **kwargs,
-            )
-            if resp.status_code == 429:
-                backoff = 2 ** attempt
-                logger.warning("Queue API rate-limited (429) — backing off %ds", backoff)
+        """Make a request to the queue API with retry on 429 or transient network errors."""
+        last_exc: Exception | None = None
+        for attempt in range(6):
+            try:
+                resp = await self._http.request(
+                    method,
+                    f"{QUEUE_API_URL}{path}",
+                    headers=self._headers,
+                    **kwargs,
+                )
+                if resp.status_code == 429:
+                    backoff = 2 ** attempt
+                    logger.warning("Queue API rate-limited (429) — backing off %ds", backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                resp.raise_for_status()
+                return resp
+            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
+                backoff = 5 * (attempt + 1)
+                logger.warning(
+                    "Queue API transient error (%s) — retry %d/6 in %ds",
+                    type(exc).__name__, attempt + 1, backoff,
+                )
+                last_exc = exc
                 await asyncio.sleep(backoff)
-                continue
-            resp.raise_for_status()
-            return resp
-        raise RuntimeError("Queue API rate-limited after 5 retries")
+        raise RuntimeError(f"Queue API unreachable after 6 retries: {last_exc}")
 
     async def pop(self, timeout: int = 2) -> dict | None:
         """Non-blocking pop — timeout=2 so we drain quickly."""
