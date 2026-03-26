@@ -28,7 +28,7 @@ jobs:
 
           api = HfApi(token=os.environ["HF_TOKEN"])
           namespace = os.environ["HF_NAMESPACE"]
-          repo_id = f"{namespace}/osia-jobs"
+          repo_id = "osianet/osia-jobs"
 
           # Create the dataset repo if it doesn't exist yet
           api.create_repo(

@@ -36,7 +36,7 @@ HF_NAMESPACE = os.getenv("HF_NAMESPACE", "")
 BATCH_THRESHOLD = int(os.getenv("RESEARCH_BATCH_THRESHOLD", "3"))
 
 # HF dataset repo where the batch script lives (synced via GitHub Actions)
-HF_JOBS_REPO = f"{HF_NAMESPACE}/osia-jobs"
+HF_JOBS_REPO = "osianet/osia-jobs"
 SCRIPT_URL = f"https://huggingface.co/datasets/{HF_JOBS_REPO}/resolve/main/research_batch.py"
 
 # HF Job config
@@ -101,7 +101,7 @@ def _fire_hf_job() -> str:
         flavor=JOB_FLAVOR,
         environment=env,
         timeout=JOB_TIMEOUT,
-        namespace=HF_NAMESPACE,
+        namespace="osianet",
     )
 
     return job.job_id
