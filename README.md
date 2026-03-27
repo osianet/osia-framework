@@ -32,7 +32,7 @@ A local oneshot service (`osia-research-worker.timer`, every 2 hours) drains a s
 ### 4. Desk Routing & RAG
 After the research loop completes, the Chief of Staff selects the most appropriate desk. Each desk query is enriched with:
 - **Per-desk RAG** — top-K results from that desk's Qdrant collection.
-- **Cross-desk RAG** — always fans out across all registered collections, including the Epstein Files and Cybersecurity Attacks knowledge bases. Falls back to the raw query when entity extraction produces nothing, so sensitive topics are never blocked from retrieval.
+- **Cross-desk RAG** — always fans out across all registered collections, including the Epstein Files, Cybersecurity Attacks, and HackerOne Reports knowledge bases. Falls back to the raw query when entity extraction produces nothing, so sensitive topics are never blocked from retrieval.
 - **Research cache** — recent background research on relevant entities.
 - **Real UTC timestamp** — injected at the top of every message; no tool call needed.
 
@@ -104,7 +104,8 @@ Qdrant Collections (RAG namespaces):
      ├── per-desk collections (one per desk slug)
      ├── osia_research_cache  (background research worker output)
      ├── epstein-files        (declassified government documents — see below)
-     └── cybersecurity-attacks (13K global cyber incidents — see below)
+     ├── cybersecurity-attacks (13K global cyber incidents — see below)
+     └── hackerone-reports     (12.6K disclosed bug bounty reports — see below)
 ```
 
 ---
@@ -246,6 +247,50 @@ uv run python scripts/ingest_cybersecurity_attacks.py --resume
 ```
 
 Each novel threat actor (`Nation-State`, `Criminal`, `Hacktivist`, `Terrorist`) is automatically enqueued to the **Cyber Intelligence & Warfare desk** research queue for follow-up investigation. Actors are Redis-deduplicated across runs. Embedding and upserts are idempotent — re-running the script is safe.
+
+---
+
+## HackerOne Disclosed Reports Knowledge Base
+
+A dedicated Qdrant collection (`hackerone-reports`) holds 12,618 publicly disclosed bug bounty reports from the [`Hacker0x01/hackerone_disclosed_reports`](https://huggingface.co/datasets/Hacker0x01/hackerone_disclosed_reports) dataset. Reports span a wide range of weakness types (XSS, SSRF, auth bypass, etc.), affected organisations, and severity levels. The collection enriches Cyber desk queries with real-world vulnerability context — past disclosures, affected assets, and exploitability narratives.
+
+**Dataset:** `Hacker0x01/hackerone_disclosed_reports` — 10,094 train / 1,262 validation / 1,262 test rows
+
+**Fields indexed per report:**
+
+| Field | Description |
+|-------|-------------|
+| `title` | Vulnerability report title |
+| `weakness` | CWE weakness classification (e.g. Improper Authorization, SSRF) |
+| `team_handle` | Target organisation's HackerOne handle |
+| `asset_identifier` | Affected asset (domain, IP, app) |
+| `max_severity` | Declared severity (critical / high / medium / low) |
+| `substate` | Report outcome (resolved, duplicate, informative, not-applicable) |
+| `has_bounty` | Whether a bounty was awarded |
+| `reporter` | Researcher username |
+| `disclosed_at` | Public disclosure date |
+| `vulnerability_information` | Full technical vulnerability narrative |
+
+**Ingestion:**
+
+```bash
+# Full ingest — all three splits (~12.6K reports)
+uv run python scripts/ingest_hackerone_reports.py
+
+# Single split
+uv run python scripts/ingest_hackerone_reports.py --splits train
+
+# Skip reports with no vulnerability text (visibility=no-content)
+uv run python scripts/ingest_hackerone_reports.py --skip-no-content
+
+# Test without writing anything
+uv run python scripts/ingest_hackerone_reports.py --limit 100 --dry-run
+
+# Resume an interrupted run
+uv run python scripts/ingest_hackerone_reports.py --resume
+```
+
+Upserts are idempotent (deterministic point IDs from report ID). Re-running the script is safe and will update any changed payloads.
 
 ---
 
