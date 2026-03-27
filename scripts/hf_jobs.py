@@ -45,11 +45,20 @@ STAGE_COLOR = {
 
 # Log lines containing these strings are shown by default (non-raw mode)
 LOG_KEYWORDS = [
-    "ERROR", "WARNING", "WARN",
-    "=== OSIA", "Batch complete",
-    "Endpoint ready", "Endpoint HTTP", "Endpoint '",
-    "Researching:", "Research done", "Research failed",
-    "Queue depth", "Drained", "Job complete",
+    "ERROR",
+    "WARNING",
+    "WARN",
+    "=== OSIA",
+    "Batch complete",
+    "Endpoint ready",
+    "Endpoint HTTP",
+    "Endpoint '",
+    "Researching:",
+    "Research done",
+    "Research failed",
+    "Queue depth",
+    "Drained",
+    "Job complete",
     "body:",
 ]
 
@@ -133,10 +142,7 @@ def cmd_list(args):
         if len(msg) > 50:
             msg = msg[:47] + "..."
         age = _age(j["createdAt"])
-        print(
-            f"{j['id']:<26}  {_c(f'{stage:<12}', color)}  {age:<12}  "
-            f"{j['createdAt'][:19].replace('T',' ')}"
-        )
+        print(f"{j['id']:<26}  {_c(f'{stage:<12}', color)}  {age:<12}  {j['createdAt'][:19].replace('T', ' ')}")
         if msg and stage == "ERROR":
             print(f"  {_c('↳ ' + msg, 'red')}")
     print()
@@ -155,10 +161,10 @@ def cmd_status(args):
 
     print(f"\n{_c('Job ID:', 'bold')}      {job['id']}")
     print(f"{_c('Status:', 'bold')}      {_c(stage, color)}")
-    print(f"{_c('Created:', 'bold')}     {job['createdAt'][:19].replace('T',' ')} UTC  ({age})")
+    print(f"{_c('Created:', 'bold')}     {job['createdAt'][:19].replace('T', ' ')} UTC  ({age})")
     print(f"{_c('Org:', 'bold')}         {job['owner']['name']}")
-    print(f"{_c('Image:', 'bold')}       {job.get('dockerImage','?')}")
-    print(f"{_c('Flavor:', 'bold')}      {job.get('flavor','?')}")
+    print(f"{_c('Image:', 'bold')}       {job.get('dockerImage', '?')}")
+    print(f"{_c('Flavor:', 'bold')}      {job.get('flavor', '?')}")
     timeout_s = job.get("timeout", 0)
     print(f"{_c('Timeout:', 'bold')}     {timeout_s // 3600}h{(timeout_s % 3600) // 60:02d}m")
 
@@ -237,16 +243,21 @@ def cmd_endpoints(args):
             continue
 
         state = ep.get("status", {}).get("state", "?")
-        color = {"running": "green", "scaledToZero": "dim", "initializing": "yellow",
-                 "pending": "yellow", "error": "red"}.get(state, "reset")
+        color = {
+            "running": "green",
+            "scaledToZero": "dim",
+            "initializing": "yellow",
+            "pending": "yellow",
+            "error": "red",
+        }.get(state, "reset")
         model = ep.get("model", {})
         env = model.get("env", {})
         compute = ep.get("compute", {})
 
         print(f"  {_c(name, 'bold')}")
         print(f"    Status:  {_c(state, color)}")
-        print(f"    Model:   {model.get('repository','?')}")
-        print(f"    Compute: {compute.get('instanceType','?')} × {compute.get('instanceSize','?')}")
+        print(f"    Model:   {model.get('repository', '?')}")
+        print(f"    Compute: {compute.get('instanceType', '?')} × {compute.get('instanceSize', '?')}")
         print(f"    Env:     {env if env else _c('(none set)', 'red')}")
         if not env.get("ENABLE_AUTO_TOOL_CHOICE"):
             print(f"    {_c('⚠ ENABLE_AUTO_TOOL_CHOICE not set — tool calling will 422', 'red')}")
@@ -271,6 +282,7 @@ def cmd_cancel(args):
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def main():
     if not HF_TOKEN:

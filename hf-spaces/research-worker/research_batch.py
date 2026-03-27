@@ -166,7 +166,7 @@ class QueueClient:
                     **kwargs,
                 )
                 if resp.status_code == 429:
-                    backoff = 2 ** attempt
+                    backoff = 2**attempt
                     logger.warning("Queue API rate-limited (429) — backing off %ds", backoff)
                     await asyncio.sleep(backoff)
                     continue
@@ -176,7 +176,9 @@ class QueueClient:
                 backoff = 5 * (attempt + 1)
                 logger.warning(
                     "Queue API transient error (%s) — retry %d/6 in %ds",
-                    type(exc).__name__, attempt + 1, backoff,
+                    type(exc).__name__,
+                    attempt + 1,
+                    backoff,
                 )
                 last_exc = exc
                 await asyncio.sleep(backoff)
@@ -185,7 +187,8 @@ class QueueClient:
     async def pop(self, timeout: int = 2) -> dict | None:
         """Non-blocking pop — timeout=2 so we drain quickly."""
         resp = await self._request(
-            "POST", "/queue/pop",
+            "POST",
+            "/queue/pop",
             json={"queue": "osia:research_queue", "timeout": timeout},
             timeout=15,
         )
@@ -193,21 +196,24 @@ class QueueClient:
 
     async def depth(self) -> int:
         resp = await self._request(
-            "GET", "/queue/length",
+            "GET",
+            "/queue/length",
             params={"queue": "osia:research_queue"},
         )
         return resp.json().get("depth", 0)
 
     async def is_seen(self, key: str) -> bool:
         resp = await self._request(
-            "POST", "/queue/seen/check",
+            "POST",
+            "/queue/seen/check",
             json={"key": "osia:research:seen_topics", "member": key},
         )
         return resp.json().get("seen", False)
 
     async def mark_seen(self, key: str):
         await self._request(
-            "POST", "/queue/seen/add",
+            "POST",
+            "/queue/seen/add",
             json={"key": "osia:research:seen_topics", "members": [key]},
         )
 
@@ -416,7 +422,9 @@ async def run_research_loop(
             # Log the full response body so we can diagnose 422s etc.
             logger.error(
                 "Endpoint HTTP %d on round %d — body: %s",
-                status, round_num, e.response.text[:1000],
+                status,
+                round_num,
+                e.response.text[:1000],
             )
             # 503 = model still cold-starting, retry
             if status == 503:
