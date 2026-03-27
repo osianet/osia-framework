@@ -20,7 +20,8 @@ def _build_server_configs() -> dict[str, StdioServerParameters]:
         ),
         "semantic-scholar": StdioServerParameters(
             command=f"{mcp_base}/mcp-semantic-scholar/.venv/bin/python",
-            args=["-m", "semantic_scholar_mcp.cli", "serve"],
+            args=["-m", "semantic_scholar_mcp.cli", "serve"]
+            + (["--api-key", os.getenv("S2_API_KEY")] if os.getenv("S2_API_KEY") else []),
             env={"PYTHONPATH": f"{mcp_base}/mcp-semantic-scholar/src", **os.environ},
         ),
         "wikipedia": StdioServerParameters(

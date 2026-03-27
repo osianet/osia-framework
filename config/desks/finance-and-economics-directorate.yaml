@@ -4,18 +4,18 @@ prompt_file: templates/prompts/finance-and-economics-directorate.txt
 
 model:
   primary:
-    provider: openai
-    model_id: gpt-5.4-mini
+    provider: openrouter
+    model_id: openai/gpt-4o-mini
     temperature: 0.3
     max_tokens: 8192
   fallback:
-    provider: gemini
-    model_id: gemini-2.5-flash
+    provider: openrouter
+    model_id: google/gemini-2.5-flash
     temperature: 0.3
     max_tokens: 8192
 
 qdrant:
-  collection: finance_intel
+  collection: finance-and-economics-directorate
   context_top_k: 5
   cross_desk_search: true
   cross_desk_top_k: 3

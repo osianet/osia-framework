@@ -107,8 +107,8 @@ class PersonaDaemon:
         # Persona bio — can be overridden entirely via env or file
         self._persona_bio = os.getenv(f"PERSONA_{persona_id}_BIO", "")
 
-        # ADB + Gemini
-        self.adb = ADBDevice(device_id=device_id)
+        # ADB + Gemini — every ADB command checks the orchestrator lock first
+        self.adb = ADBDevice(device_id=device_id, lock_check=self._wait_for_adb_lock)
         self.gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
         self.agent = SocialMediaAgent(
@@ -1089,6 +1089,10 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
     async def run_session(self):
         """Run a single browsing session."""
+        # Re-check here too: run_forever() checks before calling us, but the
+        # orchestrator may have acquired the lock in the gap since that check.
+        await self._wait_for_adb_lock()
+
         self.stats.reset_if_new_day()
         self.stats.sessions += 1
 

@@ -21,6 +21,7 @@ Environment variables:
   HF_TOKEN                    — HuggingFace token (for embeddings)
   TAVILY_API_KEY              — Tavily web search API key
   RESEARCH_BATCH_THRESHOLD    — Min queue depth before processing (default: 3)
+  RESEARCH_COOLDOWN_HOURS     — Hours before a topic can be re-researched (default: 72)
   VENICE_MODEL_UNCENSORED     — Override uncensored model slug (default: venice-uncensored)
   VENICE_MODEL_CYBER          — Override cyber desk model slug (default: mistral-31-24b)
   VENICE_MODEL_DEFAULT        — Override default model slug (default: mistral-small-3-2-24b-instruct)
@@ -72,13 +73,23 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
 
+S2_API_KEY = os.getenv("S2_API_KEY", "")  # Semantic Scholar — free key lifts limit to 10 req/s
+
+WIKIPEDIA_USER_AGENT = os.getenv(
+    "WIKIPEDIA_USER_AGENT",
+    "OSIA-Intelligence-Framework/1.0 (https://osia.dev; research@osia.dev) python-httpx",
+)
+
 BATCH_THRESHOLD = int(os.getenv("RESEARCH_BATCH_THRESHOLD", "3"))
+RESEARCH_COOLDOWN_SECONDS = int(os.getenv("RESEARCH_COOLDOWN_HOURS", "72")) * 3600
 
 # Venice model routing per desk
-# venice-uncensored has no native function calling — ReAct fallback handles it
 VENICE_MODEL_UNCENSORED = os.getenv("VENICE_MODEL_UNCENSORED", "venice-uncensored")
 VENICE_MODEL_CYBER = os.getenv("VENICE_MODEL_CYBER", "mistral-31-24b")
 VENICE_MODEL_DEFAULT = os.getenv("VENICE_MODEL_DEFAULT", "mistral-small-3-2-24b-instruct")
+
+# Models that reject tool_choice/tools in the API payload — use ReAct prompt only
+REACT_ONLY_MODELS = {VENICE_MODEL_UNCENSORED}
 
 # Desks that require uncensored reasoning (no guardrails)
 UNCENSORED_DESKS = {
@@ -155,10 +166,10 @@ class RedisQueue:
             return None
 
     def is_seen(self, key: str) -> bool:
-        return bool(self._r.sismember("osia:research:seen_topics", key))
+        return bool(self._r.exists(f"osia:research:seen:{key}"))
 
     def mark_seen(self, key: str):
-        self._r.sadd("osia:research:seen_topics", key)
+        self._r.set(f"osia:research:seen:{key}", "1", ex=RESEARCH_COOLDOWN_SECONDS)
 
 
 # ---------------------------------------------------------------------------
@@ -239,10 +250,12 @@ async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
 
 
 async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
+    headers = {"User-Agent": WIKIPEDIA_USER_AGENT}
     try:
         resp = await http.get(
             "https://en.wikipedia.org/w/api.php",
             params={"action": "query", "list": "search", "srsearch": query, "srlimit": 3, "format": "json", "utf8": 1},
+            headers=headers,
             timeout=10.0,
         )
         resp.raise_for_status()
@@ -260,6 +273,7 @@ async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
                 "titles": title,
                 "format": "json",
             },
+            headers=headers,
             timeout=10.0,
         )
         ex.raise_for_status()
@@ -295,13 +309,27 @@ async def tool_search_arxiv(query: str, http: httpx.AsyncClient) -> str:
 
 
 async def tool_search_semantic_scholar(query: str, http: httpx.AsyncClient) -> str:
+    headers = {"x-api-key": S2_API_KEY} if S2_API_KEY else {}
+    for attempt in range(3):
+        try:
+            resp = await http.get(
+                "https://api.semanticscholar.org/graph/v1/paper/search",
+                params={"query": query, "limit": 3, "fields": "title,abstract,year,authors,url"},
+                headers=headers,
+                timeout=15.0,
+            )
+            if resp.status_code == 429:
+                wait = 5 * (attempt + 1)
+                logger.warning("Semantic Scholar rate-limited — waiting %ds (attempt %d/3)", wait, attempt + 1)
+                await asyncio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+        except httpx.HTTPStatusError:
+            if attempt == 2:
+                return "Semantic Scholar error: rate limit exceeded"
+            continue
     try:
-        resp = await http.get(
-            "https://api.semanticscholar.org/graph/v1/paper/search",
-            params={"query": query, "limit": 3, "fields": "title,abstract,year,authors,url"},
-            timeout=15.0,
-        )
-        resp.raise_for_status()
         papers = resp.json().get("data", [])
         if not papers:
             return "No Semantic Scholar results found."
@@ -430,31 +458,41 @@ async def run_research_loop_openai_compat(
     logger.info("Researching: %s (desk: %s, model: %s)", job.topic, job.desk, model)
 
     for round_num in range(MAX_ROUNDS):
-        payload = {
+        payload: dict = {
             "model": model,
             "messages": messages,
-            "tools": TOOL_SCHEMAS,
-            "tool_choice": "auto",
             "max_tokens": 2048,
             "temperature": 0.3,
         }
+        if model not in REACT_ONLY_MODELS:
+            payload["tools"] = TOOL_SCHEMAS
+            payload["tool_choice"] = "auto"
 
-        try:
-            resp = await http.post(
-                f"{base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=120.0,
-            )
-            resp.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "API HTTP %d on round %d — body: %s",
-                e.response.status_code,
-                round_num,
-                e.response.text[:500],
-            )
-            raise
+        for attempt in range(3):
+            try:
+                resp = await http.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=120.0,
+                )
+                resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < 2:
+                    wait = 35 * (attempt + 1)
+                    logger.warning(
+                        "429 rate-limited on round %d — waiting %ds (attempt %d/3)", round_num, wait, attempt + 1
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                logger.error(
+                    "API HTTP %d on round %d — body: %s",
+                    e.response.status_code,
+                    round_num,
+                    e.response.text[:500],
+                )
+                raise
 
         data = resp.json()
         choice = data["choices"][0]
@@ -750,6 +788,7 @@ async def main():
 
             queue.mark_seen(topic_key)
             succeeded += 1
+            await asyncio.sleep(2)  # brief pause between jobs to stay within Venice rate limits
 
     logger.info("=== Batch complete. succeeded=%d failed=%d skipped=%d ===", succeeded, failed, skipped)
 

@@ -10,8 +10,9 @@ logger = logging.getLogger("osia.adb")
 class ADBDevice:
     """Gateway for controlling physical Android devices over USB/ADB for OSINT collection."""
 
-    def __init__(self, device_id: str = None):
+    def __init__(self, device_id: str = None, lock_check=None):
         self.device_id = device_id
+        self._lock_check = lock_check  # optional async callable — called before every _run
         self._ensure_adb_started()
 
     def _ensure_adb_started(self):
@@ -31,6 +32,8 @@ class ADBDevice:
 
     async def _run(self, args: list[str], **kwargs) -> subprocess.CompletedProcess:
         """Run an ADB command in a thread so we don't block the event loop."""
+        if self._lock_check:
+            await self._lock_check()
         cmd = self._build_cmd(args)
         return await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, **kwargs)
 
@@ -68,6 +71,8 @@ class ADBDevice:
         await self._run_checked(["shell", "input", "text", escaped_text])
 
     async def take_screenshot(self, save_path: str):
+        if self._lock_check:
+            await self._lock_check()
         cmd = self._build_cmd(["exec-out", "screencap", "-p"])
         result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
         if result.returncode != 0:
@@ -94,7 +99,6 @@ class ADBDevice:
         await self._run_checked(["shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", url])
 
     async def record_screen(self, remote_path: str = "/sdcard/screen_capture.mp4", time_limit: int = 30):
-        await self.wake_and_unlock()
         logger.info("Recording screen for %d seconds...", time_limit)
         cmd = self._build_cmd(["shell", "screenrecord", "--time-limit", str(time_limit), remote_path])
         await asyncio.to_thread(subprocess.run, cmd)

@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -44,17 +45,17 @@ MEDIA_DOMAINS = ("instagram.com", "facebook.com", "tiktok.com")
 # YouTube domains get transcript extraction instead of ADB screen-record
 YOUTUBE_DOMAINS = ("youtube.com", "youtu.be")
 
-# Qdrant collections bootstrapped at startup
+# Qdrant collections bootstrapped at startup — names match desk YAML slugs
 BOOTSTRAP_COLLECTIONS = [
-    "geopolitical_intel",
-    "cultural_intel",
-    "science_intel",
-    "human_intel",
-    "finance_intel",
-    "cyber_intel",
-    "watch_floor",
-    "collection_raw",
-    # NOTE: osia:research_cache excluded — managed by research worker, colon invalid in qdrant-client SDK
+    "collection-directorate",
+    "geopolitical-and-security-desk",
+    "cultural-and-theological-intelligence-desk",
+    "science-technology-and-commercial-desk",
+    "human-intelligence-and-profiling-desk",
+    "finance-and-economics-directorate",
+    "cyber-intelligence-and-warfare-desk",
+    "the-watch-floor",
+    "osia_research_cache",
 ]
 
 
@@ -90,10 +91,15 @@ class OsiaOrchestrator:
         self.signal_number = os.getenv("SIGNAL_SENDER_NUMBER")
         self._signal_client = httpx.AsyncClient(timeout=30.0)
 
-        # Modern Gemini (Chief of Staff Logic)
+        # Modern Gemini (media analysis, research loop, image generation)
         api_key = os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(api_key=api_key)
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
+
+        # Venice (desk routing) — uncensored so sensitive queries are never refused or misrouted
+        self._venice_base_url = "https://api.venice.ai/api/v1"
+        self._venice_api_key = os.getenv("VENICE_API_KEY", "")
+        self._routing_model = os.getenv("VENICE_ROUTING_MODEL", "venice-uncensored")
 
         # New architecture: DeskRegistry, QdrantStore, EntityExtractor
         self.desk_registry = DeskRegistry()
@@ -681,12 +687,13 @@ class OsiaOrchestrator:
             record_duration = _FALLBACK_DURATION
             logger.info("Could not detect duration (got %r) — using fallback %ds", detected, record_duration)
 
-        await self.adb.open_url(url)
-        await asyncio.sleep(5)
-
+        # Acquire ADB lock BEFORE touching the phone so the persona daemon yields
         lock_ttl = record_duration + 120
         await self.redis.set("osia:adb:lock", "orchestrator", ex=lock_ttl)
         try:
+            await self.adb.open_url(url)
+            await asyncio.sleep(5)
+
             remote_path = "/sdcard/osia_capture.mp4"
             local_path = str(self.base_dir / "osia_capture.mp4")
 
@@ -722,6 +729,38 @@ class OsiaOrchestrator:
         return response.text
 
     # ------------------------------------------------------------------
+    # Desk routing via Venice (uncensored — no query is refused or misrouted)
+    # ------------------------------------------------------------------
+
+    async def _route_to_desk(self, prompt: str) -> str:
+        """Call Venice uncensored to select a desk slug. Falls back to Gemini on error."""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                resp = await http.post(
+                    f"{self._venice_base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self._venice_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self._routing_model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 64,
+                        "temperature": 0.0,
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            logger.warning("Venice routing failed (%s) — falling back to Gemini", e)
+            result = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=self.model_id,
+                contents=prompt,
+            )
+            return (result.text or "").strip()
+
+    # ------------------------------------------------------------------
     # Qdrant context injection
     # ------------------------------------------------------------------
 
@@ -740,7 +779,7 @@ class OsiaOrchestrator:
             collection = desk_cfg.qdrant.collection
             top_k = desk_cfg.qdrant.context_top_k
         except KeyError:
-            collection = "geopolitical_intel"
+            collection = "collection-directorate"
             top_k = 5
 
         results = []
@@ -862,8 +901,7 @@ class OsiaOrchestrator:
         """
 
         try:
-            route_res = self.client.models.generate_content(model=self.model_id, contents=plan_prompt)
-            assigned_desk = (route_res.text or "").strip()
+            assigned_desk = await self._route_to_desk(plan_prompt)
 
             if assigned_desk not in self.valid_desks:
                 logger.warning(
@@ -904,6 +942,28 @@ class OsiaOrchestrator:
 
             # Audit citations and append source quality summary
             analysis += audit_report(analysis, source_tracker)
+
+            # 7. Store desk analysis in Qdrant for future context retrieval
+            try:
+                desk_cfg = self.desk_registry.get(assigned_desk)
+                desk_collection = desk_cfg.qdrant.collection
+                await self.qdrant.upsert(
+                    desk_collection,
+                    analysis,
+                    metadata={
+                        "desk": assigned_desk,
+                        "topic": original_query[:200],
+                        "source": source,
+                        "reliability_tier": "A",
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "entity_tags": entity_names,
+                        "triggered_by": triggered_by,
+                        "model_used": model_id_used,
+                    },
+                )
+                logger.debug("Stored analysis in Qdrant collection '%s'", desk_collection)
+            except Exception as e:
+                logger.warning("Failed to store analysis in Qdrant for desk '%s': %s", assigned_desk, e)
 
             if source.startswith("signal:"):
                 recipient = source[len("signal:") :]

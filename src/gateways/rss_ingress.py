@@ -123,10 +123,10 @@ class RSSIngress:
                     # 2. Enqueue research jobs for extracted entities
                     await entity_extractor.enqueue_research_jobs(entities, triggered_by=url)
 
-                    # 3. Upsert into Qdrant collection_raw (long-term vector store)
+                    # 3. Upsert into Qdrant collection-directorate (long-term vector store)
                     try:
                         await qdrant_store.upsert(
-                            "collection_raw",
+                            "collection-directorate",
                             intel_record,
                             metadata={
                                 "desk": "collection-directorate",
