@@ -111,11 +111,7 @@ def _fire_hf_job() -> str:
 
 def _check_already_running() -> str | None:
     """Return the job ID if a research job is already running/pending, else None."""
-    from huggingface_hub import HfApi
-    import httpx
-
     try:
-        api = HfApi(token=HF_TOKEN)
         # list_jobs() uses personal account namespace — query the org directly
         r = httpx.get(
             "https://huggingface.co/api/jobs/osianet",

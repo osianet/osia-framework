@@ -15,7 +15,7 @@ import json
 import os
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime
 
 from dotenv import load_dotenv
 
@@ -92,7 +92,7 @@ def _c(text: str, color: str) -> str:
 
 def _age(iso: str) -> str:
     dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    mins = int((datetime.now(timezone.utc) - dt).total_seconds() // 60)
+    mins = int((datetime.now(datetime.UTC) - dt).total_seconds() // 60)
     if mins < 60:
         return f"{mins}m ago"
     h, m = divmod(mins, 60)
@@ -261,7 +261,7 @@ def cmd_cancel(args):
         print(_c("Usage: hf_jobs.py cancel JOB_ID", "red"))
         sys.exit(1)
     try:
-        result = _hf(f"/jobs/{ORG}/{args.job_id}/cancel", method="POST")
+        _hf(f"/jobs/{ORG}/{args.job_id}/cancel", method="POST")
         print(_c(f"Cancelled job {args.job_id}", "green"))
     except Exception as e:
         print(_c(f"Cancel failed: {e}", "red"))
