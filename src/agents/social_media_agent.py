@@ -186,6 +186,8 @@ Rules:
 - The comment input box is a text field, usually a rounded rectangle near the bottom of the screen. Tap its CENTER — not the edges, not the area above it.
 - If a keyboard is visible and you need to submit, tap the Send/Post button on the keyboard or in the UI rather than pressing Enter.
 - If you see a full-screen image or video with no UI controls visible, use "back" to return to the post view.
+- CRITICAL: If a software keyboard is visible and you do NOT need to type anything right now, use the "back" action to dismiss it. NEVER tap anything in the bottom navigation bar strip (the row of Home/Back/Recents system buttons at the very bottom of the screen) to dismiss a keyboard — that will exit the app. Always use "back" action to close an unwanted keyboard.
+- CRITICAL: If you can see the Android home screen (wallpaper, app icons, clock/date, no social media app visible), use "fail" immediately — do not try to navigate back.
 """
 
         response = self.gemini.models.generate_content(
@@ -302,6 +304,17 @@ Rules:
                 action,
             )
 
+            # Vision-based home screen fallback: foreground app check can miss some launchers.
+            # If the model itself reports seeing the home screen, fail immediately — Back presses
+            # from the home screen do nothing useful and just burn steps.
+            _desc_lower = description.lower()
+            if "home screen" in _desc_lower or "android home" in _desc_lower:
+                logger.warning("Vision confirmed home screen — failing fast (foreground=%s).", foreground)
+                return ActionResult(
+                    success=False,
+                    error="Tool encountered android home screen error — app was closed during task.",
+                )
+
             # Accumulate any data the model extracts along the way
             if analysis.get("data"):
                 data_val = analysis["data"]
@@ -366,7 +379,12 @@ Rules:
         """
         goal = (
             f"Navigate to the comments section of this post and extract all visible comments "
-            f"(author + text). Scroll down up to {max_scrolls} times to load more comments. "
+            f"(author + text). "
+            f"IMPORTANT — for Instagram Reels: tap the speech-bubble/comment icon on the RIGHT SIDE of "
+            f"the reel (the chat-bubble icon in the vertical row of action buttons). Do NOT tap the "
+            f"'Add a comment...' text bar at the bottom — that opens a keyboard, not the comment thread. "
+            f"If a keyboard appears at any point, use the 'back' action to dismiss it. "
+            f"Once the comments panel is open, scroll down up to {max_scrolls} times to load more. "
             f"When you have collected the comments, use 'done' and put ALL the extracted "
             f"comments in the 'data' field as structured text."
         )
