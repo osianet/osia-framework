@@ -223,7 +223,7 @@ def cmd_logs(args):
                         print(msg)
                     shown += 1
     except KeyboardInterrupt:
-        pass
+        pass  # user interrupted log stream — normal exit
     except Exception as e:
         print(_c(f"\nStream ended: {e}", "dim"))
 

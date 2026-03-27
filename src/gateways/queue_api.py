@@ -176,7 +176,7 @@ async def push(request: Request, body: PushRequest, _=Depends(_check_auth)):
     if body.dedup_key:
         already_seen = await r.sismember("osia:research:seen_topics", body.dedup_key)
         if already_seen:
-            logger.debug("Dedup skip: %r already in seen_topics", body.dedup_key)
+            logger.debug("Dedup skip: key already in seen_topics")
             depth = await r.llen(body.queue)
             return {"ok": True, "queue": body.queue, "depth": depth, "skipped": True}
         await r.sadd("osia:research:seen_topics", body.dedup_key)
