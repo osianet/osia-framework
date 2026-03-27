@@ -35,19 +35,18 @@ EMBEDDING_DIM = 384
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 
-# All desk collections + research cache — used by cross_desk_search
+# All desk collections + research cache — used by cross_desk_search.
+# Names match desk YAML slugs and the live Qdrant collections.
 DESK_COLLECTIONS: list[str] = [
-    "geopolitical_intel",
-    "cultural_intel",
-    "science_intel",
-    "human_intel",
-    "finance_intel",
-    "cyber_intel",
-    "watch_floor",
-    "collection_raw",
-    # NOTE: osia:research_cache is NOT bootstrapped here — it's managed by the
-    # research worker via raw httpx calls. The qdrant-client SDK rejects colons
-    # in collection names. Cross-desk search still reads from it.
+    "collection-directorate",
+    "geopolitical-and-security-desk",
+    "cultural-and-theological-intelligence-desk",
+    "science-technology-and-commercial-desk",
+    "human-intelligence-and-profiling-desk",
+    "finance-and-economics-directorate",
+    "cyber-intelligence-and-warfare-desk",
+    "the-watch-floor",
+    "osia_research_cache",  # research worker writes here; no colon, SDK-compatible
 ]
 
 # ---------------------------------------------------------------------------

@@ -4,18 +4,18 @@ prompt_file: templates/prompts/geopolitical-and-security-desk.txt
 
 model:
   primary:
-    provider: gemini
-    model_id: gemini-2.5-flash
+    provider: openrouter
+    model_id: anthropic/claude-sonnet-4-6
     temperature: 0.3
     max_tokens: 8192
   fallback:
-    provider: gemini
-    model_id: gemini-2.5-flash
+    provider: openrouter
+    model_id: google/gemini-2.5-flash
     temperature: 0.3
     max_tokens: 8192
 
 qdrant:
-  collection: geopolitical_intel
+  collection: geopolitical-and-security-desk
   context_top_k: 5
   cross_desk_search: true
   cross_desk_top_k: 3

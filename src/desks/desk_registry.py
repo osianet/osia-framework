@@ -34,7 +34,7 @@ logger = logging.getLogger("osia.desk_registry")
 # Constants
 # ---------------------------------------------------------------------------
 
-VALID_PROVIDERS = {"gemini", "anthropic", "openai", "hf_endpoint"}
+VALID_PROVIDERS = {"gemini", "anthropic", "openai", "hf_endpoint", "openrouter", "venice"}
 DEFAULT_TEMPERATURE = 0.3
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_CONTEXT_TOP_K = 5
@@ -400,6 +400,27 @@ class DeskRegistry:
                     api_key=os.getenv("OPENAI_API_KEY", ""),
                 )
             )
+        elif model_cfg.provider == "openrouter":
+            return await self._invoke_with_retry(
+                lambda: self._call_openai_compat(
+                    desk,
+                    model_cfg,
+                    assembled_message,
+                    base_url="https://openrouter.ai/api",
+                    api_key=os.getenv("OPENROUTER_API_KEY", ""),
+                    extra_headers={"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Intelligence Framework"},
+                )
+            )
+        elif model_cfg.provider == "venice":
+            return await self._invoke_with_retry(
+                lambda: self._call_openai_compat(
+                    desk,
+                    model_cfg,
+                    assembled_message,
+                    base_url="https://api.venice.ai/api",
+                    api_key=os.getenv("VENICE_API_KEY", ""),
+                )
+            )
         else:
             raise ValueError(f"Unknown provider: {model_cfg.provider}")
 
@@ -490,6 +511,7 @@ class DeskRegistry:
         assembled_message: str,
         base_url: str,
         api_key: str,
+        extra_headers: dict | None = None,
     ) -> str:
         http = self._get_http_client()
         payload = {
@@ -501,12 +523,14 @@ class DeskRegistry:
             "temperature": model_cfg.temperature,
             "max_tokens": model_cfg.max_tokens,
         }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            **(extra_headers or {}),
+        }
         resp = await http.post(
             f"{base_url}/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             json=payload,
         )
         resp.raise_for_status()
