@@ -17,6 +17,7 @@ import asyncio
 import logging
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -369,9 +370,11 @@ class DeskRegistry:
 
     @staticmethod
     def _assemble_user_message(user_message: str, context_block: str | None) -> str:
+        now_utc = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        header = f"CURRENT TIME (UTC): {now_utc}"
         if context_block and context_block.strip():
-            return f"## INTELLIGENCE CONTEXT\n{context_block.strip()}\n\n{user_message}"
-        return user_message
+            return f"{header}\n\n## INTELLIGENCE CONTEXT\n{context_block.strip()}\n\n{user_message}"
+        return f"{header}\n\n{user_message}"
 
     # ------------------------------------------------------------------
     # Internal: dispatch to provider with retry
