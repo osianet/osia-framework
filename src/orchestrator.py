@@ -56,6 +56,7 @@ BOOTSTRAP_COLLECTIONS = [
     "cyber-intelligence-and-warfare-desk",
     "the-watch-floor",
     "osia_research_cache",
+    "epstein-files",
 ]
 
 
@@ -839,12 +840,15 @@ class OsiaOrchestrator:
         except Exception as e:
             logger.warning("Qdrant desk search unavailable (%s) — proceeding without context", e)
 
+        # Cross-desk search always runs — uses entity names when available, falls back
+        # to the raw query so collections like epstein-files are searched even when
+        # entity extraction produces nothing (e.g. Gemini being conservative on sensitive topics).
+        cross_search_query = " ".join(entity_names) if entity_names else query
         cross_results = []
-        if entity_names:
-            try:
-                cross_results = await self.qdrant.cross_desk_search(" ".join(entity_names), top_k=3)
-            except Exception as e:
-                logger.warning("Qdrant cross-desk search unavailable (%s)", e)
+        try:
+            cross_results = await self.qdrant.cross_desk_search(cross_search_query, top_k=3)
+        except Exception as e:
+            logger.warning("Qdrant cross-desk search unavailable (%s)", e)
 
         # Deduplicate by point ID (SearchResult has no id field; deduplicate by text+collection)
         seen: set[tuple[str, str]] = set()

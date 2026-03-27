@@ -47,6 +47,7 @@ DESK_COLLECTIONS: list[str] = [
     "cyber-intelligence-and-warfare-desk",
     "the-watch-floor",
     "osia_research_cache",  # research worker writes here; no colon, SDK-compatible
+    "epstein-files",  # declassified government documents — DOJ, House Oversight, federal courts
 ]
 
 # ---------------------------------------------------------------------------
