@@ -49,6 +49,7 @@ DESK_COLLECTIONS: list[str] = [
     "osia_research_cache",  # research worker writes here; no colon, SDK-compatible
     "epstein-files",  # declassified government documents — DOJ, House Oversight, federal courts
     "cybersecurity-attacks",  # 13K documented global cyber incidents — actors, TTPs, targets (vinitvek/cybersecurityattacks)
+    "hackerone-reports",  # 12.6K publicly disclosed bug bounty reports — CVEs, weaknesses, affected assets (Hacker0x01)
 ]
 
 # ---------------------------------------------------------------------------

@@ -58,6 +58,7 @@ BOOTSTRAP_COLLECTIONS = [
     "osia_research_cache",
     "epstein-files",
     "cybersecurity-attacks",
+    "hackerone-reports",
 ]
 
 
