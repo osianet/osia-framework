@@ -26,6 +26,7 @@ dependencies = [
     "websockets>=16.0",
     "yt-dlp>=2026.3.17",
     "youtube-transcript-api>=1.0.0",
+    "datasets>=2.0.0",
 ]
 
 [project.optional-dependencies]

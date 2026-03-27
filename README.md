@@ -32,7 +32,7 @@ A local oneshot service (`osia-research-worker.timer`, every 2 hours) drains a s
 ### 4. Desk Routing & RAG
 After the research loop completes, the Chief of Staff selects the most appropriate desk. Each desk query is enriched with:
 - **Per-desk RAG** — top-K results from that desk's Qdrant collection.
-- **Cross-desk RAG** — results from related collections.
+- **Cross-desk RAG** — always fans out across all registered collections, including the Epstein Files knowledge base. Falls back to the raw query when entity extraction produces nothing, so sensitive topics are never blocked from retrieval.
 - **Research cache** — recent background research on relevant entities.
 - **Real UTC timestamp** — injected at the top of every message; no tool call needed.
 
@@ -53,11 +53,13 @@ Desks are invoked directly via `DeskRegistry` — no middleware layer. Each desk
 | Human Intelligence | Venice | `venice-uncensored` | Behavioural profiling, network mapping (uncensored) |
 | Finance & Economics | OpenRouter | `openai/gpt-4o-mini` | Markets, sanctions, internal cost auditing |
 | Cyber Intelligence & Warfare | Venice | `mistral-31-24b` | Nation-state cyber ops, digital threats |
-| The Watch Floor | OpenRouter | `google/gemini-2.5-pro` | INTSUM synthesis & Signal dispatch |
+| The Watch Floor | OpenRouter | `anthropic/claude-sonnet-4-6` | INTSUM synthesis & Signal dispatch |
 
 **Chief of Staff routing** uses Venice `venice-uncensored` — an uncensored model is used deliberately so that no query about a sensitive subject is misrouted due to guardrails.
 
-All desks fall back to `openrouter/google/gemini-2.5-flash`. The Watch Floor falls back to `openrouter/anthropic/claude-sonnet-4-6`.
+**Uncensored routing policy:** Venice (`venice-uncensored`) is used for desk routing and the HUMINT/Cultural/Cyber desks. The Watch Floor uses Claude Sonnet 4.6 (capable on sensitive investigative topics) rather than a guardrailed model so final INTSUM synthesis is never sanitised. Entity extraction also uses Venice as primary.
+
+All desks fall back to `openrouter/google/gemini-2.5-flash`. The Watch Floor falls back to `openrouter/google/gemini-2.5-pro`.
 
 Venice desks (`venice-uncensored`, `mistral-31-24b`) call the Venice AI API directly — these models are not available via OpenRouter.
 
@@ -89,7 +91,7 @@ DeskRegistry
      └── Cyber Intelligence       (Venice / mistral-31-24b)
            │
            ▼
-     The Watch Floor (OpenRouter / Gemini 2.5 Pro)
+     The Watch Floor (OpenRouter / Claude Sonnet 4.6)
            │
            ▼
      Signal Group — INTSUM Briefing
@@ -97,6 +99,11 @@ DeskRegistry
 Background:
 osia-research-worker.timer (every 2h)
      └── Venice AI research loop → Qdrant osia_research_cache
+
+Qdrant Collections (RAG namespaces):
+     ├── per-desk collections (one per desk slug)
+     ├── osia_research_cache  (background research worker output)
+     └── epstein-files        (declassified government documents — see below)
 ```
 
 ---
@@ -166,6 +173,39 @@ ADB_DEVICE_MEDIA_INTERCEPT=
 REDIS_URL=redis://localhost:6379
 QDRANT_URL=http://localhost:6333
 ```
+
+---
+
+## Epstein Files Knowledge Base
+
+A dedicated Qdrant collection (`epstein-files`) holds declassified government documents sourced from public releases aggregated on HuggingFace. These are indexed for cross-desk RAG retrieval on any query involving the Epstein network.
+
+**Sources:**
+
+| Dataset | HuggingFace ID | Size | Description |
+|---------|---------------|------|-------------|
+| Epstein Emails | `notesbymuneeb/epstein-emails` | ~5K threads | Structured email threads from House Oversight Committee release; parsed and OCR-corrected |
+| House Oversight Docs | `tensonaut/EPSTEIN_FILES_20K` | ~25K files | Plain text documents from House Oversight Committee |
+| Full Index | `theelderemo/FULL_EPSTEIN_INDEX` | ~8.5K rows | Grand jury materials, FBI documents, witness statements |
+| DOJ Library | `Nikity/Epstein-Files` | 4.11M rows | Full DOJ Epstein Library — court filings, FBI reports, financial records |
+
+**Ingestion:**
+
+```bash
+# Recommended run order (emails first — highest intel density)
+uv run python scripts/ingest_epstein_files.py --dataset emails
+uv run python scripts/ingest_epstein_files.py --dataset oversight
+uv run python scripts/ingest_epstein_files.py --dataset index
+
+# DOJ Library (large — run in passes)
+uv run python scripts/ingest_epstein_files.py --dataset nikity --limit 50000
+uv run python scripts/ingest_epstein_files.py --dataset nikity --limit 50000 --resume
+
+# Test without writing anything
+uv run python scripts/ingest_epstein_files.py --dataset emails --dry-run --limit 20
+```
+
+Entity extraction uses Venice (`venice-uncensored`) to ensure person names in sensitive documents are extracted without refusal. Each novel `Person` entity is automatically enqueued to the HUMINT research queue. Chunks are embedded via the HuggingFace Inference API and upserted with full provenance metadata (source, document type, online URL where available).
 
 ---
 

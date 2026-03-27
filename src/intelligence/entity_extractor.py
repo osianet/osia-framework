@@ -4,21 +4,27 @@ OSIA Entity Extractor
 Named entity extraction pipeline that converts incoming intel text into
 structured Entity objects and enqueues background research jobs.
 
+Uses Venice (venice-uncensored) for extraction so sensitive queries about
+individuals, organisations, and events are never refused or sanitised.
+Falls back to Gemini if VENICE_API_KEY is not set.
+
 Environment variables:
-  GEMINI_API_KEY   — Google Gemini API key
+  VENICE_API_KEY   — Venice AI API key (primary — uncensored)
+  GEMINI_API_KEY   — Google Gemini API key (fallback only)
   GEMINI_MODEL_ID  — Gemini model to use (default: gemini-2.5-flash)
   REDIS_URL        — Redis connection string
 """
 
+import asyncio
 import json
 import logging
 import os
 import uuid
 from dataclasses import dataclass
 
+import httpx
 import redis.asyncio as aioredis
 from dotenv import load_dotenv
-from google import genai
 
 load_dotenv()
 
@@ -27,6 +33,10 @@ logger = logging.getLogger("osia.entity_extractor")
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
+
+VENICE_API_KEY = os.getenv("VENICE_API_KEY", "")
+VENICE_BASE_URL = "https://api.venice.ai/api/v1"
+VENICE_MODEL = os.getenv("VENICE_MODEL_UNCENSORED", "venice-uncensored")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL_ID = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
@@ -61,7 +71,7 @@ class Entity:
 
 
 # ---------------------------------------------------------------------------
-# Gemini extraction prompt
+# Extraction prompt
 # ---------------------------------------------------------------------------
 
 EXTRACTION_PROMPT = """\
@@ -92,11 +102,11 @@ Text to analyse:
 
 class EntityExtractor:
     """
-    Extracts named entities from text using Gemini and enqueues research jobs.
+    Extracts named entities from text via Venice (uncensored) and enqueues
+    background research jobs. Falls back to Gemini if Venice is unavailable.
     """
 
     def __init__(self) -> None:
-        self._gemini = genai.Client(api_key=GEMINI_API_KEY)
         self._redis_url = REDIS_URL
 
     # ------------------------------------------------------------------
@@ -105,22 +115,19 @@ class EntityExtractor:
 
     async def extract(self, text: str, source_desk: str) -> list[Entity]:
         """
-        Call Gemini to identify named entities in text.
-        Returns a list of Entity objects, or [] on malformed/unparseable JSON.
+        Identify named entities in text. Tries Venice first, falls back to Gemini.
+        Returns a list of Entity objects, or [] on failure.
         """
-        import asyncio
+        if VENICE_API_KEY:
+            raw = await self._extract_via_venice(text)
+        elif GEMINI_API_KEY:
+            logger.warning("VENICE_API_KEY not set — falling back to Gemini for entity extraction")
+            raw = await self._extract_via_gemini(text)
+        else:
+            logger.warning("No AI API key configured — skipping entity extraction")
+            return []
 
-        prompt = EXTRACTION_PROMPT.format(text=text)
-
-        try:
-            response = await asyncio.to_thread(
-                self._gemini.models.generate_content,
-                model=GEMINI_MODEL_ID,
-                contents=prompt,
-            )
-            raw = response.text.strip()
-        except Exception as exc:
-            logger.warning("Gemini entity extraction call failed: %s", exc)
+        if raw is None:
             return []
 
         # Strip markdown code fences if present
@@ -131,19 +138,11 @@ class EntityExtractor:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
-            logger.warning(
-                "Entity extractor: unparseable JSON from Gemini (%s). Raw: %.200s",
-                exc,
-                raw,
-            )
+            logger.warning("Entity extractor: unparseable JSON (%s). Raw: %.200s", exc, raw)
             return []
 
         if not isinstance(data, list):
-            logger.warning(
-                "Entity extractor: expected JSON array, got %s. Raw: %.200s",
-                type(data).__name__,
-                raw,
-            )
+            logger.warning("Entity extractor: expected JSON array, got %s. Raw: %.200s", type(data).__name__, raw)
             return []
 
         entities: list[Entity] = []
@@ -173,6 +172,53 @@ class EntityExtractor:
             source_desk,
         )
         return entities
+
+    async def _extract_via_venice(self, text: str) -> str | None:
+        """Call Venice (venice-uncensored) for entity extraction. Returns raw response text."""
+        payload = {
+            "model": VENICE_MODEL,
+            "messages": [{"role": "user", "content": EXTRACTION_PROMPT.format(text=text)}],
+            "temperature": 0.0,
+            "max_tokens": 1024,
+        }
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as http:
+                    resp = await http.post(
+                        f"{VENICE_BASE_URL}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {VENICE_API_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    if resp.status_code == 429:
+                        wait = 35 * (attempt + 1)
+                        logger.warning("Venice entity extractor 429 — waiting %ds", wait)
+                        await asyncio.sleep(wait)
+                        continue
+                    resp.raise_for_status()
+                    return resp.json()["choices"][0]["message"]["content"].strip()
+            except Exception as exc:
+                logger.warning("Venice entity extraction attempt %d failed: %s", attempt + 1, exc)
+                await asyncio.sleep(5 * (attempt + 1))
+        return None
+
+    async def _extract_via_gemini(self, text: str) -> str | None:
+        """Gemini fallback for entity extraction when Venice is unavailable."""
+        from google import genai as _genai
+
+        client = _genai.Client(api_key=GEMINI_API_KEY)
+        try:
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=GEMINI_MODEL_ID,
+                contents=EXTRACTION_PROMPT.format(text=text),
+            )
+            return response.text.strip()
+        except Exception as exc:
+            logger.warning("Gemini entity extraction fallback failed: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # Research job enqueuing
