@@ -8,7 +8,7 @@ research jobs for novel Person entities found in each document.
 
 Supported datasets:
   emails      notesbymuneeb/epstein-emails       (5K structured email threads)
-  oversight   tensonaut/EPSTEIN_FILES_20K         (25K House Oversight docs)
+  oversight   theelderemo/epstein-files-nov-2025  (25.8K House Oversight docs, Nov 2025 release)
   index       theelderemo/FULL_EPSTEIN_INDEX      (8.5K indexed docs, OCR)
   nikity      Nikity/Epstein-Files                (4.11M rows, full DOJ library)
   all         Run emails → oversight → index → nikity in order
@@ -162,7 +162,7 @@ DATASETS = {
         "doc_type": "email_thread",
     },
     "oversight": {
-        "hf_id": "tensonaut/EPSTEIN_FILES_20K",
+        "hf_id": "theelderemo/epstein-files-nov-2025",
         "source_label": "House Oversight Committee",
         "entity_sample_rate_override": None,
         "doc_type": "government_document",
@@ -348,7 +348,7 @@ class EpsteinIngestor:
                 elif ds_name == "oversight":
                     await self._ingest_generic(
                         ds_name,
-                        "tensonaut/EPSTEIN_FILES_20K",
+                        DATASETS["oversight"]["hf_id"],
                         text_field="text",
                         id_field=None,
                         stats=stats,
@@ -358,7 +358,7 @@ class EpsteinIngestor:
                 elif ds_name == "index":
                     await self._ingest_generic(
                         ds_name,
-                        "theelderemo/FULL_EPSTEIN_INDEX",
+                        DATASETS["index"]["hf_id"],
                         text_field="text",
                         id_field="id",
                         stats=stats,
