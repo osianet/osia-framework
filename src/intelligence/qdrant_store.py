@@ -48,6 +48,7 @@ DESK_COLLECTIONS: list[str] = [
     "the-watch-floor",
     "osia_research_cache",  # research worker writes here; no colon, SDK-compatible
     "epstein-files",  # declassified government documents — DOJ, House Oversight, federal courts
+    "cybersecurity-attacks",  # 13K documented global cyber incidents — actors, TTPs, targets (vinitvek/cybersecurityattacks)
 ]
 
 # ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ A local oneshot service (`osia-research-worker.timer`, every 2 hours) drains a s
 ### 4. Desk Routing & RAG
 After the research loop completes, the Chief of Staff selects the most appropriate desk. Each desk query is enriched with:
 - **Per-desk RAG** — top-K results from that desk's Qdrant collection.
-- **Cross-desk RAG** — always fans out across all registered collections, including the Epstein Files knowledge base. Falls back to the raw query when entity extraction produces nothing, so sensitive topics are never blocked from retrieval.
+- **Cross-desk RAG** — always fans out across all registered collections, including the Epstein Files and Cybersecurity Attacks knowledge bases. Falls back to the raw query when entity extraction produces nothing, so sensitive topics are never blocked from retrieval.
 - **Research cache** — recent background research on relevant entities.
 - **Real UTC timestamp** — injected at the top of every message; no tool call needed.
 
@@ -103,7 +103,8 @@ osia-research-worker.timer (every 2h)
 Qdrant Collections (RAG namespaces):
      ├── per-desk collections (one per desk slug)
      ├── osia_research_cache  (background research worker output)
-     └── epstein-files        (declassified government documents — see below)
+     ├── epstein-files        (declassified government documents — see below)
+     └── cybersecurity-attacks (13K global cyber incidents — see below)
 ```
 
 ---
@@ -206,6 +207,45 @@ uv run python scripts/ingest_epstein_files.py --dataset emails --dry-run --limit
 ```
 
 Entity extraction uses Venice (`venice-uncensored`) to ensure person names in sensitive documents are extracted without refusal. Each novel `Person` entity is automatically enqueued to the HUMINT research queue. Chunks are embedded via the HuggingFace Inference API and upserted with full provenance metadata (source, document type, online URL where available).
+
+---
+
+## Cybersecurity Attacks Knowledge Base
+
+A dedicated Qdrant collection (`cybersecurity-attacks`) holds 13,407 documented global cybersecurity incidents sourced from the public `vinitvek/cybersecurityattacks` HuggingFace dataset. Incidents span 163 countries and 22 industry sectors and cover nation-state operations, criminal ransomware, hacktivist campaigns, and more. The collection is included in cross-desk RAG retrieval, enriching any query that touches threat actors, TTPs, or targeted sectors.
+
+**Dataset:** [`vinitvek/cybersecurityattacks`](https://huggingface.co/datasets/vinitvek/cybersecurityattacks) — 13,407 rows, ~6 MB, Unlicense
+
+**Fields indexed per incident:**
+
+| Field | Description |
+|-------|-------------|
+| `affected_organization` | Victim organisation |
+| `affected_country` | Target country (163 unique) |
+| `affected_industry` | Sector (22 categories: Healthcare, Finance, etc.) |
+| `event_type` / `event_subtype` | Attack classification + method (86 subtypes) |
+| `motive` | Financial, Political-Espionage, Sabotage, Protest, etc. |
+| `actor` / `actor_type` / `actor_country` | Threat actor name, classification, and origin |
+| `description` | Incident narrative |
+| `source_url` | Reference source |
+
+**Ingestion:**
+
+```bash
+# Full ingest (~13K records, completes in a few minutes)
+uv run python scripts/ingest_cybersecurity_attacks.py
+
+# Test without writing anything
+uv run python scripts/ingest_cybersecurity_attacks.py --limit 100 --dry-run
+
+# Skip enqueuing threat actors to the Cyber desk research queue
+uv run python scripts/ingest_cybersecurity_attacks.py --skip-actors
+
+# Resume an interrupted run
+uv run python scripts/ingest_cybersecurity_attacks.py --resume
+```
+
+Each novel threat actor (`Nation-State`, `Criminal`, `Hacktivist`, `Terrorist`) is automatically enqueued to the **Cyber Intelligence & Warfare desk** research queue for follow-up investigation. Actors are Redis-deduplicated across runs. Embedding and upserts are idempotent — re-running the script is safe.
 
 ---
 
