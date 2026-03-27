@@ -138,6 +138,8 @@ def is_valid_entity_name(name: str) -> bool:
     if name == name.lower():
         return False
     return True
+
+
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 HF_EMBEDDING_URL = (
     "https://router.huggingface.co/hf-inference/models/"
@@ -145,10 +147,10 @@ HF_EMBEDDING_URL = (
 )
 
 # Redis keys
-CHECKPOINT_KEY_PREFIX = "osia:epstein:checkpoint:"   # + dataset name
-SEEN_ENTITIES_KEY = "osia:research:seen_topics"      # permanent dedup set (shared with entity_extractor)
+CHECKPOINT_KEY_PREFIX = "osia:epstein:checkpoint:"  # + dataset name
+SEEN_ENTITIES_KEY = "osia:research:seen_topics"  # permanent dedup set (shared with entity_extractor)
 RESEARCH_QUEUE_KEY = "osia:research_queue"
-RESEARCH_COOLDOWN_KEY_PREFIX = "osia:research:seen:" # + md5(topic)
+RESEARCH_COOLDOWN_KEY_PREFIX = "osia:research:seen:"  # + md5(topic)
 RESEARCH_COOLDOWN_HOURS = int(os.getenv("RESEARCH_COOLDOWN_HOURS", "72"))
 
 # Dataset registry
@@ -186,8 +188,8 @@ TODAY = datetime.now(UTC).strftime("%Y-%m-%d")
 # Chunking
 # ---------------------------------------------------------------------------
 
-CHUNK_SIZE = 1500     # characters (~375 tokens)
-CHUNK_OVERLAP = 225   # characters (~15%)
+CHUNK_SIZE = 1500  # characters (~375 tokens)
+CHUNK_OVERLAP = 225  # characters (~15%)
 
 
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
@@ -345,15 +347,23 @@ class EpsteinIngestor:
                     await self._ingest_emails(stats, limit, checkpoint)
                 elif ds_name == "oversight":
                     await self._ingest_generic(
-                        ds_name, "tensonaut/EPSTEIN_FILES_20K",
-                        text_field="text", id_field=None,
-                        stats=stats, limit=limit, checkpoint=checkpoint,
+                        ds_name,
+                        "tensonaut/EPSTEIN_FILES_20K",
+                        text_field="text",
+                        id_field=None,
+                        stats=stats,
+                        limit=limit,
+                        checkpoint=checkpoint,
                     )
                 elif ds_name == "index":
                     await self._ingest_generic(
-                        ds_name, "theelderemo/FULL_EPSTEIN_INDEX",
-                        text_field="text", id_field="id",
-                        stats=stats, limit=limit, checkpoint=checkpoint,
+                        ds_name,
+                        "theelderemo/FULL_EPSTEIN_INDEX",
+                        text_field="text",
+                        id_field="id",
+                        stats=stats,
+                        limit=limit,
+                        checkpoint=checkpoint,
                     )
                 elif ds_name == "nikity":
                     await self._ingest_nikity(stats, limit, checkpoint)
@@ -433,11 +443,7 @@ class EpsteinIngestor:
             for msg in raw_messages:
                 if not isinstance(msg, dict):
                     continue
-                header = " | ".join(
-                    f"{k}: {msg[k]}"
-                    for k in ("date", "from", "to", "cc")
-                    if msg.get(k)
-                )
+                header = " | ".join(f"{k}: {msg[k]}" for k in ("date", "from", "to", "cc") if msg.get(k))
                 body = str(msg.get("body") or msg.get("content") or "").strip()
                 if header or body:
                     parts.append(f"{header}\n\n{body}" if header else body)
@@ -630,9 +636,7 @@ class EpsteinIngestor:
 
         # Build PointStructs with deterministic IDs so re-runs are idempotent
         for i, chunk in enumerate(chunks):
-            point_id = str(
-                uuid.UUID(bytes=hashlib.sha256(chunk.encode()).digest()[:16])
-            )
+            point_id = str(uuid.UUID(bytes=hashlib.sha256(chunk.encode()).digest()[:16]))
             payload = {
                 "text": chunk,
                 "chunk_index": i,
@@ -684,10 +688,7 @@ class EpsteinIngestor:
         Embed a list of texts using the HF Inference API.
         Splits into sub-batches and runs up to `embed_concurrency` calls in parallel.
         """
-        batches = [
-            texts[i : i + self.embed_batch_size]
-            for i in range(0, len(texts), self.embed_batch_size)
-        ]
+        batches = [texts[i : i + self.embed_batch_size] for i in range(0, len(texts), self.embed_batch_size)]
         results: list[list[float]] = []
         # Process batches in concurrent groups
         for group_start in range(0, len(batches), self.embed_concurrency):
@@ -821,11 +822,7 @@ class EpsteinIngestor:
 
         # Secondary filter: catch anything the model returned that still doesn't meet
         # the full-name quality bar (model doesn't always follow instructions perfectly)
-        return [
-            str(n).strip()
-            for n in names
-            if n and isinstance(n, str) and is_valid_entity_name(str(n))
-        ]
+        return [str(n).strip() for n in names if n and isinstance(n, str) and is_valid_entity_name(str(n))]
 
     async def _enqueue_research(self, names: list[str]) -> int:
         """
