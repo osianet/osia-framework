@@ -47,7 +47,6 @@ Desks are invoked directly via `DeskRegistry` — no middleware layer. Each desk
 
 | Desk | Provider | Model | Purpose |
 |------|----------|-------|---------|
-| Collection Directorate | Local NPU | Pleias-RAG-350M | Raw ingestion |
 | Geopolitical & Security | OpenRouter | `anthropic/claude-sonnet-4-6` | Statecraft, military, international relations |
 | Cultural & Theological | Venice | `venice-uncensored` | Sociological & religious drivers (uncensored) |
 | Science & Technology | OpenRouter | `anthropic/claude-sonnet-4-6` | Technical validation, R&D analysis |
@@ -107,7 +106,6 @@ osia-research-worker.timer (every 2h)
 - **Hardware:** Orange Pi 5 Plus (ARM64), Moto g06 (Android ADB gateway)
 - **Runtime:** Python 3.12 (`uv`), Redis, Qdrant
 - **Cloud AI:** Venice AI (`venice-uncensored`, `mistral-31-24b`), OpenRouter (Claude Sonnet 4.6, Gemini 2.5 Pro, GPT-4o mini, Gemini 2.5 Flash)
-- **Local AI:** Pleias-RAG-350M on NPU (Collection Directorate)
 - **MCP Servers:** Tavily, Wikipedia, ArXiv, Semantic Scholar, YouTube (yt-dlp)
 - **Protocol:** Signal (E2EE ingress/egress), ADB (media interception)
 
