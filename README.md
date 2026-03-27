@@ -132,13 +132,31 @@ ADB device access between the orchestrator and persona daemon is coordinated via
 ## Setup
 
 ```bash
-cp .env.example .env          # add API keys
-uv sync                        # install dependencies
-sudo systemctl start osia-orchestrator
-sudo systemctl start osia-signal-ingress
+# 1. Clone and install Python dependencies
+git clone https://github.com/osianet/osia-framework
+cd osia-framework
+uv sync
+
+# 2. Configure environment
+cp .env.example .env
+# Edit .env and fill in your API keys (see below)
+
+# 3. Install and enable all systemd services
+sudo ./install.sh
+
+# 4. Start everything
+sudo ./install.sh --start
 ```
 
-Required environment variables:
+The install script symlinks all service and timer unit files into `/etc/systemd/system/`, substituting the install path and user automatically. It skips services that are no longer in use (AnythingLLM, Kali bridge, etc.).
+
+```
+sudo ./install.sh              # install/enable only
+sudo ./install.sh --start      # install, enable, and start
+sudo ./install.sh --uninstall  # disable and remove all unit files
+```
+
+### Required environment variables
 
 ```
 VENICE_API_KEY=
