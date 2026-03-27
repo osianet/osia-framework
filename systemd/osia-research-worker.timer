@@ -1,12 +1,12 @@
 [Unit]
-Description=OSIA Research Batch Trigger — runs every 2 hours
-Requires=osia-research-trigger.service
+Description=OSIA Research Worker — runs every 2 hours
+Requires=osia-research-worker.service
 
 [Timer]
 # Fire every 2 hours, offset by 15 minutes to avoid clashing with RSS ingress
 OnCalendar=*-*-* 00/2:15:00
 AccuracySec=5min
-Persistent=true
+Persistent=false
 
 [Install]
 WantedBy=timers.target

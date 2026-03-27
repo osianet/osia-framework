@@ -1,31 +1,41 @@
 """
-OSIA Research Worker — HuggingFace Spaces deployable intelligence gatherer.
+OSIA Research Worker — oneshot batch processor, runs locally via systemd timer.
 
-Polls osia:research_queue via the Queue API, executes multi-turn research
-loops using Gemini + direct HTTP tools, then writes chunked results into
-Qdrant for retrieval-augmented generation at report time.
+Drains osia:research_queue, runs a multi-turn tool-calling research loop via
+OpenRouter (uncensored/permissive model routing per desk), then chunks and
+embeds results into Qdrant for retrieval-augmented generation at report time.
 
-Environment variables required:
-  QUEUE_API_URL          — https://queue.osia.dev
-  QUEUE_API_TOKEN        — bearer token
-  QUEUE_API_UA_SENTINEL  — user-agent sentinel (default: osia-worker/1)
-  QDRANT_URL             — https://qdrant.osia.dev
-  QDRANT_API_KEY         — qdrant api key
-  GEMINI_API_KEY         — google gemini api key
-  TAVILY_API_KEY         — tavily search api key
-  GEMINI_MODEL_ID        — model to use (default: gemini-2.5-flash)
+Desk → model routing:
+  HUMINT / Cultural / Geopolitical  → Dolphin R1 24B  (uncensored, via Venice)
+  Cyber                             → Hermes 3 70B    (permissive tool-use)
+  Finance / Science / default       → Mistral Small   (reliable, cost-effective)
 
-Run locally:
+If OPENROUTER_API_KEY is not set, falls back to Gemini (research still works
+but may refuse sensitive topics).
+
+Environment variables:
+  OPENROUTER_API_KEY          — OpenRouter API key
+  REDIS_URL                   — Redis connection URL (default: redis://localhost:6379/0)
+  QDRANT_URL                  — Qdrant HTTP endpoint (default: http://localhost:6333)
+  QDRANT_API_KEY              — Qdrant API key
+  HF_TOKEN                    — HuggingFace token (for embeddings via router.huggingface.co)
+  TAVILY_API_KEY              — Tavily web search API key
+  RESEARCH_BATCH_THRESHOLD    — Min queue depth before processing (default: 3)
+  RESEARCH_WORKER_MODEL_DOLPHIN  — Override Dolphin model slug on OpenRouter
+  RESEARCH_WORKER_MODEL_DEFAULT  — Override default model slug on OpenRouter
+  GEMINI_API_KEY              — Fallback if OPENROUTER_API_KEY not set
+  GEMINI_MODEL_ID             — Gemini model ID (default: gemini-2.5-flash)
+
+Run:
   uv run python -m src.workers.research_worker
-
-Deploy to HuggingFace Spaces:
-  See hf-spaces/research-worker/Dockerfile
 """
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -33,8 +43,6 @@ from datetime import UTC, datetime
 
 import httpx
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
 load_dotenv()
 
@@ -48,29 +56,55 @@ logger = logging.getLogger("osia.research_worker")
 # Config
 # ---------------------------------------------------------------------------
 
-QUEUE_API_URL = os.getenv("QUEUE_API_URL", "https://queue.osia.dev")
-QUEUE_API_TOKEN = os.getenv("QUEUE_API_TOKEN", "")
-QUEUE_API_UA = os.getenv("QUEUE_API_UA_SENTINEL", "osia-worker/1")
-QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+HF_TOKEN = os.getenv("HF_TOKEN", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
 
-# Qdrant collection that research results land in — separate from desk collections
-RESEARCH_COLLECTION = "osia:research_cache"
+BATCH_THRESHOLD = int(os.getenv("RESEARCH_BATCH_THRESHOLD", "3"))
 
-# Embedding dimension for all-MiniLM-L6-v2 (matches AnythingLLM's embedder)
+# Per-desk OpenRouter model routing
+MODEL_DOLPHIN = os.getenv(
+    "RESEARCH_WORKER_MODEL_DOLPHIN",
+    "cognitivecomputations/dolphin3.0-r1-mistral-24b",
+)
+MODEL_DEFAULT = os.getenv(
+    "RESEARCH_WORKER_MODEL_DEFAULT",
+    "mistralai/mistral-small-3.1-24b-instruct",
+)
+MODEL_HERMES = "nousresearch/hermes-3-llama-3.1-70b"
+
+# Desks that need uncensored reasoning (HUMINT, cultural, geopolitical)
+DOLPHIN_DESKS = {
+    "human-intelligence-and-profiling-desk",
+    "cultural-and-theological-intelligence-desk",
+    "geopolitical-and-security-desk",
+}
+# Desks that benefit from permissive tool-use model
+HERMES_DESKS = {
+    "cyber-intelligence-and-warfare-desk",
+}
+
+RESEARCH_COLLECTION = "osia_research_cache"
 EMBEDDING_DIM = 384
-
-# How many tokens per chunk when splitting research output
-CHUNK_SIZE = 400  # words, approximate
-
-# Pop timeout — how long to block waiting for a job (seconds)
-POP_TIMEOUT = 20
-
-# Max research loop rounds per job
+CHUNK_SIZE = 400   # words
 MAX_ROUNDS = 6
+
+
+def _model_for_desk(desk: str) -> str:
+    if desk in DOLPHIN_DESKS:
+        return MODEL_DOLPHIN
+    if desk in HERMES_DESKS:
+        return MODEL_HERMES
+    return MODEL_DEFAULT
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -83,7 +117,6 @@ class ResearchJob:
     topic: str
     desk: str
     priority: str = "normal"
-    sources: list[str] = field(default_factory=lambda: ["tavily", "wikipedia", "arxiv", "semantic_scholar"])
     directives_lens: bool = True
     triggered_by: str = ""
 
@@ -94,82 +127,63 @@ class ResearchJob:
             topic=d.get("topic", ""),
             desk=d.get("desk", "collection-directorate"),
             priority=d.get("priority", "normal"),
-            sources=d.get("sources", ["tavily", "wikipedia", "arxiv", "semantic_scholar"]),
             directives_lens=d.get("directives_lens", True),
             triggered_by=d.get("triggered_by", ""),
         )
 
 
 # ---------------------------------------------------------------------------
-# Queue API client
+# Redis client (direct — no HTTP queue API needed when running locally)
 # ---------------------------------------------------------------------------
 
 
-class QueueClient:
-    def __init__(self, http: httpx.AsyncClient):
-        self._http = http
-        self._headers = {
-            "Authorization": f"Bearer {QUEUE_API_TOKEN}",
-            "User-Agent": QUEUE_API_UA,
-            "Content-Type": "application/json",
-        }
+class RedisQueue:
+    def __init__(self):
+        import redis
 
-    async def pop(self, queue: str = "osia:research_queue", timeout: int = POP_TIMEOUT) -> dict | None:
-        resp = await self._http.post(
-            f"{QUEUE_API_URL}/queue/pop",
-            headers=self._headers,
-            json={"queue": queue, "timeout": timeout},
-            timeout=timeout + 10,
-        )
-        resp.raise_for_status()
-        return resp.json().get("payload")
+        self._r = redis.from_url(REDIS_URL, decode_responses=True)
 
-    async def is_seen(self, topic_key: str) -> bool:
-        resp = await self._http.post(
-            f"{QUEUE_API_URL}/queue/seen/check",
-            headers=self._headers,
-            json={"key": "osia:research:seen_topics", "member": topic_key},
-        )
-        resp.raise_for_status()
-        return resp.json().get("seen", False)
+    def depth(self) -> int:
+        return self._r.llen("osia:research_queue")
 
-    async def mark_seen(self, topic_key: str):
-        await self._http.post(
-            f"{QUEUE_API_URL}/queue/seen/add",
-            headers=self._headers,
-            json={"key": "osia:research:seen_topics", "members": [topic_key]},
-        )
+    def pop(self) -> dict | None:
+        result = self._r.blpop("osia:research_queue", timeout=2)
+        if result is None:
+            return None
+        _, raw = result
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+
+    def is_seen(self, key: str) -> bool:
+        return bool(self._r.sismember("osia:research:seen_topics", key))
+
+    def mark_seen(self, key: str):
+        self._r.sadd("osia:research:seen_topics", key)
 
 
 # ---------------------------------------------------------------------------
-# Qdrant client (minimal — just upsert and collection bootstrap)
+# Qdrant client
 # ---------------------------------------------------------------------------
 
 
 class QdrantClient:
     def __init__(self, http: httpx.AsyncClient):
         self._http = http
-        self._headers = {
-            "api-key": QDRANT_API_KEY,
-            "Content-Type": "application/json",
-        }
+        self._headers = {"api-key": QDRANT_API_KEY, "Content-Type": "application/json"}
 
     async def ensure_collection(self):
-        """Create the research cache collection if it doesn't exist."""
         check = await self._http.get(
             f"{QDRANT_URL}/collections/{RESEARCH_COLLECTION}",
             headers=self._headers,
         )
         if check.status_code == 200:
             return
-        # Create it
         resp = await self._http.put(
             f"{QDRANT_URL}/collections/{RESEARCH_COLLECTION}",
             headers=self._headers,
-            json={
-                "vectors": {"size": EMBEDDING_DIM, "distance": "Cosine"},
-                "optimizers_config": {"default_segment_number": 2},
-            },
+            json={"vectors": {"size": EMBEDDING_DIM, "distance": "Cosine"}},
         )
         resp.raise_for_status()
         logger.info("Created Qdrant collection: %s", RESEARCH_COLLECTION)
@@ -186,22 +200,15 @@ class QdrantClient:
 
 
 # ---------------------------------------------------------------------------
-# Embedding — uses the same model as AnythingLLM (all-MiniLM-L6-v2 via HF API)
+# Embedding
 # ---------------------------------------------------------------------------
 
 
 async def embed_texts(texts: list[str], http: httpx.AsyncClient) -> list[list[float]]:
-    """
-    Embed a batch of texts using HuggingFace Inference API (all-MiniLM-L6-v2).
-    Falls back to a zero vector on failure so the worker doesn't crash.
-    """
-    hf_token = os.getenv("HF_TOKEN", "")
-    model_url = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
-
     try:
         resp = await http.post(
-            model_url,
-            headers={"Authorization": f"Bearer {hf_token}"},
+            "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction",
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
             json={"inputs": texts, "options": {"wait_for_model": True}},
             timeout=30.0,
         )
@@ -213,7 +220,7 @@ async def embed_texts(texts: list[str], http: httpx.AsyncClient) -> list[list[fl
 
 
 # ---------------------------------------------------------------------------
-# Research tools (direct HTTP, no MCP dependency)
+# Research tools
 # ---------------------------------------------------------------------------
 
 
@@ -227,9 +234,11 @@ async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
             timeout=15.0,
         )
         resp.raise_for_status()
-        data = resp.json()
-        results = data.get("results", [])
-        return "\n\n".join(f"[{r.get('title', '')}]({r.get('url', '')})\n{r.get('content', '')[:500]}" for r in results)
+        results = resp.json().get("results", [])
+        return "\n\n".join(
+            f"[{r.get('title', '')}]({r.get('url', '')})\n{r.get('content', '')[:500]}"
+            for r in results
+        )
     except Exception as e:
         return f"Web search error: {e}"
 
@@ -238,36 +247,23 @@ async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
     try:
         resp = await http.get(
             "https://en.wikipedia.org/w/api.php",
-            params={
-                "action": "query",
-                "list": "search",
-                "srsearch": query,
-                "srlimit": 3,
-                "format": "json",
-                "utf8": 1,
-            },
+            params={"action": "query", "list": "search", "srsearch": query,
+                    "srlimit": 3, "format": "json", "utf8": 1},
             timeout=10.0,
         )
         resp.raise_for_status()
         hits = resp.json().get("query", {}).get("search", [])
         if not hits:
             return "No Wikipedia results found."
-        # Fetch the first article extract
         title = hits[0]["title"]
-        extract_resp = await http.get(
+        ex = await http.get(
             "https://en.wikipedia.org/w/api.php",
-            params={
-                "action": "query",
-                "prop": "extracts",
-                "exintro": True,
-                "explaintext": True,
-                "titles": title,
-                "format": "json",
-            },
+            params={"action": "query", "prop": "extracts", "exintro": True,
+                    "explaintext": True, "titles": title, "format": "json"},
             timeout=10.0,
         )
-        extract_resp.raise_for_status()
-        pages = extract_resp.json().get("query", {}).get("pages", {})
+        ex.raise_for_status()
+        pages = ex.json().get("query", {}).get("pages", {})
         extract = next(iter(pages.values()), {}).get("extract", "")
         return f"**{title}**\n\n{extract[:2000]}"
     except Exception as e:
@@ -282,21 +278,18 @@ async def tool_search_arxiv(query: str, http: httpx.AsyncClient) -> str:
             timeout=15.0,
         )
         resp.raise_for_status()
-        # Parse Atom XML minimally
-        text = resp.text
+        entries = re.findall(r"<entry>(.*?)</entry>", resp.text, re.DOTALL)
         results = []
-        import re
-
-        entries = re.findall(r"<entry>(.*?)</entry>", text, re.DOTALL)
-        for entry in entries[:3]:
-            title = re.search(r"<title>(.*?)</title>", entry, re.DOTALL)
-            summary = re.search(r"<summary>(.*?)</summary>", entry, re.DOTALL)
-            link = re.search(r"<id>(.*?)</id>", entry)
-            t = title.group(1).strip() if title else "Unknown"
-            s = summary.group(1).strip()[:400] if summary else ""
-            url = link.group(1).strip() if link else ""
-            results.append(f"**{t}**\n{url}\n{s}")
-        return "\n\n---\n\n".join(results) if results else "No ArXiv results found."
+        for e in entries[:3]:
+            title = re.search(r"<title>(.*?)</title>", e, re.DOTALL)
+            summary = re.search(r"<summary>(.*?)</summary>", e, re.DOTALL)
+            link = re.search(r"<id>(.*?)</id>", e)
+            results.append(
+                f"**{title.group(1).strip() if title else 'Unknown'}**\n"
+                f"{link.group(1).strip() if link else ''}\n"
+                f"{summary.group(1).strip()[:400] if summary else ''}"
+            )
+        return "\n\n---\n\n".join(results) or "No ArXiv results found."
     except Exception as e:
         return f"ArXiv error: {e}"
 
@@ -315,16 +308,16 @@ async def tool_search_semantic_scholar(query: str, http: httpx.AsyncClient) -> s
         results = []
         for p in papers:
             authors = ", ".join(a["name"] for a in p.get("authors", [])[:3])
-            abstract = (p.get("abstract") or "")[:400]
             results.append(
-                f"**{p.get('title', '')}** ({p.get('year', '')})\nAuthors: {authors}\n{p.get('url', '')}\n{abstract}"
+                f"**{p.get('title', '')}** ({p.get('year', '')})\n"
+                f"Authors: {authors}\n{p.get('url', '')}\n"
+                f"{(p.get('abstract') or '')[:400]}"
             )
         return "\n\n---\n\n".join(results)
     except Exception as e:
         return f"Semantic Scholar error: {e}"
 
 
-# Map tool names to callables
 TOOL_REGISTRY = {
     "search_web": tool_search_web,
     "search_wikipedia": tool_search_wikipedia,
@@ -332,135 +325,276 @@ TOOL_REGISTRY = {
     "search_semantic_scholar": tool_search_semantic_scholar,
 }
 
-# Gemini function declarations for the research loop
-RESEARCH_TOOLS = [
-    types.Tool(
-        function_declarations=[
-            types.FunctionDeclaration(
-                name="search_web",
-                description="Search the live web for current events, news, and real-time information.",
-                parameters=types.Schema(
-                    type="OBJECT",
-                    properties={"query": types.Schema(type="STRING", description="Search query")},
-                    required=["query"],
-                ),
-            ),
-            types.FunctionDeclaration(
-                name="search_wikipedia",
-                description="Search Wikipedia for factual background and context.",
-                parameters=types.Schema(
-                    type="OBJECT",
-                    properties={"query": types.Schema(type="STRING", description="Search term")},
-                    required=["query"],
-                ),
-            ),
-            types.FunctionDeclaration(
-                name="search_arxiv",
-                description="Search ArXiv for academic papers and technical pre-prints.",
-                parameters=types.Schema(
-                    type="OBJECT",
-                    properties={"query": types.Schema(type="STRING", description="Academic search query")},
-                    required=["query"],
-                ),
-            ),
-            types.FunctionDeclaration(
-                name="search_semantic_scholar",
-                description="Search Semantic Scholar for peer-reviewed scientific literature.",
-                parameters=types.Schema(
-                    type="OBJECT",
-                    properties={"query": types.Schema(type="STRING", description="Scientific search query")},
-                    required=["query"],
-                ),
-            ),
-        ]
-    )
+# OpenAI-format tool schemas for OpenRouter
+TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": "Search the live web for current events and news.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_wikipedia",
+            "description": "Search Wikipedia for factual background.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_arxiv",
+            "description": "Search ArXiv for academic papers.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_semantic_scholar",
+            "description": "Search Semantic Scholar for peer-reviewed literature.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
 ]
 
+# ReAct pattern — parsed when native tool_calls are absent
+_REACT_PATTERN = re.compile(
+    r"(?:SEARCH_WEB|SEARCH_WIKIPEDIA|SEARCH_ARXIV|SEARCH_SEMANTIC_SCHOLAR):\s*(.+)",
+    re.IGNORECASE,
+)
+_REACT_TOOL_MAP = {
+    "search_web": "search_web",
+    "search_wikipedia": "search_wikipedia",
+    "search_arxiv": "search_arxiv",
+    "search_semantic_scholar": "search_semantic_scholar",
+}
+
+
+def _parse_react(text: str) -> list[tuple[str, str]]:
+    """Extract (tool_name, query) pairs from ReAct-style model output."""
+    calls = []
+    for line in text.splitlines():
+        for name in _REACT_TOOL_MAP:
+            prefix = name.upper().replace("_", "_") + ":"
+            if line.upper().startswith(prefix):
+                query = line[len(prefix):].strip()
+                if query:
+                    calls.append((name, query))
+    return calls
+
 
 # ---------------------------------------------------------------------------
-# Research loop
+# OpenRouter research loop
 # ---------------------------------------------------------------------------
 
 
-async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
-    """
-    Multi-turn Gemini research loop. Returns the final synthesized research text.
-    """
-    gemini = genai.Client(api_key=GEMINI_API_KEY)
-
-    directives_note = (
-        (
-            "\n\nAnalytical lens: Apply a decolonial and socialist materialist perspective. "
-            "Prioritize labor rights, anti-imperialism, ecological impact, and data sovereignty. "
-            "Avoid Washington Consensus framing."
-        )
+async def run_research_loop_openrouter(job: ResearchJob, http: httpx.AsyncClient) -> str:
+    model = _model_for_desk(job.desk)
+    directives = (
+        "\n\nAnalytical lens: Apply a decolonial and socialist materialist perspective. "
+        "Prioritize labor rights, anti-imperialism, ecological impact, and data sovereignty. "
+        "Avoid Washington Consensus framing."
         if job.directives_lens
         else ""
     )
 
-    system_prompt = (
-        f"You are an OSINT research analyst for the {job.desk}. "
-        f"Your task is to conduct thorough research on the following topic and produce "
-        f"a comprehensive intelligence brief with citations.\n\n"
-        f"Topic: {job.topic}{directives_note}\n\n"
-        f"Use your research tools to gather information from multiple sources. "
-        f"When you have enough information, synthesize it into a structured brief."
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                f"You are an OSINT research analyst for the {job.desk}. "
+                "Conduct thorough multi-source research and produce a comprehensive "
+                f"intelligence brief with citations.{directives}\n\n"
+                "If native tool calling is unavailable, use the ReAct format:\n"
+                "SEARCH_WEB: <query>\nSEARCH_WIKIPEDIA: <query>\n"
+                "SEARCH_ARXIV: <query>\nSEARCH_SEMANTIC_SCHOLAR: <query>"
+            ),
+        },
+        {"role": "user", "content": f"Research topic: {job.topic}"},
+    ]
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://osia.dev",
+        "X-Title": "OSIA Research Worker",
+    }
+
+    logger.info("Researching: %s (desk: %s, model: %s)", job.topic, job.desk, model)
+
+    for round_num in range(MAX_ROUNDS):
+        payload = {
+            "model": model,
+            "messages": messages,
+            "tools": TOOL_SCHEMAS,
+            "tool_choice": "auto",
+            "max_tokens": 2048,
+            "temperature": 0.3,
+        }
+
+        try:
+            resp = await http.post(
+                f"{OPENROUTER_BASE_URL}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=120.0,
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "OpenRouter HTTP %d on round %d — body: %s",
+                e.response.status_code,
+                round_num,
+                e.response.text[:500],
+            )
+            raise
+
+        data = resp.json()
+        choice = data["choices"][0]
+        message = choice["message"]
+        messages.append(message)
+
+        tool_calls = message.get("tool_calls") or []
+        content = message.get("content", "") or ""
+
+        # Native tool calls
+        if tool_calls:
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError:
+                    fn_args = {}
+                query = fn_args.get("query", "")
+                logger.info("Tool: %s(%r)", fn_name, query)
+                tool_fn = TOOL_REGISTRY.get(fn_name)
+                result = await tool_fn(query, http) if tool_fn else f"Unknown tool: {fn_name}"
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result,
+                })
+            continue
+
+        # ReAct fallback — model emitted structured text instead of tool_calls
+        react_calls = _parse_react(content)
+        if react_calls:
+            logger.info("Using ReAct fallback (%d calls)", len(react_calls))
+            tool_results = []
+            for fn_name, query in react_calls:
+                logger.info("ReAct tool: %s(%r)", fn_name, query)
+                tool_fn = TOOL_REGISTRY.get(fn_name)
+                result = await tool_fn(query, http) if tool_fn else f"Unknown tool: {fn_name}"
+                tool_results.append(f"[{fn_name}: {query}]\n{result}")
+            messages.append({"role": "user", "content": "\n\n".join(tool_results)})
+            continue
+
+        # No tool calls and no ReAct — model is done
+        logger.info("Research complete after %d rounds (%d chars)", round_num + 1, len(content))
+        return content
+
+    logger.warning("Hit max rounds for topic: %s", job.topic)
+    for m in reversed(messages):
+        if m.get("role") == "assistant" and m.get("content"):
+            return m["content"]
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Gemini fallback research loop
+# ---------------------------------------------------------------------------
+
+
+async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) -> str:
+    from google import genai
+    from google.genai import types
+
+    gemini = genai.Client(api_key=GEMINI_API_KEY)
+    directives = (
+        "\n\nAnalytical lens: Apply a decolonial and socialist materialist perspective. "
+        "Prioritize labor rights, anti-imperialism, ecological impact, and data sovereignty. "
+        "Avoid Washington Consensus framing."
+        if job.directives_lens
+        else ""
     )
 
-    contents = [types.Content(role="user", parts=[types.Part(text=system_prompt)])]
-    config = types.GenerateContentConfig(tools=RESEARCH_TOOLS)
+    tools = [types.Tool(function_declarations=[
+        types.FunctionDeclaration(
+            name="search_web",
+            description="Search the live web for current events and news.",
+            parameters=types.Schema(type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]),
+        ),
+        types.FunctionDeclaration(
+            name="search_wikipedia",
+            description="Search Wikipedia for factual background.",
+            parameters=types.Schema(type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]),
+        ),
+        types.FunctionDeclaration(
+            name="search_arxiv",
+            description="Search ArXiv for academic papers.",
+            parameters=types.Schema(type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]),
+        ),
+        types.FunctionDeclaration(
+            name="search_semantic_scholar",
+            description="Search Semantic Scholar for peer-reviewed literature.",
+            parameters=types.Schema(type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]),
+        ),
+    ])]
+
+    system = (
+        f"You are an OSINT research analyst for the {job.desk}. "
+        "Conduct thorough research and produce a comprehensive intelligence brief with citations."
+        f"{directives}"
+    )
+    contents = [types.Content(role="user", parts=[types.Part(text=f"{system}\n\nResearch topic: {job.topic}")])]
+
+    logger.info("Researching (Gemini): %s", job.topic)
 
     for round_num in range(MAX_ROUNDS):
         response = await asyncio.to_thread(
             gemini.models.generate_content,
             model=GEMINI_MODEL,
             contents=contents,
-            config=config,
+            config=types.GenerateContentConfig(tools=tools),
         )
-
         candidate = response.candidates[0]
         contents.append(candidate.content)
 
         function_calls = [p for p in candidate.content.parts if p.function_call]
         if not function_calls:
-            # Model is done — return final text
             text_parts = [p.text for p in candidate.content.parts if p.text]
             result = "\n".join(text_parts)
-            logger.info("Research loop complete after %d rounds (%d chars)", round_num + 1, len(result))
+            logger.info("Research complete after %d rounds (%d chars)", round_num + 1, len(result))
             return result
 
-        # Execute tools
         response_parts = []
         for part in function_calls:
             call = part.function_call
-            args = dict(call.args) if call.args else {}
-            query = args.get("query", "")
-            logger.info("Tool call: %s(%r)", call.name, query)
-
+            query = dict(call.args).get("query", "") if call.args else ""
+            logger.info("Tool: %s(%r)", call.name, query)
             tool_fn = TOOL_REGISTRY.get(call.name)
-            if tool_fn:
-                try:
-                    result_text = await tool_fn(query, http)
-                except Exception as e:
-                    result_text = f"Tool error: {e}"
-            else:
-                result_text = f"Unknown tool: {call.name}"
-
-            response_parts.append(
-                types.Part(
-                    function_response=types.FunctionResponse(
-                        name=call.name,
-                        response={"result": result_text},
-                    )
-                )
-            )
-
+            result_text = await tool_fn(query, http) if tool_fn else f"Unknown tool: {call.name}"
+            response_parts.append(types.Part(
+                function_response=types.FunctionResponse(name=call.name, response={"result": result_text})
+            ))
         contents.append(types.Content(role="user", parts=response_parts))
 
-    # Exhausted rounds — return whatever we have
-    logger.warning("Research loop hit max rounds for topic: %s", job.topic)
+    logger.warning("Hit max rounds for topic: %s", job.topic)
     text_parts = [p.text for p in contents[-1].parts if hasattr(p, "text") and p.text]
     return "\n".join(text_parts)
+
+
+async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
+    if OPENROUTER_API_KEY:
+        return await run_research_loop_openrouter(job, http)
+    if GEMINI_API_KEY:
+        logger.warning("OPENROUTER_API_KEY not set — falling back to Gemini (may refuse sensitive topics)")
+        return await run_research_loop_gemini(job, http)
+    raise RuntimeError("Neither OPENROUTER_API_KEY nor GEMINI_API_KEY is set")
 
 
 # ---------------------------------------------------------------------------
@@ -468,132 +602,124 @@ async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _chunk_text(text: str, chunk_words: int = CHUNK_SIZE) -> list[str]:
-    """Split text into overlapping word-count chunks."""
+def _chunk_text(text: str) -> list[str]:
     words = text.split()
-    chunks = []
-    overlap = chunk_words // 5  # 20% overlap
-    step = chunk_words - overlap
-    for i in range(0, len(words), step):
-        chunk = " ".join(words[i : i + chunk_words])
-        if chunk:
-            chunks.append(chunk)
-    return chunks
+    overlap = CHUNK_SIZE // 5
+    step = CHUNK_SIZE - overlap
+    return [" ".join(words[i: i + CHUNK_SIZE]) for i in range(0, len(words), step) if words[i: i + CHUNK_SIZE]]
 
 
-async def store_research(job: ResearchJob, research_text: str, http: httpx.AsyncClient, qdrant: QdrantClient):
-    """Chunk, embed, and upsert research output into Qdrant."""
-    chunks = _chunk_text(research_text)
+async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, qdrant: QdrantClient):
+    chunks = _chunk_text(text)
     if not chunks:
-        logger.warning("No chunks to store for job %s", job.job_id)
+        logger.warning("No chunks for job %s", job.job_id)
         return
-
-    logger.info("Embedding %d chunks for job %s", len(chunks), job.job_id)
     embeddings = await embed_texts(chunks, http)
-
     now = datetime.now(UTC).isoformat()
     points = []
     for i, (chunk, vector) in enumerate(zip(chunks, embeddings, strict=False)):
-        # Deterministic ID from job_id + chunk index — md5 is fine here (not security-sensitive)
         point_id = int(hashlib.md5(f"{job.job_id}:{i}".encode()).hexdigest()[:8], 16)  # noqa: S324
-        points.append(
-            {
-                "id": point_id,
-                "vector": vector,
-                "payload": {
-                    "text": chunk,
-                    "topic": job.topic,
-                    "desk": job.desk,
-                    "job_id": job.job_id,
-                    "chunk_index": i,
-                    "total_chunks": len(chunks),
-                    "triggered_by": job.triggered_by,
-                    "collected_at": now,
-                    "source": "research_worker",
-                },
-            }
-        )
-
+        points.append({
+            "id": point_id,
+            "vector": vector,
+            "payload": {
+                "text": chunk,
+                "topic": job.topic,
+                "desk": job.desk,
+                "job_id": job.job_id,
+                "chunk_index": i,
+                "total_chunks": len(chunks),
+                "triggered_by": job.triggered_by,
+                "collected_at": now,
+                "source": "research_worker",
+            },
+        })
     await qdrant.upsert_points(points)
-    logger.info("Stored %d chunks for topic: %s", len(points), job.topic)
 
 
 # ---------------------------------------------------------------------------
-# Main worker loop
+# Main — oneshot batch: drain queue, process all, exit
 # ---------------------------------------------------------------------------
 
 
-async def worker_loop():
-    logger.info("OSIA Research Worker starting up...")
-    logger.info("Queue API: %s", QUEUE_API_URL)
-    logger.info("Qdrant:    %s", QDRANT_URL)
-    logger.info("Model:     %s", GEMINI_MODEL)
+async def main():
+    logger.info("=== OSIA Research Worker starting ===")
 
-    if not QUEUE_API_TOKEN:
-        logger.error("QUEUE_API_TOKEN not set — cannot connect to queue")
+    if not OPENROUTER_API_KEY and not GEMINI_API_KEY:
+        logger.error("Neither OPENROUTER_API_KEY nor GEMINI_API_KEY is set — cannot run")
         return
-    if not GEMINI_API_KEY:
-        logger.error("GEMINI_API_KEY not set")
+
+    backend = "OpenRouter" if OPENROUTER_API_KEY else "Gemini (fallback)"
+    logger.info("Backend: %s | Qdrant: %s", backend, QDRANT_URL)
+
+    queue = RedisQueue()
+    depth = queue.depth()
+    logger.info("Research queue depth: %d (threshold: %d)", depth, BATCH_THRESHOLD)
+
+    if depth < BATCH_THRESHOLD:
+        logger.info("Queue below threshold — nothing to do.")
         return
 
     async with httpx.AsyncClient(timeout=60.0) as http:
-        queue = QueueClient(http)
         qdrant = QdrantClient(http)
-
-        # Ensure the Qdrant collection exists before we start processing
         try:
             await qdrant.ensure_collection()
         except Exception as e:
             logger.error("Failed to ensure Qdrant collection: %s", e)
             return
 
-        logger.info("Worker ready. Polling osia:research_queue...")
-
+        # Drain the queue
+        jobs: list[ResearchJob] = []
         while True:
+            payload = queue.pop()
+            if payload is None:
+                break
+            job = ResearchJob.from_dict(payload)
+            if job.topic:
+                jobs.append(job)
+
+        logger.info("Drained %d jobs from queue", len(jobs))
+        if not jobs:
+            return
+
+        succeeded = 0
+        failed = 0
+        skipped = 0
+
+        for job in jobs:
+            topic_key = hashlib.md5(job.topic.lower().strip().encode()).hexdigest()  # noqa: S324
+            if queue.is_seen(topic_key):
+                logger.info("Already researched, skipping: %s", job.topic)
+                skipped += 1
+                continue
+
+            t0 = time.monotonic()
             try:
-                payload = await queue.pop()
-                if payload is None:
-                    # Timeout — queue was empty, loop again
-                    continue
-
-                job = ResearchJob.from_dict(payload)
-                logger.info("Received job %s: %r (desk: %s)", job.job_id, job.topic, job.desk)
-
-                # Deduplication — skip if we've researched this topic recently (md5 is fine, not security-sensitive)
-                topic_key = hashlib.md5(job.topic.lower().strip().encode()).hexdigest()  # noqa: S324
-                if await queue.is_seen(topic_key):
-                    logger.info("Topic already researched, skipping: %s", job.topic)
-                    continue
-
-                # Run the research loop
-                t0 = time.monotonic()
-                try:
-                    research_text = await run_research_loop(job, http)
-                except Exception as e:
-                    logger.error("Research loop failed for job %s: %s", job.job_id, e)
-                    continue
-
-                elapsed = time.monotonic() - t0
-                logger.info("Research complete in %.1fs for: %s", elapsed, job.topic)
-
-                # Store in Qdrant
-                try:
-                    await store_research(job, research_text, http, qdrant)
-                except Exception as e:
-                    logger.error("Failed to store research for job %s: %s", job.job_id, e)
-                    continue
-
-                # Mark topic as seen so we don't re-research it
-                await queue.mark_seen(topic_key)
-                logger.info("Job %s complete.", job.job_id)
-
-            except httpx.HTTPStatusError as e:
-                logger.error("Queue API HTTP error: %s — retrying in 10s", e)
-                await asyncio.sleep(10)
+                text = await run_research_loop(job, http)
             except Exception as e:
-                logger.exception("Unexpected worker error: %s — retrying in 5s", e)
-                await asyncio.sleep(5)
+                logger.error("Research failed for '%s': %s", job.topic, e)
+                failed += 1
+                continue
+
+            if not text:
+                logger.warning("Empty result for topic: %s", job.topic)
+                failed += 1
+                continue
+
+            logger.info("Research done in %.1fs (%d chars): %s", time.monotonic() - t0, len(text), job.topic)
+
+            try:
+                await store_research(job, text, http, qdrant)
+            except Exception as e:
+                logger.error("Storage failed for '%s': %s", job.topic, e)
+                failed += 1
+                continue
+
+            queue.mark_seen(topic_key)
+            succeeded += 1
+
+    logger.info("=== Batch complete. succeeded=%d failed=%d skipped=%d ===", succeeded, failed, skipped)
 
 
 if __name__ == "__main__":
-    asyncio.run(worker_loop())
+    asyncio.run(main())
