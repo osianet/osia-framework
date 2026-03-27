@@ -2,28 +2,29 @@
 OSIA Research Worker — oneshot batch processor, runs locally via systemd timer.
 
 Drains osia:research_queue, runs a multi-turn tool-calling research loop via
-OpenRouter (uncensored/permissive model routing per desk), then chunks and
+Venice AI (uncensored/permissive model routing per desk), then chunks and
 embeds results into Qdrant for retrieval-augmented generation at report time.
 
 Desk → model routing:
-  HUMINT / Cultural / Geopolitical  → Dolphin R1 24B  (uncensored, via Venice)
-  Cyber                             → Hermes 3 70B    (permissive tool-use)
-  Finance / Science / default       → Mistral Small   (reliable, cost-effective)
+  HUMINT / Cultural / Geopolitical  → venice-uncensored (no guardrails, ReAct tool use)
+  Cyber                             → mistral-31-24b    (Venice-private, native FC)
+  Finance / Science / default       → mistral-small-3-2-24b-instruct (cheap, native FC)
 
-If OPENROUTER_API_KEY is not set, falls back to Gemini (research still works
-but may refuse sensitive topics).
+Fallback chain: Venice → OpenRouter → Gemini
 
 Environment variables:
-  OPENROUTER_API_KEY          — OpenRouter API key
+  VENICE_API_KEY              — Venice API key (primary)
+  OPENROUTER_API_KEY          — OpenRouter API key (fallback)
   REDIS_URL                   — Redis connection URL (default: redis://localhost:6379/0)
   QDRANT_URL                  — Qdrant HTTP endpoint (default: http://localhost:6333)
   QDRANT_API_KEY              — Qdrant API key
-  HF_TOKEN                    — HuggingFace token (for embeddings via router.huggingface.co)
+  HF_TOKEN                    — HuggingFace token (for embeddings)
   TAVILY_API_KEY              — Tavily web search API key
   RESEARCH_BATCH_THRESHOLD    — Min queue depth before processing (default: 3)
-  RESEARCH_WORKER_MODEL_DOLPHIN  — Override Dolphin model slug on OpenRouter
-  RESEARCH_WORKER_MODEL_DEFAULT  — Override default model slug on OpenRouter
-  GEMINI_API_KEY              — Fallback if OPENROUTER_API_KEY not set
+  VENICE_MODEL_UNCENSORED     — Override uncensored model slug (default: venice-uncensored)
+  VENICE_MODEL_CYBER          — Override cyber desk model slug (default: mistral-31-24b)
+  VENICE_MODEL_DEFAULT        — Override default model slug (default: mistral-small-3-2-24b-instruct)
+  GEMINI_API_KEY              — Fallback if neither Venice nor OpenRouter key is set
   GEMINI_MODEL_ID             — Gemini model ID (default: gemini-2.5-flash)
 
 Run:
@@ -56,6 +57,9 @@ logger = logging.getLogger("osia.research_worker")
 # Config
 # ---------------------------------------------------------------------------
 
+VENICE_API_KEY = os.getenv("VENICE_API_KEY", "")
+VENICE_BASE_URL = "https://api.venice.ai/api/v1"
+
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
@@ -70,25 +74,19 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
 
 BATCH_THRESHOLD = int(os.getenv("RESEARCH_BATCH_THRESHOLD", "3"))
 
-# Per-desk OpenRouter model routing
-MODEL_DOLPHIN = os.getenv(
-    "RESEARCH_WORKER_MODEL_DOLPHIN",
-    "cognitivecomputations/dolphin3.0-r1-mistral-24b",
-)
-MODEL_DEFAULT = os.getenv(
-    "RESEARCH_WORKER_MODEL_DEFAULT",
-    "mistralai/mistral-small-3.1-24b-instruct",
-)
-MODEL_HERMES = "nousresearch/hermes-3-llama-3.1-70b"
+# Venice model routing per desk
+# venice-uncensored has no native function calling — ReAct fallback handles it
+VENICE_MODEL_UNCENSORED = os.getenv("VENICE_MODEL_UNCENSORED", "venice-uncensored")
+VENICE_MODEL_CYBER = os.getenv("VENICE_MODEL_CYBER", "mistral-31-24b")
+VENICE_MODEL_DEFAULT = os.getenv("VENICE_MODEL_DEFAULT", "mistral-small-3-2-24b-instruct")
 
-# Desks that need uncensored reasoning (HUMINT, cultural, geopolitical)
-DOLPHIN_DESKS = {
+# Desks that require uncensored reasoning (no guardrails)
+UNCENSORED_DESKS = {
     "human-intelligence-and-profiling-desk",
     "cultural-and-theological-intelligence-desk",
     "geopolitical-and-security-desk",
 }
-# Desks that benefit from permissive tool-use model
-HERMES_DESKS = {
+CYBER_DESKS = {
     "cyber-intelligence-and-warfare-desk",
 }
 
@@ -99,11 +97,11 @@ MAX_ROUNDS = 6
 
 
 def _model_for_desk(desk: str) -> str:
-    if desk in DOLPHIN_DESKS:
-        return MODEL_DOLPHIN
-    if desk in HERMES_DESKS:
-        return MODEL_HERMES
-    return MODEL_DEFAULT
+    if desk in UNCENSORED_DESKS:
+        return VENICE_MODEL_UNCENSORED
+    if desk in CYBER_DESKS:
+        return VENICE_MODEL_CYBER
+    return VENICE_MODEL_DEFAULT
 
 
 # ---------------------------------------------------------------------------
@@ -388,11 +386,17 @@ def _parse_react(text: str) -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# OpenRouter research loop
+# OpenAI-compat research loop (Venice primary, OpenRouter fallback)
 # ---------------------------------------------------------------------------
 
 
-async def run_research_loop_openrouter(job: ResearchJob, http: httpx.AsyncClient) -> str:
+async def run_research_loop_openai_compat(
+    job: ResearchJob,
+    http: httpx.AsyncClient,
+    base_url: str,
+    api_key: str,
+    extra_headers: dict | None = None,
+) -> str:
     model = _model_for_desk(job.desk)
     directives = (
         "\n\nAnalytical lens: Apply a decolonial and socialist materialist perspective. "
@@ -417,12 +421,9 @@ async def run_research_loop_openrouter(job: ResearchJob, http: httpx.AsyncClient
         {"role": "user", "content": f"Research topic: {job.topic}"},
     ]
 
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://osia.dev",
-        "X-Title": "OSIA Research Worker",
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
 
     logger.info("Researching: %s (desk: %s, model: %s)", job.topic, job.desk, model)
 
@@ -438,7 +439,7 @@ async def run_research_loop_openrouter(job: ResearchJob, http: httpx.AsyncClient
 
         try:
             resp = await http.post(
-                f"{OPENROUTER_BASE_URL}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers=headers,
                 json=payload,
                 timeout=120.0,
@@ -446,7 +447,7 @@ async def run_research_loop_openrouter(job: ResearchJob, http: httpx.AsyncClient
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             logger.error(
-                "OpenRouter HTTP %d on round %d — body: %s",
+                "API HTTP %d on round %d — body: %s",
                 e.response.status_code,
                 round_num,
                 e.response.text[:500],
@@ -589,12 +590,20 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
 
 
 async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
+    if VENICE_API_KEY:
+        return await run_research_loop_openai_compat(
+            job, http, base_url=VENICE_BASE_URL, api_key=VENICE_API_KEY
+        )
     if OPENROUTER_API_KEY:
-        return await run_research_loop_openrouter(job, http)
+        logger.warning("VENICE_API_KEY not set — falling back to OpenRouter")
+        return await run_research_loop_openai_compat(
+            job, http, base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY,
+            extra_headers={"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Research Worker"},
+        )
     if GEMINI_API_KEY:
-        logger.warning("OPENROUTER_API_KEY not set — falling back to Gemini (may refuse sensitive topics)")
+        logger.warning("No Venice/OpenRouter key — falling back to Gemini (may refuse sensitive topics)")
         return await run_research_loop_gemini(job, http)
-    raise RuntimeError("Neither OPENROUTER_API_KEY nor GEMINI_API_KEY is set")
+    raise RuntimeError("No API key set: VENICE_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY required")
 
 
 # ---------------------------------------------------------------------------
@@ -645,11 +654,16 @@ async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, q
 async def main():
     logger.info("=== OSIA Research Worker starting ===")
 
-    if not OPENROUTER_API_KEY and not GEMINI_API_KEY:
-        logger.error("Neither OPENROUTER_API_KEY nor GEMINI_API_KEY is set — cannot run")
+    if not VENICE_API_KEY and not OPENROUTER_API_KEY and not GEMINI_API_KEY:
+        logger.error("No API key set (VENICE_API_KEY / OPENROUTER_API_KEY / GEMINI_API_KEY) — cannot run")
         return
 
-    backend = "OpenRouter" if OPENROUTER_API_KEY else "Gemini (fallback)"
+    if VENICE_API_KEY:
+        backend = f"Venice ({VENICE_MODEL_UNCENSORED} / {VENICE_MODEL_CYBER} / {VENICE_MODEL_DEFAULT})"
+    elif OPENROUTER_API_KEY:
+        backend = "OpenRouter (fallback)"
+    else:
+        backend = "Gemini (fallback)"
     logger.info("Backend: %s | Qdrant: %s", backend, QDRANT_URL)
 
     queue = RedisQueue()
