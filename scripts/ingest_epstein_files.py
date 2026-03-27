@@ -520,7 +520,7 @@ class EpsteinIngestor:
                 try:
                     doc_meta = json.loads(raw_meta) if isinstance(raw_meta, str) else dict(raw_meta)
                 except (json.JSONDecodeError, TypeError):
-                    pass
+                    pass  # malformed metadata is non-fatal; doc_meta stays {}
 
             metadata: dict = {
                 "source": cfg["source_label"],
