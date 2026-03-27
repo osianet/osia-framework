@@ -57,6 +57,7 @@ BOOTSTRAP_COLLECTIONS = [
     "the-watch-floor",
     "osia_research_cache",
     "epstein-files",
+    "cybersecurity-attacks",
 ]
 
 
