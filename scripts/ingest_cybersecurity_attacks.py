@@ -518,10 +518,10 @@ class CybersecurityAttacksIngestor:
 
         it = _iter()
 
+        _sentinel = object()
         while True:
-            try:
-                row = await loop.run_in_executor(None, next, it)
-            except StopIteration:
+            row = await loop.run_in_executor(None, next, it, _sentinel)
+            if row is _sentinel:
                 break
 
             stats.records_seen += 1
