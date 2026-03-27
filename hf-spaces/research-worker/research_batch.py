@@ -155,27 +155,40 @@ class QueueClient:
         }
 
     async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
-        """Make a request to the queue API, retrying on 429 with exponential backoff."""
-        for attempt in range(5):
-            resp = await self._http.request(
-                method,
-                f"{QUEUE_API_URL}{path}",
-                headers=self._headers,
-                **kwargs,
-            )
-            if resp.status_code == 429:
-                backoff = 2 ** attempt
-                logger.warning("Queue API rate-limited (429) — backing off %ds", backoff)
+        """Make a request to the queue API with retry on 429 or transient network errors."""
+        last_exc: Exception | None = None
+        for attempt in range(6):
+            try:
+                resp = await self._http.request(
+                    method,
+                    f"{QUEUE_API_URL}{path}",
+                    headers=self._headers,
+                    **kwargs,
+                )
+                if resp.status_code == 429:
+                    backoff = 2**attempt
+                    logger.warning("Queue API rate-limited (429) — backing off %ds", backoff)
+                    await asyncio.sleep(backoff)
+                    continue
+                resp.raise_for_status()
+                return resp
+            except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ConnectError) as exc:
+                backoff = 5 * (attempt + 1)
+                logger.warning(
+                    "Queue API transient error (%s) — retry %d/6 in %ds",
+                    type(exc).__name__,
+                    attempt + 1,
+                    backoff,
+                )
+                last_exc = exc
                 await asyncio.sleep(backoff)
-                continue
-            resp.raise_for_status()
-            return resp
-        raise RuntimeError("Queue API rate-limited after 5 retries")
+        raise RuntimeError(f"Queue API unreachable after 6 retries: {last_exc}")
 
     async def pop(self, timeout: int = 2) -> dict | None:
         """Non-blocking pop — timeout=2 so we drain quickly."""
         resp = await self._request(
-            "POST", "/queue/pop",
+            "POST",
+            "/queue/pop",
             json={"queue": "osia:research_queue", "timeout": timeout},
             timeout=15,
         )
@@ -183,21 +196,24 @@ class QueueClient:
 
     async def depth(self) -> int:
         resp = await self._request(
-            "GET", "/queue/length",
+            "GET",
+            "/queue/length",
             params={"queue": "osia:research_queue"},
         )
         return resp.json().get("depth", 0)
 
     async def is_seen(self, key: str) -> bool:
         resp = await self._request(
-            "POST", "/queue/seen/check",
+            "POST",
+            "/queue/seen/check",
             json={"key": "osia:research:seen_topics", "member": key},
         )
         return resp.json().get("seen", False)
 
     async def mark_seen(self, key: str):
         await self._request(
-            "POST", "/queue/seen/add",
+            "POST",
+            "/queue/seen/add",
             json={"key": "osia:research:seen_topics", "members": [key]},
         )
 
@@ -402,9 +418,17 @@ async def run_research_loop(
             )
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
+            status = e.response.status_code
+            # Log the full response body so we can diagnose 422s etc.
+            logger.error(
+                "Endpoint HTTP %d on round %d — body: %s",
+                status,
+                round_num,
+                e.response.text[:1000],
+            )
             # 503 = model still cold-starting, retry
-            if e.response.status_code == 503:
-                logger.warning("Endpoint 503 on round %d, retrying in 15s...", round_num)
+            if status == 503:
+                logger.warning("Retrying in 15s...")
                 await asyncio.sleep(15)
                 continue
             raise
@@ -554,14 +578,14 @@ async def main():
         await _ensure_collection(http)
 
         # Drain the queue, grouping jobs by endpoint to minimise cold starts.
-        # 0.25s between pops keeps us well under the queue API rate limit.
+        # Queue API rate limit is 120/minute — 0.6s between pops keeps us safely under it.
         jobs: list[dict] = []
         while True:
             payload = await queue.pop(timeout=2)
             if payload is None:
                 break
             jobs.append(payload)
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.6)
         logger.info("Drained %d jobs from queue", len(jobs))
 
         if not jobs:

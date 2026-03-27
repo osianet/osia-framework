@@ -109,9 +109,27 @@ def _fire_hf_job() -> str:
     return job.id
 
 
+def _check_already_running() -> str | None:
+    """Return the job ID if a research job is already running/pending, else None."""
+    try:
+        # list_jobs() uses personal account namespace — query the org directly
+        r = httpx.get(
+            "https://huggingface.co/api/jobs/osianet",
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        for job in r.json():
+            if job.get("status", {}).get("stage") in ("RUNNING", "PENDING"):
+                return job["id"]
+    except Exception as e:
+        logger.warning("Could not check running jobs (%s) — proceeding anyway", e)
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Trigger OSIA research batch job on HuggingFace")
-    parser.add_argument("--force", action="store_true", help="Skip queue threshold check")
+    parser.add_argument("--force", action="store_true", help="Skip queue threshold and concurrency checks")
     args = parser.parse_args()
 
     if not QUEUE_API_TOKEN:
@@ -123,6 +141,13 @@ def main():
     if not HF_NAMESPACE:
         logger.error("HF_NAMESPACE not set")
         sys.exit(1)
+
+    # Guard: don't submit if a job is already running
+    if not args.force:
+        running_id = _check_already_running()
+        if running_id:
+            logger.info("Job already running (%s) — skipping submission.", running_id)
+            sys.exit(0)
 
     # Check queue depth — non-fatal: if the queue API is unreachable we fire anyway
     # rather than silently skipping research when the network is flaky.

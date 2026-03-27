@@ -500,22 +500,25 @@ case $command in
         HF_TOKEN_VAL=$(grep -E '^HF_TOKEN=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
         HF_NAMESPACE_VAL=$(grep -E '^HF_NAMESPACE=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
         if [ -n "$HF_TOKEN_VAL" ]; then
-            hf_jobs_out=$(cd "$SCRIPT_DIR" && HF_TOKEN="$HF_TOKEN_VAL" HF_NAMESPACE="$HF_NAMESPACE_VAL" \
+            hf_jobs_out=$(cd "$SCRIPT_DIR" && HF_TOKEN="$HF_TOKEN_VAL" \
                 .venv/bin/python -c "
-import os, sys
-from huggingface_hub import HfApi
-api = HfApi(token=os.environ.get('HF_TOKEN',''))
+import os, json, urllib.request
+token = os.environ.get('HF_TOKEN','')
 try:
-    jobs = list(api.list_jobs())
-    running = [j for j in jobs if getattr(j,'status','') in ('running','pending')]
+    req = urllib.request.Request(
+        'https://huggingface.co/api/jobs/osianet',
+        headers={'Authorization': f'Bearer {token}'}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        jobs = json.loads(r.read())
+    jobs.sort(key=lambda j: j['createdAt'], reverse=True)
+    running = [j for j in jobs if j['status']['stage'] in ('RUNNING','PENDING')]
     if running:
-        j = running[0]
-        print('RUNNING ' + getattr(j,'job_id',str(j)))
+        ids = ' '.join(j['id'] for j in running)
+        print('RUNNING ' + str(len(running)) + ' ' + ids)
     elif jobs:
         j = jobs[0]
-        status = getattr(j,'status','?')
-        jid = getattr(j,'job_id',str(j))
-        print('LAST ' + status + ' ' + jid)
+        print('LAST ' + j['status']['stage'] + ' ' + j['id'])
     else:
         print('NONE')
 except Exception as e:
@@ -523,16 +526,29 @@ except Exception as e:
 " 2>/dev/null)
             case "$hf_jobs_out" in
                 RUNNING*)
-                    job_id="${hf_jobs_out#RUNNING }"
-                    echo -e "[${GREEN}OK${NC}]   HF Job running ${DIM}(${job_id})${NC}"
+                    rest="${hf_jobs_out#RUNNING }"
+                    count="${rest%% *}"
+                    job_ids="${rest#* }"
+                    first_id="${job_ids%% *}"
+                    if [ "$count" -gt 1 ]; then
+                        echo -e "[${YELLOW}WARN${NC}] ${count} HF Jobs running concurrently ${DIM}(latest: ${first_id})${NC}"
+                        echo -e "         ${DIM}Run: uv run python scripts/hf_jobs.py list${NC}"
+                    else
+                        echo -e "[${GREEN}OK${NC}]   HF Job running ${DIM}(${first_id})${NC}"
+                        echo -e "         ${DIM}Logs: uv run python scripts/hf_jobs.py logs${NC}"
+                    fi
                     ;;
                 LAST*)
                     rest="${hf_jobs_out#LAST }"
                     job_status="${rest%% *}"
                     job_id="${rest#* }"
-                    [ "$job_status" = "completed" ] && status_color="$GREEN" || status_color="$DIM"
-                    [ "$job_status" = "failed" ]    && status_color="$RED"
+                    case "$job_status" in
+                        COMPLETED) status_color="$GREEN" ;;
+                        ERROR)     status_color="$RED" ;;
+                        *)         status_color="$DIM" ;;
+                    esac
                     echo -e "[${DIM}--${NC}]   Last HF Job: ${status_color}${job_status}${NC} ${DIM}(${job_id})${NC}"
+                    echo -e "         ${DIM}Logs: uv run python scripts/hf_jobs.py logs ${job_id}${NC}"
                     ;;
                 NONE)
                     echo -e "[${YELLOW}WARN${NC}] No HF Jobs found — batch has never run"
@@ -544,6 +560,47 @@ except Exception as e:
                     echo -e "[${YELLOW}SKIP${NC}] HF Jobs status unknown"
                     ;;
             esac
+
+            # HF Endpoint health
+            ep_out=$(cd "$SCRIPT_DIR" && HF_TOKEN="$HF_TOKEN_VAL" HF_NAMESPACE="$HF_NAMESPACE_VAL" \
+                .venv/bin/python -c "
+import os, json, urllib.request
+token = os.environ.get('HF_TOKEN','')
+ns = os.environ.get('HF_NAMESPACE','') or 'osianet'
+results = []
+for ep in ['osia-dolphin-r1-24b','osia-hermes-70b']:
+    try:
+        req = urllib.request.Request(
+            f'https://api.endpoints.huggingface.cloud/v2/endpoint/{ns}/{ep}',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.loads(r.read())
+        state = d.get('status',{}).get('state','?')
+        env = d.get('model',{}).get('env',{})
+        tool_ok = '1' if env.get('ENABLE_AUTO_TOOL_CHOICE') else '0'
+        results.append(ep + ' ' + state + ' tools=' + tool_ok)
+    except Exception as e:
+        results.append(ep + ' ERROR ' + str(e)[:40])
+print('\n'.join(results))
+" 2>/dev/null)
+            while IFS= read -r ep_line; do
+                [ -z "$ep_line" ] && continue
+                ep_name="${ep_line%% *}"
+                rest="${ep_line#* }"
+                ep_state="${rest%% *}"
+                ep_tools="${rest##* }"
+                case "$ep_state" in
+                    running)      ep_color="$GREEN"  ;;
+                    scaledToZero) ep_color="$DIM"    ;;
+                    initializing) ep_color="$YELLOW" ;;
+                    error|ERROR)  ep_color="$RED"    ;;
+                    *)            ep_color="$DIM"    ;;
+                esac
+                tool_warn=""
+                [ "$ep_tools" = "tools=0" ] && tool_warn=" ${RED}[tools disabled!]${NC}"
+                echo -e "  Endpoint ${BOLD}${ep_name}${NC}: ${ep_color}${ep_state}${NC}${tool_warn}"
+            done <<< "$ep_out"
         else
             echo -e "[${YELLOW}SKIP${NC}] HF_TOKEN not set — cannot check job status"
         fi
@@ -556,8 +613,13 @@ except Exception as e:
         echo -e "${YELLOW}Showing last 50 lines for ${target}...${NC}"
         journalctl -u "$target" -n 50 --no-pager
         ;;
+    hf-jobs)
+        # HuggingFace Jobs toolkit — pass through all args to the script
+        shift
+        cd "$SCRIPT_DIR" && .venv/bin/python scripts/hf_jobs.py "$@"
+        ;;
     *)
-        echo "Usage: $0 {start|stop|restart|status|logs [service]}"
+        echo "Usage: $0 {start|stop|restart|status|logs [service]|hf-jobs [list|status|logs|endpoints|cancel]}"
         exit 1
         ;;
 esac
