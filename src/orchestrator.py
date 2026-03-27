@@ -445,6 +445,12 @@ class OsiaOrchestrator:
         elif name == "search_web":
             return _extract_mcp_text(await self.mcp.call_tool("tavily", "tavily_search", {"query": args["query"]}))
         elif name == "read_social_comments":
+            # Try yt-dlp first — much faster and doesn't use the phone
+            metadata = await self._fetch_social_metadata(args["url"])
+            if metadata:
+                logger.info("read_social_comments: served from yt-dlp metadata")
+                return metadata
+            logger.info("read_social_comments: yt-dlp unavailable, falling back to ADB")
             result = await self.social_agent.read_comments(args["url"])
             return result.data if result.success else f"FAILED: {result.error}"
         elif name == "post_social_comment":
@@ -454,6 +460,12 @@ class OsiaOrchestrator:
             result = await self.social_agent.reply_to_comment(args["url"], args["target_author"], args["reply"])
             return "Reply posted successfully." if result.success else f"FAILED: {result.error}"
         elif name == "read_social_post":
+            # Try yt-dlp first — returns caption, author, likes and comments without ADB
+            metadata = await self._fetch_social_metadata(args["url"])
+            if metadata:
+                logger.info("read_social_post: served from yt-dlp metadata")
+                return metadata
+            logger.info("read_social_post: yt-dlp unavailable, falling back to ADB")
             result = await self.social_agent.read_post_content(args["url"])
             return result.data if result.success else f"FAILED: {result.error}"
         else:
@@ -647,8 +659,8 @@ class OsiaOrchestrator:
     # ADB media capture
     # ------------------------------------------------------------------
 
-    async def _detect_video_duration(self, url: str) -> int | None:
-        """Use yt-dlp --dump-json to fetch video metadata without downloading."""
+    async def _fetch_yt_dlp_metadata(self, url: str) -> dict | None:
+        """Run yt-dlp --dump-json and return the parsed metadata dict, or None on failure."""
         yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
         if not yt_dlp_bin.exists():
             yt_dlp_bin = Path("yt-dlp")
@@ -660,16 +672,55 @@ class OsiaOrchestrator:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=15,
+                timeout=30,
             )
             if proc.returncode == 0 and proc.stdout.strip():
-                data = json.loads(proc.stdout)
-                duration = data.get("duration")
-                if duration:
-                    return int(duration)
+                return json.loads(proc.stdout)
         except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
-            logger.warning("yt-dlp duration probe failed: %s", e)
+            logger.warning("yt-dlp metadata fetch failed: %s", e)
         return None
+
+    async def _detect_video_duration(self, url: str) -> int | None:
+        """Use yt-dlp --dump-json to fetch video duration without downloading."""
+        data = await self._fetch_yt_dlp_metadata(url)
+        if data:
+            duration = data.get("duration")
+            if duration:
+                return int(duration)
+        return None
+
+    async def _fetch_social_metadata(self, url: str) -> str | None:
+        """
+        Use yt-dlp to extract post metadata and comments without touching the phone.
+        Returns a formatted string suitable for the research loop, or None if unavailable.
+        """
+        data = await self._fetch_yt_dlp_metadata(url)
+        if not data:
+            return None
+
+        lines = []
+        if data.get("uploader") or data.get("channel"):
+            lines.append(f"Author: {data.get('uploader') or data.get('channel')}")
+        if data.get("description"):
+            lines.append(f"Caption: {data['description']}")
+        if data.get("like_count") is not None:
+            lines.append(f"Likes: {data['like_count']}")
+        if data.get("comment_count") is not None:
+            lines.append(f"Total comments: {data['comment_count']}")
+        if data.get("upload_date"):
+            lines.append(f"Posted: {data['upload_date']}")
+
+        comments = data.get("comments") or []
+        if comments:
+            lines.append(f"\nTop {len(comments)} comments:")
+            for c in comments:
+                author = c.get("author", "unknown")
+                text = c.get("text", "")
+                lines.append(f"  @{author}: {text}")
+        else:
+            lines.append("\nNo comments available via metadata.")
+
+        return "\n".join(lines)
 
     async def process_media_link(self, url: str) -> str:
         """Uses ADB to capture media from a URL, then analyzes it with Gemini."""
