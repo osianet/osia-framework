@@ -15,7 +15,7 @@ import json
 import os
 import sys
 import urllib.request
-from datetime import datetime
+from datetime import UTC, datetime
 
 from dotenv import load_dotenv
 
@@ -101,7 +101,7 @@ def _c(text: str, color: str) -> str:
 
 def _age(iso: str) -> str:
     dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    mins = int((datetime.now(datetime.UTC) - dt).total_seconds() // 60)
+    mins = int((datetime.now(UTC) - dt).total_seconds() // 60)
     if mins < 60:
         return f"{mins}m ago"
     h, m = divmod(mins, 60)
