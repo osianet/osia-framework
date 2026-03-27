@@ -408,9 +408,7 @@ class HackerOneIngestor:
     ) -> None:
         stats.records_processed += 1
         payload = {"text": text, **metadata}
-        self._upsert_buffer.append(
-            qdrant_models.PointStruct(id=doc_id, vector=[0.0] * EMBEDDING_DIM, payload=payload)
-        )
+        self._upsert_buffer.append(qdrant_models.PointStruct(id=doc_id, vector=[0.0] * EMBEDDING_DIM, payload=payload))
         if len(self._upsert_buffer) >= self.upsert_batch_size:
             await self._flush_upsert_buffer(stats)
         if stats.records_processed % 500 == 0:
