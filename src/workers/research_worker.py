@@ -39,7 +39,7 @@ import os
 import re
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import httpx
@@ -92,7 +92,7 @@ CYBER_DESKS = {
 
 RESEARCH_COLLECTION = "osia_research_cache"
 EMBEDDING_DIM = 384
-CHUNK_SIZE = 400   # words
+CHUNK_SIZE = 400  # words
 MAX_ROUNDS = 6
 
 
@@ -233,10 +233,7 @@ async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
         )
         resp.raise_for_status()
         results = resp.json().get("results", [])
-        return "\n\n".join(
-            f"[{r.get('title', '')}]({r.get('url', '')})\n{r.get('content', '')[:500]}"
-            for r in results
-        )
+        return "\n\n".join(f"[{r.get('title', '')}]({r.get('url', '')})\n{r.get('content', '')[:500]}" for r in results)
     except Exception as e:
         return f"Web search error: {e}"
 
@@ -245,8 +242,7 @@ async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
     try:
         resp = await http.get(
             "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "list": "search", "srsearch": query,
-                    "srlimit": 3, "format": "json", "utf8": 1},
+            params={"action": "query", "list": "search", "srsearch": query, "srlimit": 3, "format": "json", "utf8": 1},
             timeout=10.0,
         )
         resp.raise_for_status()
@@ -256,8 +252,14 @@ async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
         title = hits[0]["title"]
         ex = await http.get(
             "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "prop": "extracts", "exintro": True,
-                    "explaintext": True, "titles": title, "format": "json"},
+            params={
+                "action": "query",
+                "prop": "extracts",
+                "exintro": True,
+                "explaintext": True,
+                "titles": title,
+                "format": "json",
+            },
             timeout=10.0,
         )
         ex.raise_for_status()
@@ -379,7 +381,7 @@ def _parse_react(text: str) -> list[tuple[str, str]]:
         for name in _REACT_TOOL_MAP:
             prefix = name.upper().replace("_", "_") + ":"
             if line.upper().startswith(prefix):
-                query = line[len(prefix):].strip()
+                query = line[len(prefix) :].strip()
                 if query:
                     calls.append((name, query))
     return calls
@@ -474,11 +476,13 @@ async def run_research_loop_openai_compat(
                 logger.info("Tool: %s(%r)", fn_name, query)
                 tool_fn = TOOL_REGISTRY.get(fn_name)
                 result = await tool_fn(query, http) if tool_fn else f"Unknown tool: {fn_name}"
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result,
+                    }
+                )
             continue
 
         # ReAct fallback — model emitted structured text instead of tool_calls
@@ -523,28 +527,40 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
         else ""
     )
 
-    tools = [types.Tool(function_declarations=[
-        types.FunctionDeclaration(
-            name="search_web",
-            description="Search the live web for current events and news.",
-            parameters=types.Schema(type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]),
-        ),
-        types.FunctionDeclaration(
-            name="search_wikipedia",
-            description="Search Wikipedia for factual background.",
-            parameters=types.Schema(type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]),
-        ),
-        types.FunctionDeclaration(
-            name="search_arxiv",
-            description="Search ArXiv for academic papers.",
-            parameters=types.Schema(type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]),
-        ),
-        types.FunctionDeclaration(
-            name="search_semantic_scholar",
-            description="Search Semantic Scholar for peer-reviewed literature.",
-            parameters=types.Schema(type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]),
-        ),
-    ])]
+    tools = [
+        types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name="search_web",
+                    description="Search the live web for current events and news.",
+                    parameters=types.Schema(
+                        type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
+                    ),
+                ),
+                types.FunctionDeclaration(
+                    name="search_wikipedia",
+                    description="Search Wikipedia for factual background.",
+                    parameters=types.Schema(
+                        type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
+                    ),
+                ),
+                types.FunctionDeclaration(
+                    name="search_arxiv",
+                    description="Search ArXiv for academic papers.",
+                    parameters=types.Schema(
+                        type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
+                    ),
+                ),
+                types.FunctionDeclaration(
+                    name="search_semantic_scholar",
+                    description="Search Semantic Scholar for peer-reviewed literature.",
+                    parameters=types.Schema(
+                        type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
+                    ),
+                ),
+            ]
+        )
+    ]
 
     system = (
         f"You are an OSINT research analyst for the {job.desk}. "
@@ -579,9 +595,9 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
             logger.info("Tool: %s(%r)", call.name, query)
             tool_fn = TOOL_REGISTRY.get(call.name)
             result_text = await tool_fn(query, http) if tool_fn else f"Unknown tool: {call.name}"
-            response_parts.append(types.Part(
-                function_response=types.FunctionResponse(name=call.name, response={"result": result_text})
-            ))
+            response_parts.append(
+                types.Part(function_response=types.FunctionResponse(name=call.name, response={"result": result_text}))
+            )
         contents.append(types.Content(role="user", parts=response_parts))
 
     logger.warning("Hit max rounds for topic: %s", job.topic)
@@ -591,13 +607,14 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
 
 async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
     if VENICE_API_KEY:
-        return await run_research_loop_openai_compat(
-            job, http, base_url=VENICE_BASE_URL, api_key=VENICE_API_KEY
-        )
+        return await run_research_loop_openai_compat(job, http, base_url=VENICE_BASE_URL, api_key=VENICE_API_KEY)
     if OPENROUTER_API_KEY:
         logger.warning("VENICE_API_KEY not set — falling back to OpenRouter")
         return await run_research_loop_openai_compat(
-            job, http, base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY,
+            job,
+            http,
+            base_url=OPENROUTER_BASE_URL,
+            api_key=OPENROUTER_API_KEY,
             extra_headers={"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Research Worker"},
         )
     if GEMINI_API_KEY:
@@ -615,7 +632,7 @@ def _chunk_text(text: str) -> list[str]:
     words = text.split()
     overlap = CHUNK_SIZE // 5
     step = CHUNK_SIZE - overlap
-    return [" ".join(words[i: i + CHUNK_SIZE]) for i in range(0, len(words), step) if words[i: i + CHUNK_SIZE]]
+    return [" ".join(words[i : i + CHUNK_SIZE]) for i in range(0, len(words), step) if words[i : i + CHUNK_SIZE]]
 
 
 async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, qdrant: QdrantClient):
@@ -628,21 +645,23 @@ async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, q
     points = []
     for i, (chunk, vector) in enumerate(zip(chunks, embeddings, strict=False)):
         point_id = int(hashlib.md5(f"{job.job_id}:{i}".encode()).hexdigest()[:8], 16)  # noqa: S324
-        points.append({
-            "id": point_id,
-            "vector": vector,
-            "payload": {
-                "text": chunk,
-                "topic": job.topic,
-                "desk": job.desk,
-                "job_id": job.job_id,
-                "chunk_index": i,
-                "total_chunks": len(chunks),
-                "triggered_by": job.triggered_by,
-                "collected_at": now,
-                "source": "research_worker",
-            },
-        })
+        points.append(
+            {
+                "id": point_id,
+                "vector": vector,
+                "payload": {
+                    "text": chunk,
+                    "topic": job.topic,
+                    "desk": job.desk,
+                    "job_id": job.job_id,
+                    "chunk_index": i,
+                    "total_chunks": len(chunks),
+                    "triggered_by": job.triggered_by,
+                    "collected_at": now,
+                    "source": "research_worker",
+                },
+            }
+        )
     await qdrant.upsert_points(points)
 
 
