@@ -305,9 +305,7 @@ Rules:
             # Accumulate any data the model extracts along the way
             if analysis.get("data"):
                 data_val = analysis["data"]
-                collected_data.append(
-                    data_val if isinstance(data_val, str) else json.dumps(data_val, indent=2)
-                )
+                collected_data.append(data_val if isinstance(data_val, str) else json.dumps(data_val, indent=2))
 
             if action == "done":
                 return ActionResult(

@@ -481,7 +481,9 @@ async def run_research_loop_openai_compat(
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 429 and attempt < 2:
                     wait = 35 * (attempt + 1)
-                    logger.warning("429 rate-limited on round %d — waiting %ds (attempt %d/3)", round_num, wait, attempt + 1)
+                    logger.warning(
+                        "429 rate-limited on round %d — waiting %ds (attempt %d/3)", round_num, wait, attempt + 1
+                    )
                     await asyncio.sleep(wait)
                     continue
                 logger.error(
