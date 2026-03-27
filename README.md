@@ -187,7 +187,7 @@ A dedicated Qdrant collection (`epstein-files`) holds declassified government do
 | Dataset | HuggingFace ID | Size | Description |
 |---------|---------------|------|-------------|
 | Epstein Emails | `notesbymuneeb/epstein-emails` | ~5K threads | Structured email threads from House Oversight Committee release; parsed and OCR-corrected |
-| House Oversight Docs | `tensonaut/EPSTEIN_FILES_20K` | ~25K files | Plain text documents from House Oversight Committee |
+| House Oversight Docs | `theelderemo/epstein-files-nov-2025` | ~25.8K files | Plain text documents from House Oversight Committee (Nov 2025 release) |
 | Full Index | `theelderemo/FULL_EPSTEIN_INDEX` | ~8.5K rows | Grand jury materials, FBI documents, witness statements |
 | DOJ Library | `Nikity/Epstein-Files` | 4.11M rows | Full DOJ Epstein Library — court filings, FBI reports, financial records |
 
