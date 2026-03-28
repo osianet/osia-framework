@@ -2,8 +2,11 @@
 """
 OSIA Ingress API — token management utility.
 
+The token is never printed to stdout. It is written directly to .env and
+read from there by the service at startup.
+
 Usage:
-    uv run python scripts/manage_ingress_token.py           # show current token
+    uv run python scripts/manage_ingress_token.py           # show token status
     uv run python scripts/manage_ingress_token.py --rotate  # generate and write a new token
     uv run python scripts/manage_ingress_token.py --ua      # show the UA sentinel
 """
@@ -61,42 +64,31 @@ def main():
         return
 
     if args.rotate:
-        new_token = secrets.token_urlsafe(32)
-        _write_key("INGRESS_API_TOKEN", new_token)
-        print(f"New token written to {ENV_FILE}")
-        print(f"Token: {new_token}")
-        print()
-        print("Restart the ingress API service to pick up the new token:")
+        _write_key("INGRESS_API_TOKEN", secrets.token_urlsafe(32))
+        print(f"Token rotated and saved to {ENV_FILE}")
+        print("Restart the ingress API service to apply:")
         print("  sudo systemctl restart osia-ingress-api.service")
         return
 
-    # Default: show current token
-    token = env.get("INGRESS_API_TOKEN", "")
-    if not token:
-        print("INGRESS_API_TOKEN is not set in .env")
-        print("Run with --rotate to generate one.")
-    else:
-        sentinel = env.get("INGRESS_API_UA_SENTINEL", "osia-ingress/1")
-        port = env.get("INGRESS_API_PORT", "8097")
-        print(f"Current token: {token}")
-        print(f"UA sentinel:   {sentinel}")
-        print(f"Port:          {port}")
+    # Default: show token status without revealing the value
+    configured = bool(env.get("INGRESS_API_TOKEN", ""))
+    sentinel = env.get("INGRESS_API_UA_SENTINEL", "osia-ingress/1")
+    port = env.get("INGRESS_API_PORT", "8097")
+
+    print(f"Token configured: {'yes' if configured else 'NO — run with --rotate to generate one'}")
+    print(f"UA sentinel:      {sentinel}")
+    print(f"Port:             {port}")
+    if configured:
         print()
         print("Example curl — submit a query:")
-        print("  curl -s -X POST https://ingress.osia.dev/ingest \\")
-        print(f'       -H "Authorization: Bearer {token}" \\')
+        print("  curl -s -X POST https://<ingress-host>/ingest \\")
+        print('       -H "Authorization: Bearer <token>" \\')
         print(f'       -H "User-Agent: {sentinel}" \\')
         print('       -H "Content-Type: application/json" \\')
-        print('       -d \'{"query": "Latest developments in quantum computing", "label": "cli"}\' \\')
-        print("       | python3 -m json.tool")
+        print('       -d \'{"query": "...", "label": "cli"}\'')
         print()
-        print("Example curl — submit a research topic:")
-        print("  curl -s -X POST https://ingress.osia.dev/research \\")
-        print(f'       -H "Authorization: Bearer {token}" \\')
-        print(f'       -H "User-Agent: {sentinel}" \\')
-        print('       -H "Content-Type: application/json" \\')
-        print('       -d \'{"topic": "Iranian drone proliferation", "label": "cli"}\' \\')
-        print("       | python3 -m json.tool")
+        print("Retrieve the token directly from .env:")
+        print("  grep INGRESS_API_TOKEN .env")
 
 
 if __name__ == "__main__":

@@ -191,13 +191,8 @@ async def ingest(request: Request, body: IngestRequest, _=Depends(_check_auth)):
     else:
         depth = await r.rpush(TASK_QUEUE, payload)
 
-    logger.info(
-        "Ingress task queued [%s] priority=%s source=%s depth=%d",
-        task_id,
-        body.priority,
-        source.replace("\n", "").replace("\r", ""),
-        depth,
-    )
+    # Log only internally-generated values — task_id and depth are not user-controlled
+    logger.info("Ingress task queued [%s] depth=%d", task_id, depth)
     return {"ok": True, "task_id": task_id, "queue": TASK_QUEUE, "queue_depth": depth}
 
 
@@ -236,8 +231,8 @@ async def research(request: Request, body: ResearchRequest, _=Depends(_check_aut
     cooldown_hours = int(os.getenv("RESEARCH_COOLDOWN_HOURS", "24"))
     await r.setex(seen_key, cooldown_hours * 3600, "1")
 
-    safe_label = label.replace("\n", "").replace("\r", "")
-    logger.info("Research topic queued: source=api:%s depth=%d", safe_label, depth)
+    # Log only internally-generated depth — label is user-controlled
+    logger.info("Research topic queued depth=%d", depth)
     return {"ok": True, "queued": True, "queue": RESEARCH_QUEUE, "queue_depth": depth}
 
 
