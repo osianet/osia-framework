@@ -173,7 +173,7 @@ Analyze this screenshot and decide the SINGLE next action to take.
 Respond with ONLY valid JSON (no markdown, no code fences):
 {{
     "description": "Brief description of what's currently on screen",
-    "action": "tap|swipe_down|swipe_up|type|tap_and_type|submit|back|done|fail",
+    "action": "tap|swipe_down|swipe_up|type|tap_and_type|type_and_submit|submit|back|done|fail",
     "coordinates": {{"x": 540, "y": 1200}},
     "swipe": {{"x1": 540, "y1": 1500, "x2": 540, "y2": 500}},
     "text": "text to type if action is type or tap_and_type",
@@ -185,8 +185,9 @@ Rules:
 - "coordinates" is required when action is "tap" or "tap_and_type" — tap the exact center of the UI element.
 - "swipe" is required when action is "swipe_down" or "swipe_up".
 - "text" is required when action is "type" or "tap_and_type".
-- "tap_and_type" should be used when you need to select an empty input field and type into it.
-- "submit" presses the Enter/Return key — use it to confirm a comment or search after typing.
+- "tap_and_type" should be used when you need to select an empty input field and type into it (WITHOUT submitting).
+- "type_and_submit" taps a field, types the text, AND presses Enter to submit — use this for posting comments. It is a single atomic action; never use tap_and_type + submit separately for a comment.
+- "submit" presses the Enter/Return key — use it if text is already in the field and just needs sending.
 - Use "done" when the goal has been achieved. Put the final result in "data".
 - Use "fail" if the goal cannot be achieved from the current state.
 - If you need to scroll to see more content, use "swipe_down" or "swipe_up".
@@ -274,9 +275,22 @@ Rules:
             await asyncio.sleep(1.0)  # Wait for keyboard/focus
             await self.adb.type_text(text)
 
+        elif act == "type_and_submit":
+            # Atomic: tap the input field, type the text, then press Enter to submit.
+            # Avoids the vision-loop re-entry that causes comment duplication.
+            coords = action.get("coordinates", {})
+            x, y = coords.get("x", 0), coords.get("y", 0)
+            text = action.get("text", "")
+            logger.info("Typing and submitting at (%d, %d): %s", x, y, text[:50])
+            await self.adb.tap(x, y)
+            await asyncio.sleep(1.0)
+            await self.adb.type_text(text)
+            await asyncio.sleep(0.5)
+            await self.adb.press_send()
+
         elif act == "submit":
-            logger.info("Submitting via Enter key — %s", action.get("reasoning", ""))
-            await self.adb.press_enter()
+            logger.info("Submitting via Send key — %s", action.get("reasoning", ""))
+            await self.adb.press_send()
 
         elif act == "back":
             logger.info("Pressing back — %s", action.get("reasoning", ""))

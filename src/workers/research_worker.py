@@ -74,6 +74,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
 
 S2_API_KEY = os.getenv("S2_API_KEY", "")  # Semantic Scholar — free key lifts limit to 10 req/s
+CENSYS_API_ID = os.getenv("CENSYS_API_ID", "")
+CENSYS_API_SECRET = os.getenv("CENSYS_API_SECRET", "")
+CRIMINALIP_API_KEY = os.getenv("CRIMINALIP_API_KEY", "")
+OTX_API_KEY = os.getenv("OTX_API_KEY", "")
+ALEPH_API_KEY = os.getenv("ALEPH_API_KEY", "")  # Optional — public datasets accessible without key
 
 WIKIPEDIA_USER_AGENT = os.getenv(
     "WIKIPEDIA_USER_AGENT",
@@ -399,6 +404,158 @@ async def tool_search_intel_kb(query: str, _http: httpx.AsyncClient) -> str:
         return f"Intel KB search error: {e}"
 
 
+async def tool_search_censys(query: str, http: httpx.AsyncClient) -> str:
+    """Search Censys for internet-facing hosts, services, and TLS certificates."""
+    if not CENSYS_API_ID or not CENSYS_API_SECRET:
+        return "Censys unavailable: CENSYS_API_ID / CENSYS_API_SECRET not configured."
+    try:
+        resp = await http.get(
+            "https://search.censys.io/api/v2/hosts/search",
+            params={"q": query, "per_page": 5},
+            auth=(CENSYS_API_ID, CENSYS_API_SECRET),
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        hits = data.get("result", {}).get("hits", [])
+        total = data.get("result", {}).get("total", 0)
+        if not hits:
+            return f"Censys: no results for '{query}'."
+        results = []
+        for h in hits:
+            ip = h.get("ip", "")
+            country = h.get("location", {}).get("country", "")
+            asn_name = h.get("autonomous_system", {}).get("name", "")
+            labels = ", ".join(h.get("labels", [])[:4])
+            services = h.get("services", [])
+            ports = ", ".join(f"{s.get('port')}/{s.get('service_name', '?')}" for s in services[:6])
+            line = f"**{ip}** | AS: {asn_name} | Country: {country}"
+            if ports:
+                line += f" | Services: {ports}"
+            if labels:
+                line += f" | Labels: {labels}"
+            results.append(line)
+        return f"Censys — {total} total results for '{query}':\n\n" + "\n\n".join(results)
+    except Exception as e:
+        return f"Censys error: {e}"
+
+
+async def tool_search_criminalip(query: str, http: httpx.AsyncClient) -> str:
+    """Search Criminal IP for threat-scored hosts, exposed services, and vulnerability data."""
+    if not CRIMINALIP_API_KEY:
+        return "Criminal IP unavailable: CRIMINALIP_API_KEY not configured."
+    try:
+        resp = await http.get(
+            "https://api.criminalip.io/v1/asset/search",
+            params={"query": query, "offset": 0},
+            headers={"x-api-key": CRIMINALIP_API_KEY},
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        hits = data.get("data", {}).get("result", [])
+        total = data.get("data", {}).get("count", 0)
+        if not hits:
+            return f"Criminal IP: no results for '{query}'."
+        results = []
+        for h in hits[:5]:
+            ip = h.get("ip_address", "")
+            country = h.get("country_code", "")
+            org = h.get("org_name", "") or h.get("as_name", "")
+            tags = ", ".join(h.get("tags", [])[:5])
+            score = h.get("score", {})
+            inbound = score.get("inbound", "")
+            vuln_count = h.get("vulnerability_count", 0)
+            ports_data = h.get("current_opened_port", {}).get("data", [])
+            ports = ", ".join(str(p.get("port")) for p in ports_data[:6] if p.get("port"))
+            line = f"**{ip}** | Org: {org} | Country: {country} | Threat: {inbound}"
+            if vuln_count:
+                line += f" | Vulns: {vuln_count}"
+            if ports:
+                line += f" | Ports: {ports}"
+            if tags:
+                line += f" | Tags: {tags}"
+            results.append(line)
+        return f"Criminal IP — {total} total results for '{query}':\n\n" + "\n\n".join(results)
+    except Exception as e:
+        return f"Criminal IP error: {e}"
+
+
+async def tool_search_otx(query: str, http: httpx.AsyncClient) -> str:
+    """Search AlienVault OTX for threat intelligence pulses matching a query."""
+    headers: dict[str, str] = {}
+    if OTX_API_KEY:
+        headers["X-OTX-API-KEY"] = OTX_API_KEY
+    try:
+        resp = await http.get(
+            "https://otx.alienvault.com/api/v1/search/pulses",
+            params={"q": query, "limit": 5, "sort": "-modified"},
+            headers=headers,
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        pulses = data.get("results", [])
+        if not pulses:
+            return f"OTX: no threat intelligence pulses found for '{query}'."
+        results = []
+        for p in pulses:
+            name = p.get("name", "")
+            desc = (p.get("description", "") or "")[:300]
+            tags = ", ".join(p.get("tags", [])[:8])
+            indicator_count = p.get("indicators_count", 0)
+            created = (p.get("created", "") or "")[:10]
+            author = p.get("author", {}).get("username", "")
+            entry = f"**{name}** (by {author}, {created})\nTags: {tags} | Indicators: {indicator_count}"
+            if desc:
+                entry += f"\n{desc}"
+            results.append(entry)
+        return f"OTX Threat Intelligence — results for '{query}':\n\n" + "\n\n---\n\n".join(results)
+    except Exception as e:
+        return f"AlienVault OTX error: {e}"
+
+
+async def tool_search_aleph(query: str, http: httpx.AsyncClient) -> str:
+    """Search OCCRP Aleph for entities across investigative journalism leak datasets (Panama Papers, FinCEN Files, Pandora Papers, etc.)."""
+    headers: dict[str, str] = {"Accept": "application/json"}
+    if ALEPH_API_KEY:
+        headers["Authorization"] = f"ApiKey {ALEPH_API_KEY}"
+    try:
+        resp = await http.get(
+            "https://aleph.occrp.org/api/2/entities",
+            params={"q": query, "limit": 10, "filter:schemata": "Thing"},
+            headers=headers,
+            timeout=20.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        entities = data.get("results", [])
+        if not entities:
+            return f"Aleph: no entities found for '{query}' in OCCRP investigative datasets."
+        results = []
+        for e in entities[:7]:
+            caption = e.get("caption", "")
+            schema = e.get("schema", "")
+            dataset = e.get("dataset", {})
+            dataset_label = dataset.get("label", dataset.get("name", "")) if isinstance(dataset, dict) else ""
+            props = e.get("properties", {})
+            notes = []
+            for field in ("nationality", "country", "birthDate", "incorporationDate", "address", "registrationNumber"):
+                vals = props.get(field, [])
+                if vals:
+                    notes.append(f"{field}: {', '.join(str(v) for v in vals[:2])}")
+            entry = f"**{caption}** [{schema}] — Dataset: {dataset_label}"
+            if notes:
+                entry += "\n" + " | ".join(notes)
+            results.append(entry)
+        total = data.get("total", {})
+        if isinstance(total, dict):
+            total = total.get("value", len(entities))
+        return f"OCCRP Aleph — {total} results for '{query}':\n\n" + "\n\n".join(results)
+    except Exception as e:
+        return f"OCCRP Aleph error: {e}"
+
+
 TOOL_REGISTRY = {
     "search_intel_kb": tool_search_intel_kb,
     "search_web": tool_search_web,
@@ -406,6 +563,10 @@ TOOL_REGISTRY = {
     "search_wikipedia": tool_search_wikipedia,
     "search_arxiv": tool_search_arxiv,
     "search_semantic_scholar": tool_search_semantic_scholar,
+    "search_censys": tool_search_censys,
+    "search_criminalip": tool_search_criminalip,
+    "search_otx": tool_search_otx,
+    "search_aleph": tool_search_aleph,
 }
 
 # OpenAI-format tool schemas for OpenRouter
@@ -483,6 +644,63 @@ TOOL_SCHEMAS = [
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_censys",
+            "description": (
+                "Search Censys for internet-facing hosts, open services, and TLS certificate data. "
+                "ONLY use for Cyber desk topics requiring network infrastructure mapping or attack surface analysis. "
+                "Good queries: Censys search syntax e.g. 'services.port:22 and autonomous_system.name:TargetOrg', "
+                "'services.service_name:ELASTICSEARCH and location.country=CN', or a plain org/hostname. "
+                "Do NOT call for APT background, malware analysis, geopolitics, HUMINT, finance, or general news."
+            ),
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_criminalip",
+            "description": (
+                "Search Criminal IP for threat-scored hosts, exposed vulnerable services, and C2 infrastructure. "
+                "ONLY use for Cyber desk topics where you need IP threat scores, vulnerability counts, or "
+                "identifying malicious/compromised infrastructure associated with a threat actor or campaign. "
+                "Good queries: IP addresses, org names, CVE identifiers, malware family names. "
+                "Do NOT call for non-infrastructure topics, geopolitics, HUMINT, finance, or general news."
+            ),
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_otx",
+            "description": (
+                "Search AlienVault OTX (Open Threat Exchange) for community threat intelligence pulses. "
+                "Use for: IOCs, malware campaigns, APT group activity, CVE exploitation reports, "
+                "threat actor TTPs, recently reported C2 infrastructure. "
+                "Returns pulse names, tags, indicator counts, and descriptions from the OTX community. "
+                "Skip for: general news, HUMINT, geopolitics, or anything unrelated to cyber threats."
+            ),
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_aleph",
+            "description": (
+                "Search OCCRP Aleph for entities in investigative journalism leak datasets: "
+                "Panama Papers, Pandora Papers, FinCEN Files, Offshore Leaks, Russian Asset Tracker, "
+                "EU lobbying registers, sanctions lists, and 300+ other datasets. "
+                "Use for: corporate ownership, offshore entities, shell companies, PEP connections, "
+                "sanctions exposure, financial crime leads, and subject background in leaked data. "
+                "Skip for: general news, technical topics, or subjects with no financial/corporate angle."
+            ),
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
 ]
 
 # Per-desk guidance on which tools are most appropriate.
@@ -490,14 +708,18 @@ TOOL_SCHEMAS = [
 _DESK_TOOL_GUIDANCE: dict[str, str] = {
     "cyber-intelligence-and-warfare-desk": (
         "search_intel_kb FIRST (MITRE ATT&CK, CVE database, CTI reports, TTP mappings, HackerOne disclosures are all in the KB), "
-        "then search_web for recent threat actor activity, CVE news, IOCs, campaign reporting. "
-        "search_wikipedia for background on APT groups or malware families not covered by KB results. "
+        "then search_otx for live threat intelligence pulses, IOCs, and campaign reporting from the OTX community. "
+        "search_censys to map exposed infrastructure or enumerate services for a specific org/host (network-level topics only). "
+        "search_criminalip when you need threat scores or vulnerability exposure data on specific IPs or C2 infrastructure. "
+        "search_web for recent CVE news, threat actor activity, or campaign reporting not in KB or OTX. "
+        "search_wikipedia for background on APT groups or malware families. "
         "search_arxiv only for novel malware research or cryptographic vulnerabilities. "
         "search_semantic_scholar is rarely appropriate."
     ),
     "human-intelligence-and-profiling-desk": (
         "search_intel_kb FIRST (Epstein files, WikiLeaks cables, and past HUMINT research may surface direct leads), "
-        "then search_web for current activity, affiliations, recent statements. "
+        "then search_aleph for the subject in OCCRP leak datasets (Panama Papers, FinCEN Files, Pandora Papers, sanctions lists). "
+        "search_web for current activity, affiliations, recent statements. "
         "search_wikipedia for background on subjects, organisations, or related events. "
         "Academic tools are not appropriate for profiling."
     ),
@@ -509,13 +731,15 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
     ),
     "geopolitical-and-security-desk": (
         "search_intel_kb FIRST (WikiLeaks cables, past geopolitical INTSUMs, and desk archives may have directly relevant intel), "
-        "then search_web for current events, diplomatic developments, conflict reporting. "
+        "search_aleph when the topic involves state actors, oligarchs, sanctioned entities, or offshore financial networks. "
+        "search_web for current events, diplomatic developments, conflict reporting. "
         "search_wikipedia for geopolitical context, state actors, historical background. "
         "Academic tools rarely needed unless the topic involves strategic theory or sanctions research."
     ),
     "finance-and-economics-directorate": (
         "search_intel_kb FIRST (past financial research and desk archives), "
-        "then search_web for market news, economic indicators, corporate reporting, sanctions. "
+        "search_aleph for corporate ownership, shell companies, offshore entities, PEP connections, and sanctions exposure. "
+        "search_web for market news, economic indicators, corporate reporting, sanctions. "
         "search_wikipedia for company or institution background. "
         "Academic tools are rarely appropriate for financial intelligence."
     ),
@@ -529,7 +753,8 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
 
 # ReAct pattern — parsed when native tool_calls are absent
 _REACT_PATTERN = re.compile(
-    r"(?:SEARCH_INTEL_KB|SEARCH_WEB|SEARCH_DUCKDUCKGO|SEARCH_WIKIPEDIA|SEARCH_ARXIV|SEARCH_SEMANTIC_SCHOLAR):\s*(.+)",
+    r"(?:SEARCH_INTEL_KB|SEARCH_WEB|SEARCH_DUCKDUCKGO|SEARCH_WIKIPEDIA|SEARCH_ARXIV|SEARCH_SEMANTIC_SCHOLAR"
+    r"|SEARCH_CENSYS|SEARCH_CRIMINALIP|SEARCH_OTX|SEARCH_ALEPH):\s*(.+)",
     re.IGNORECASE,
 )
 _REACT_TOOL_MAP = {
@@ -539,6 +764,10 @@ _REACT_TOOL_MAP = {
     "search_wikipedia": "search_wikipedia",
     "search_arxiv": "search_arxiv",
     "search_semantic_scholar": "search_semantic_scholar",
+    "search_censys": "search_censys",
+    "search_criminalip": "search_criminalip",
+    "search_otx": "search_otx",
+    "search_aleph": "search_aleph",
 }
 
 
@@ -599,8 +828,8 @@ async def run_research_loop_openai_compat(
                 "Never run the same query through multiple tools.\n\n"
                 "If native tool calling is unavailable, use the ReAct format:\n"
                 "SEARCH_INTEL_KB: <query>\nSEARCH_WEB: <query>\nSEARCH_DUCKDUCKGO: <query>\n"
-                "SEARCH_WIKIPEDIA: <query>\nSEARCH_ARXIV: <query>\n"
-                "SEARCH_SEMANTIC_SCHOLAR: <query>"
+                "SEARCH_WIKIPEDIA: <query>\nSEARCH_ARXIV: <query>\nSEARCH_SEMANTIC_SCHOLAR: <query>\n"
+                "SEARCH_CENSYS: <query>\nSEARCH_CRIMINALIP: <query>\nSEARCH_OTX: <query>\nSEARCH_ALEPH: <query>"
             ),
         },
         {"role": "user", "content": f"Research topic: {job.topic}"},
