@@ -119,6 +119,7 @@ def _parse_labels(raw) -> list[str]:
             if isinstance(parsed, list):
                 return [str(x).strip() for x in parsed if str(x).strip()]
         except (ValueError, SyntaxError):
+            # Not a valid Python literal — treat the raw string as a single value
             pass
     return [s] if s else []
 

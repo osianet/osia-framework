@@ -129,6 +129,7 @@ def _parse_list(raw) -> list[str]:
                 if isinstance(parsed, list):
                     return [str(x).strip() for x in parsed if str(x).strip()]
             except (ValueError, SyntaxError):
+                # Not a valid Python literal — treat the raw string as a single value
                 pass
         return [s] if s else []
     return []
@@ -257,12 +258,12 @@ def build_taa_doc(row: dict) -> tuple[str, dict]:
 
 
 TASK_BUILDERS = {
-    "cti-mcq": lambda row: build_mcq_doc(row),
+    "cti-mcq": build_mcq_doc,
     "cti-rcm": lambda row: build_rcm_doc(row, "cti-rcm"),
     "cti-rcm-2021": lambda row: build_rcm_doc(row, "cti-rcm-2021"),
-    "cti-vsp": lambda row: build_vsp_doc(row),
-    "cti-ate": lambda row: build_ate_doc(row),
-    "cti-taa": lambda row: build_taa_doc(row),
+    "cti-vsp": build_vsp_doc,
+    "cti-ate": build_ate_doc,
+    "cti-taa": build_taa_doc,
 }
 
 
