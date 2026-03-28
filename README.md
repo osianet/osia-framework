@@ -10,8 +10,8 @@ OSIA models the structure of a real intelligence agency: a **Chief of Staff** or
 
 ### 1. Ingress
 Requests enter the system through three channels:
-- **Signal Gateway** — operatives send URLs or queries to a Signal group; the gateway pushes them to the Redis task queue.
-- **RSS Ingress** — a scheduled poller watches configured feeds and enqueues items automatically.
+- **Signal Gateway** — operatives send URLs or queries to a Signal group; the gateway pushes them to the Redis task queue (`osia:task_queue`) for the orchestrator to process.
+- **RSS Ingress** — a scheduled poller watches configured feeds. Each new article is deduplicated, cleaned, and summarised by Gemini, then upserted **directly into Qdrant** (`collection-directorate`) — bypassing the task queue and orchestrator entirely. Extracted entities are enqueued to `osia:research_queue` for the research worker. Summaries are also staged in Redis (`osia:rss:daily_digest`) for the 07:00 UTC SITREP.
 - **Ingress API** — an authenticated HTTPS endpoint for programmatic submission from internal tooling or external callers (see [Ingress API](#ingress-api)).
 
 ### 2. Research & Collection
@@ -69,11 +69,11 @@ Venice desks (`venice-uncensored`, `mistral-31-24b`) call the Venice AI API dire
 ## Architecture
 
 ```
-Signal / RSS / Ingress API
-     │
-     ▼
-Redis Task Queue (osia:task_queue)
-     │
+Signal / Ingress API                    RSS Ingress (osia-rss-ingress.timer)
+     │                                       │
+     ▼                                       ├──▶ Qdrant: collection-directorate
+Redis Task Queue (osia:task_queue)          ├──▶ Redis: osia:rss:daily_digest
+     │                                       └──▶ Redis: osia:research_queue (entities)
      ▼
 OSIA Orchestrator (Chief of Staff)
      ├── MCP Research Loop (Tavily, Wikipedia, ArXiv, Semantic Scholar, YouTube)

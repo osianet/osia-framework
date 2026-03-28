@@ -1,23 +1,39 @@
-# OSIA RSS Intelligence Feeds
-# One feed URL per line. Lines starting with # are ignored.
-# Copy this file to feeds.txt and customize.
+# OSIA Intelligence Feed List
 
-# --- Global News ---
-https://feeds.bbci.co.uk/news/world/rss.xml
-https://rss.nytimes.com/services/xml/rss/nyt/World.xml
+# Geopolitics & Security
 https://www.aljazeera.com/xml/rss/all.xml
-https://www.theguardian.com/world/rss
+https://feeds.bbci.co.uk/news/world/rss.xml
+https://feeds.skynews.com/feeds/rss/world.xml
+https://www.defenseone.com/rss/all/
+https://www.longwarjournal.org/feed
+https://worldview.stratfor.com/rss.xml
+https://rss.politico.com/politics-news.xml
+https://www.europarl.europa.eu/rss/doc/top-stories/en.xml
 
-# --- Finance & Economics ---
-https://feeds.ft.com/rss/home/us
-https://feeds.bloomberg.com/markets/news.rss
+# Technology & Cyber
+https://techcrunch.com/feed/
+https://feeds.feedburner.com/TheHackersNews
+https://www.theverge.com/rss/index.xml
+https://spectrum.ieee.org/rss/fulltext
+https://feeds.feedburner.com/TheHackersNews
+https://www.cisa.gov/cybersecurity-advisories/all.xml
+https://www.ncsc.gov.uk/api/1/services/v1/all-rss-feed.xml
 
-# --- Technology & Science ---
-https://www.technologyreview.com/feed/
-https://arstechnica.com/feed/
-https://export.arxiv.org/rss/cs.AI
+# CVE Feed
+https://nvd.nist.gov/feeds/xml/cve/misc/nvd-rss-analyzed.xml
 
-# --- Security & Defence ---
-https://www.janes.com/feeds/news
-https://warontherocks.com/feed/
-https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml
+# Finance & Economics
+https://www.ft.com/?format=rss
+https://www.economist.com/international/rss.xml
+https://feeds.bbci.co.uk/news/business/rss.xml
+
+# Cloud Security 
+https://aws.amazon.com/blogs/security/feed/
+https://cloudsecurityalliance.org/feed/
+
+# Australian Gov
+https://theconversation.com/topics/australian-government-55987/articles.atom
+https://www.cyber.gov.au/rss/advisories
+https://www.cyber.gov.au/rss/alerts
+https://www.cyber.gov.au/rss/advice
+https://www.cyber.gov.au/rss/news
