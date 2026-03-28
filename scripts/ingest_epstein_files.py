@@ -33,7 +33,7 @@ Options:
 
 Environment variables (from .env):
   HF_TOKEN              HuggingFace token (required — for dataset access + embeddings)
-  QDRANT_URL            Qdrant URL (default: http://localhost:6333)
+  QDRANT_URL            Qdrant URL (default: https://qdrant.osia.dev)
   QDRANT_API_KEY        Qdrant API key
   REDIS_URL             Redis URL (default: redis://localhost:6379)
   VENICE_API_KEY        Venice AI API key (for entity extraction via venice-uncensored)
@@ -71,7 +71,7 @@ logger = logging.getLogger("osia.epstein_ingest")
 # ---------------------------------------------------------------------------
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "") or None
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 VENICE_API_KEY = os.getenv("VENICE_API_KEY", "")
@@ -303,7 +303,7 @@ class EpsteinIngestor:
         self.upsert_batch_size: int = args.upsert_batch_size
         self.min_text_len: int = args.min_text_len
 
-        self._qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        self._qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, port=None)
         self._redis: aioredis.Redis | None = None  # opened in run()
         self._embed_semaphore = asyncio.Semaphore(self.embed_concurrency)
 
