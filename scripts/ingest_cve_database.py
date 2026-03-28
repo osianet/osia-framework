@@ -166,8 +166,12 @@ class IngestStats:
     def log_progress(self) -> None:
         logger.info(
             "seen=%d processed=%d skipped=%d upserted=%d errors=%d elapsed=%s",
-            self.records_seen, self.records_processed, self.records_skipped,
-            self.points_upserted, self.errors, self.elapsed(),
+            self.records_seen,
+            self.records_processed,
+            self.records_skipped,
+            self.points_upserted,
+            self.errors,
+            self.elapsed(),
         )
 
 
@@ -179,9 +183,7 @@ class IngestStats:
 class CveDatabaseIngestor:
     def __init__(self, args: argparse.Namespace) -> None:
         self.dry_run: bool = args.dry_run
-        self.severity_filter: set[str] | None = (
-            {s.upper() for s in args.severity} if args.severity else None
-        )
+        self.severity_filter: set[str] | None = {s.upper() for s in args.severity} if args.severity else None
         self.embed_batch_size: int = args.embed_batch_size
         self.embed_concurrency: int = args.embed_concurrency
         self.upsert_batch_size: int = args.upsert_batch_size
@@ -203,7 +205,9 @@ class CveDatabaseIngestor:
                     logger.info("Resuming from record %d", checkpoint)
             logger.info(
                 "Starting CVE ingest (limit=%s severity_filter=%s resume_from=%d)",
-                limit or "none", self.severity_filter or "all", checkpoint,
+                limit or "none",
+                self.severity_filter or "all",
+                checkpoint,
             )
             stats = IngestStats()
             await self._ingest(stats, limit, checkpoint)
@@ -277,7 +281,9 @@ class CveDatabaseIngestor:
             try:
                 stats.records_processed += 1
                 self._upsert_buffer.append(
-                    qdrant_models.PointStruct(id=doc_id, vector=[0.0] * EMBEDDING_DIM, payload={"text": text, **metadata})
+                    qdrant_models.PointStruct(
+                        id=doc_id, vector=[0.0] * EMBEDDING_DIM, payload={"text": text, **metadata}
+                    )
                 )
                 if len(self._upsert_buffer) >= self.upsert_batch_size:
                     await self._flush(stats)
@@ -386,7 +392,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--limit", type=int, default=0)
     p.add_argument(
-        "--severity", nargs="+", metavar="LEVEL",
+        "--severity",
+        nargs="+",
+        metavar="LEVEL",
         choices=["CRITICAL", "HIGH", "MEDIUM", "LOW", "NONE"],
         help="Only ingest CVEs with these severity levels.",
     )
@@ -406,7 +414,9 @@ def main() -> None:
         parser.error("HF_TOKEN not set.")
     logger.info(
         "Starting CVE database ingest | limit=%s severity=%s dry_run=%s",
-        args.limit or "none", args.severity or "all", args.dry_run,
+        args.limit or "none",
+        args.severity or "all",
+        args.dry_run,
     )
     if args.dry_run:
         logger.warning("DRY RUN — no writes.")

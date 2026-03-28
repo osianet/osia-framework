@@ -96,7 +96,7 @@ TODAY = datetime.now(UTC).strftime("%Y-%m-%d")
 ENQUEUE_CLASSIFICATIONS = {"SECRET", "CONFIDENTIAL", "TOP SECRET"}
 
 # Chunking — paragraph-aware, sentence-level fallback, 15% overlap
-CHUNK_SIZE = 1500   # characters (~375 tokens for all-MiniLM-L6-v2)
+CHUNK_SIZE = 1500  # characters (~375 tokens for all-MiniLM-L6-v2)
 CHUNK_OVERLAP = 225  # ~15%
 
 

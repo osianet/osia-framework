@@ -195,8 +195,13 @@ class IngestStats:
     def log_progress(self) -> None:
         logger.info(
             "[%s] seen=%d processed=%d skipped=%d upserted=%d errors=%d elapsed=%s",
-            self.split, self.records_seen, self.records_processed,
-            self.records_skipped, self.points_upserted, self.errors, self.elapsed(),
+            self.split,
+            self.records_seen,
+            self.records_processed,
+            self.records_skipped,
+            self.points_upserted,
+            self.errors,
+            self.elapsed(),
         )
 
 
@@ -414,7 +419,9 @@ def main() -> None:
     args = parser.parse_args()
     if not HF_TOKEN:
         parser.error("HF_TOKEN not set.")
-    logger.info("Starting CTI reports ingest | splits=%s limit=%s dry_run=%s", args.splits, args.limit or "none", args.dry_run)
+    logger.info(
+        "Starting CTI reports ingest | splits=%s limit=%s dry_run=%s", args.splits, args.limit or "none", args.dry_run
+    )
     if args.dry_run:
         logger.warning("DRY RUN — no writes.")
     asyncio.run(CtiReportsIngestor(args).run(splits=args.splits, limit=args.limit, resume=args.resume))

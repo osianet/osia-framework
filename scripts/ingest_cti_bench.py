@@ -121,6 +121,7 @@ def _parse_list(raw) -> list[str]:
         return [str(x).strip() for x in raw if str(x).strip()]
     if isinstance(raw, str):
         import ast
+
         s = raw.strip()
         if s.startswith("["):
             try:
@@ -153,7 +154,7 @@ def build_mcq_doc(row: dict) -> tuple[str, dict]:
         parts.append(f"Question: {question}")
     if opts:
         for i, opt in enumerate(opts):
-            parts.append(f"  {chr(65+i)}) {opt}")
+            parts.append(f"  {chr(65 + i)}) {opt}")
     if answer:
         parts.append(f"Answer: {answer}")
 
@@ -287,8 +288,13 @@ class IngestStats:
     def log_progress(self) -> None:
         logger.info(
             "[%s] seen=%d processed=%d skipped=%d upserted=%d errors=%d elapsed=%s",
-            self.task, self.records_seen, self.records_processed,
-            self.records_skipped, self.points_upserted, self.errors, self.elapsed(),
+            self.task,
+            self.records_seen,
+            self.records_processed,
+            self.records_skipped,
+            self.points_upserted,
+            self.errors,
+            self.elapsed(),
         )
 
 
@@ -385,7 +391,9 @@ class CtiBenchIngestor:
                 }
                 stats.records_processed += 1
                 self._upsert_buffer.append(
-                    qdrant_models.PointStruct(id=doc_id, vector=[0.0] * EMBEDDING_DIM, payload={"text": text, **metadata})
+                    qdrant_models.PointStruct(
+                        id=doc_id, vector=[0.0] * EMBEDDING_DIM, payload={"text": text, **metadata}
+                    )
                 )
                 if len(self._upsert_buffer) >= self.upsert_batch_size:
                     await self._flush(stats)

@@ -144,11 +144,11 @@ class AttackGraph:
     """Parses a STIX bundle and builds lookup tables used by document builders."""
 
     def __init__(self) -> None:
-        self.objects: dict[str, dict] = {}          # stix_id → object
-        self.group_uses_techniques: dict[str, list[tuple[str, str]]] = {}   # group_id → [(t_id, t_name)]
-        self.group_uses_software: dict[str, list[tuple[str, str]]] = {}     # group_id → [(s_id, s_name)]
-        self.technique_used_by: dict[str, list[tuple[str, str]]] = {}       # tech_id → [(g_id, g_name)]
-        self.software_used_by: dict[str, list[tuple[str, str]]] = {}        # soft_id → [(g_id, g_name)]
+        self.objects: dict[str, dict] = {}  # stix_id → object
+        self.group_uses_techniques: dict[str, list[tuple[str, str]]] = {}  # group_id → [(t_id, t_name)]
+        self.group_uses_software: dict[str, list[tuple[str, str]]] = {}  # group_id → [(s_id, s_name)]
+        self.technique_used_by: dict[str, list[tuple[str, str]]] = {}  # tech_id → [(g_id, g_name)]
+        self.software_used_by: dict[str, list[tuple[str, str]]] = {}  # soft_id → [(g_id, g_name)]
         self.software_uses_techniques: dict[str, list[tuple[str, str]]] = {}  # soft_id → [(t_id, t_name)]
 
     def ingest_bundle(self, bundle: dict, domain: str) -> None:
@@ -485,7 +485,9 @@ class MitreAttackIngestor:
                     "ingest_date": TODAY,
                     "url": _mitre_url(obj),
                 }
-                self._upsert_buffer.append(qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload))
+                self._upsert_buffer.append(
+                    qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload)
+                )
                 stats.techniques += 1
                 await self._maybe_flush(stats)
             except Exception as exc:
@@ -512,7 +514,9 @@ class MitreAttackIngestor:
                     "ingest_date": TODAY,
                     "url": _mitre_url(obj),
                 }
-                self._upsert_buffer.append(qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload))
+                self._upsert_buffer.append(
+                    qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload)
+                )
                 stats.groups += 1
                 await self._maybe_flush(stats)
             except Exception as exc:
@@ -539,7 +543,9 @@ class MitreAttackIngestor:
                     "ingest_date": TODAY,
                     "url": _mitre_url(obj),
                 }
-                self._upsert_buffer.append(qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload))
+                self._upsert_buffer.append(
+                    qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload)
+                )
                 stats.software += 1
                 await self._maybe_flush(stats)
             except Exception as exc:
@@ -567,7 +573,9 @@ class MitreAttackIngestor:
                     "ingest_date": TODAY,
                     "url": _mitre_url(obj),
                 }
-                self._upsert_buffer.append(qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload))
+                self._upsert_buffer.append(
+                    qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload)
+                )
                 stats.mitigations += 1
                 await self._maybe_flush(stats)
             except Exception as exc:

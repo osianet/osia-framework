@@ -113,6 +113,7 @@ def _parse_labels(raw) -> list[str]:
     # Stringified Python list: "['T1059', 'T1082']"
     if s.startswith("["):
         import ast
+
         try:
             parsed = ast.literal_eval(s)
             if isinstance(parsed, list):
@@ -159,8 +160,13 @@ class IngestStats:
     def log_progress(self) -> None:
         logger.info(
             "[%s] seen=%d processed=%d skipped=%d upserted=%d errors=%d elapsed=%s",
-            self.split, self.records_seen, self.records_processed,
-            self.records_skipped, self.points_upserted, self.errors, self.elapsed(),
+            self.split,
+            self.records_seen,
+            self.records_processed,
+            self.records_skipped,
+            self.points_upserted,
+            self.errors,
+            self.elapsed(),
         )
 
 
@@ -250,7 +256,9 @@ class TtpMappingsIngestor:
             try:
                 stats.records_processed += 1
                 self._upsert_buffer.append(
-                    qdrant_models.PointStruct(id=doc_id, vector=[0.0] * EMBEDDING_DIM, payload={"text": text, **metadata})
+                    qdrant_models.PointStruct(
+                        id=doc_id, vector=[0.0] * EMBEDDING_DIM, payload={"text": text, **metadata}
+                    )
                 )
                 if len(self._upsert_buffer) >= self.upsert_batch_size:
                     await self._flush(stats)
@@ -370,7 +378,9 @@ def main() -> None:
     args = parser.parse_args()
     if not HF_TOKEN:
         parser.error("HF_TOKEN not set.")
-    logger.info("Starting TTP mappings ingest | splits=%s limit=%s dry_run=%s", args.splits, args.limit or "none", args.dry_run)
+    logger.info(
+        "Starting TTP mappings ingest | splits=%s limit=%s dry_run=%s", args.splits, args.limit or "none", args.dry_run
+    )
     if args.dry_run:
         logger.warning("DRY RUN — no writes.")
     asyncio.run(TtpMappingsIngestor(args).run(splits=args.splits, limit=args.limit, resume=args.resume))
