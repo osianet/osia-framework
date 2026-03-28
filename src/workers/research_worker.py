@@ -16,7 +16,7 @@ Environment variables:
   VENICE_API_KEY              — Venice API key (primary)
   OPENROUTER_API_KEY          — OpenRouter API key (fallback)
   REDIS_URL                   — Redis connection URL (default: redis://localhost:6379/0)
-  QDRANT_URL                  — Qdrant HTTP endpoint (default: http://localhost:6333)
+  QDRANT_URL                  — Qdrant HTTP endpoint (default: https://qdrant.osia.dev)
   QDRANT_API_KEY              — Qdrant API key
   HF_TOKEN                    — HuggingFace token (for embeddings)
   TAVILY_API_KEY              — Tavily web search API key
@@ -65,7 +65,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
@@ -192,7 +192,10 @@ class QdrantClient:
         resp = await self._http.put(
             f"{QDRANT_URL}/collections/{RESEARCH_COLLECTION}",
             headers=self._headers,
-            json={"vectors": {"size": EMBEDDING_DIM, "distance": "Cosine"}},
+            json={
+                "vectors": {"size": EMBEDDING_DIM, "distance": "Cosine"},
+                "optimizers_config": {"indexing_threshold": 1000},
+            },
         )
         resp.raise_for_status()
         logger.info("Created Qdrant collection: %s", RESEARCH_COLLECTION)

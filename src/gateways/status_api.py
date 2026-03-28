@@ -70,7 +70,7 @@ TIMERS: list[str] = [
     "osia-rss-ingress.timer",
 ]
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 
 # Known desk collections — mirrors the vectorTag assignments in ANYTHINGLLM_CONFIG.md

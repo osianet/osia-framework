@@ -76,10 +76,10 @@ class QdrantStore:
     """
 
     def __init__(self) -> None:
-        qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+        qdrant_url = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
         qdrant_api_key = os.getenv("QDRANT_API_KEY") or None
         self._hf_token = os.getenv("HF_TOKEN", "")
-        self._client = AsyncQdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+        self._client = AsyncQdrantClient(url=qdrant_url, api_key=qdrant_api_key, port=None)
 
     # ------------------------------------------------------------------
     # Embedding
