@@ -618,7 +618,11 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             if not liked:
                 result = await self.agent.execute_custom(
                     "",
-                    "Find and tap the Like/Thumbs-up button for this video. "
+                    "Find and tap the Like/Heart button for this video.\n"
+                    "- For REELS/SHORTS (full-screen vertical video): the heart icon is in the "
+                    "VERTICAL ACTION BAR on the RIGHT SIDE of the screen (rightmost ~80px). "
+                    "Tap it directly — it is safe to tap even though it is not at the bottom.\n"
+                    "- For FEED posts: the like button is in the interaction bar at the BOTTOM.\n"
                     "If already liked, use 'done'. Once liked, use 'done'.",
                 )
                 liked = result.success
@@ -681,7 +685,12 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 if not commented:
                     result = await self.agent.execute_custom(
                         "",
-                        f'Tap the comment button, type this comment in the input field, then submit it:\n"{comment}"',
+                        f"Post a comment on this video. Strict sequence:\n"
+                        f"STEP 1: Tap the comment icon (speech bubble) on the right side or bottom.\n"
+                        f"STEP 2: Use 'tap_and_type' ONCE on the comment input field at the BOTTOM to type:\n"
+                        f'   "{comment}"\n'
+                        f"STEP 3: Tap the blue POST or SEND button to submit.\n"
+                        f"CRITICAL: Only type once. If text is already in the field, go straight to STEP 3.",
                     )
                     commented = result.success
                 if commented:
@@ -917,11 +926,13 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 logger.info("[%s] Accessibility like failed, falling back to vision", name)
                 result = await self.agent.execute_custom(
                     "",
-                    "Find and tap the Like/Heart/Thumbs-up button for the post currently visible. "
-                    "Look for the interaction bar (like, comment, share) below the image or text, "
-                    "or along the right-hand side of the screen. "
-                    "DO NOT tap the center of an image or video. "
-                    "If already liked, just use 'done'. Once liked, use 'done'.",
+                    "Find and tap the Like/Heart button for this post.\n"
+                    "- For REELS/SHORTS (full-screen vertical video): the heart icon is in the "
+                    "VERTICAL ACTION BAR on the RIGHT SIDE of the screen (rightmost ~80px). "
+                    "Tap it directly — it is safe even though it is not at the screen bottom.\n"
+                    "- For FEED posts: the like button is in the interaction bar at the BOTTOM.\n"
+                    "Do NOT tap the center of the video or image content.\n"
+                    "If already liked, use 'done'. Once liked, use 'done'.",
                 )
                 liked = result.success
 
@@ -1006,17 +1017,17 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                     logger.info("[%s] Accessibility comment failed, falling back to vision", name)
                     result = await self.agent.execute_custom(
                         "",
-                        f"You are looking at a social media post. Follow these steps exactly:\n\n"
-                        f"1. Find the comment icon/button (speech bubble icon, usually in the row of "
-                        f"   like/comment/share icons BELOW the post content or along the right side). Tap it.\n"
-                        f"2. Wait for the comments section to open. A text input field will appear "
-                        f"   near the BOTTOM of the screen.\n"
-                        f"3. Use 'tap_and_type' to tap the CENTER of that input field and type "
-                        f"   this comment exactly:\n\n"
+                        f"Post a comment on this social media post. Strict sequence:\n\n"
+                        f"STEP 1: Tap the comment icon (speech bubble) to open the comment section.\n"
+                        f"STEP 2: Use 'tap_and_type' ONCE on the comment input field (rounded box at "
+                        f"the BOTTOM of the screen) to type this comment:\n\n"
                         f'   "{comment}"\n\n'
-                        f"4. Tap the Post/Send button to submit.\n"
-                        f"5. Once the comment appears in the list, use 'done'.\n\n"
-                        f"IMPORTANT: Do NOT tap anywhere on the post image or video.",
+                        f"STEP 3: Tap the blue POST or SEND button next to the input field or at the "
+                        f"top-right of the keyboard. Submit it.\n"
+                        f"STEP 4: Once the comment appears, use 'done'.\n\n"
+                        f"CRITICAL: Only type the comment ONCE. If the text is already in the field, "
+                        f"skip straight to STEP 3 and tap POST/SEND. Do NOT retype.\n"
+                        f"Do NOT tap post images or video content.",
                     )
                     commented = result.success
 

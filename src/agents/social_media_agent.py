@@ -136,22 +136,29 @@ class SocialMediaAgent:
         else:
             resolution_context = "Coordinates use pixels from the top-left origin (0,0)."
 
-        # Build a safe-zone hint based on known resolution
+        # Build a layout guide based on known resolution
         if self._screen_width and self._screen_height:
             safe_y_start = int(self._screen_height * 0.75)
+            right_bar_x = int(self._screen_width * 0.85)
             danger_zone_note = (
-                f"DANGER ZONE: The top {int(self._screen_height * 0.75)}px of the screen "
-                f"(y < {safe_y_start}) contains post images, videos, and content areas. "
-                f"Tapping anywhere in this zone will expand content full-screen and lose UI controls. "
-                f"UI controls (comment box, like button, share, nav bar) are in the BOTTOM 25% of the screen "
-                f"(y >= {safe_y_start}). When looking for the comment input field, it will be near the bottom "
-                f"of the screen, typically between y={safe_y_start} and y={self._screen_height}."
+                f"SCREEN LAYOUT GUIDE ({self._screen_width}x{self._screen_height}):\n\n"
+                f"FEED POSTS (static image, text post, standard scrolling feed):\n"
+                f"  - Content area occupies y=0 to y={safe_y_start} — DO NOT tap here, it expands full-screen.\n"
+                f"  - Interaction bar (like, comment, share buttons): y={safe_y_start} to y={self._screen_height} (bottom 25%).\n\n"
+                f"REELS / SHORTS / FULL-SCREEN VERTICAL VIDEO:\n"
+                f"  - Identified by a full-screen vertical video and a vertical column of icons on the right edge.\n"
+                f"  - Like (heart), comment (speech bubble), share (arrow), audio icons are stacked on the\n"
+                f"    RIGHT SIDE RAIL at x >= {right_bar_x}. These ARE safe to tap at any y value.\n"
+                f"  - Tapping the CENTER of the video (x < {right_bar_x}) pauses/unpauses — avoid unless intentional.\n"
+                f"  - The comment text input bar (when comments are open) is at the BOTTOM: y >= {safe_y_start}.\n\n"
+                f"Identify the layout type first, then choose coordinates accordingly."
             )
         else:
             danger_zone_note = (
-                "DANGER ZONE: Post images and video thumbnails occupy most of the screen. "
-                "Tapping them will expand content full-screen. "
-                "UI controls (comment box, like, share, nav bar) are always near the BOTTOM of the screen."
+                "SCREEN LAYOUT:\n"
+                "Feed posts: interaction bar (like/comment/share) is at the BOTTOM of the screen.\n"
+                "Reels/Shorts: like/comment/share buttons are on the RIGHT SIDE RAIL (rightmost ~15% of width) "
+                "and are safe to tap at any height. Do not tap the center of a Reel as it plays/pauses the video."
             )
 
         prompt = f"""You are an autonomous agent controlling a physical Android phone.
@@ -178,16 +185,19 @@ Rules:
 - "coordinates" is required when action is "tap" or "tap_and_type" — tap the exact center of the UI element.
 - "swipe" is required when action is "swipe_down" or "swipe_up".
 - "text" is required when action is "type" or "tap_and_type".
-- "tap_and_type" should be used when you need to select an input field and immediately type into it. PREFER this over separate tap + type steps.
+- "tap_and_type" should be used when you need to select an empty input field and type into it.
 - Use "done" when the goal has been achieved. Put the final result in "data".
 - Use "fail" if the goal cannot be achieved from the current state.
 - If you need to scroll to see more content, use "swipe_down" or "swipe_up".
 - Be precise with coordinates — they must land on the intended UI element.
-- CRITICAL: NEVER tap on video thumbnails, post images, or any content area in the upper portion of the screen. This will expand them full-screen and lose all UI controls. Only tap on clearly visible UI chrome: buttons, icons, input fields, and navigation bars.
-- The comment input box is a text field, usually a rounded rectangle near the bottom of the screen. Tap its CENTER — not the edges, not the area above it.
-- If a keyboard is visible and you need to submit, tap the Send/Post button on the keyboard or in the UI rather than pressing Enter.
+- For FEED posts: only tap UI chrome in the bottom interaction bar. Do not tap post images or video thumbnails.
+- For REELS/SHORTS: the action buttons (heart/comment/share) are on the RIGHT SIDE RAIL — tap those directly.
+- The comment input box is a rounded rectangle near the BOTTOM of the screen. Tap its CENTER.
+- CRITICAL — COMMENT FLOW: Use tap_and_type on the comment field ONCE to type the text. After typing, the keyboard will be visible with a blue POST or SEND button. Tap that button to submit. Do NOT tap the input field again or retype the comment — if the text is already in the field, just tap POST/SEND.
+- CRITICAL — GBOARD CLIPBOARD: If a Gboard clipboard strip appears at the top of the keyboard (showing clipboard snippets), tap the ✕ close button on that strip to dismiss it. Do NOT press back — that closes the keyboard entirely.
+- If a keyboard is visible and you need to submit, tap the blue Send/Post button on the keyboard or in the input bar.
 - If you see a full-screen image or video with no UI controls visible, use "back" to return to the post view.
-- CRITICAL: If a software keyboard is visible and you do NOT need to type anything right now, use the "back" action to dismiss it. NEVER tap anything in the bottom navigation bar strip (the row of Home/Back/Recents system buttons at the very bottom of the screen) to dismiss a keyboard — that will exit the app. Always use "back" action to close an unwanted keyboard.
+- CRITICAL: If a software keyboard is visible and you have already typed and do NOT need to type anything more, tap the Post/Send button — do NOT use "back" to dismiss the keyboard, as that cancels the comment.
 - CRITICAL: If you can see the Android home screen (wallpaper, app icons, clock/date, no social media app visible), use "fail" immediately — do not try to navigate back.
 """
 
@@ -437,14 +447,17 @@ Rules:
             ActionResult indicating success/failure.
         """
         goal = (
-            f"Navigate to the comments section of this post. "
-            f"Find the comment input field — it is a rounded text box near the BOTTOM of the screen. "
-            f"Use 'tap_and_type' to tap the CENTER of that input field and type the comment. "
-            f"Do NOT tap anywhere in the post image or content area above the comment bar. "
-            f"After typing, tap the Post/Send button to submit.\n\n"
-            f'Comment to post: "{comment_text}"\n\n'
-            f"Once the comment is successfully posted (you can see it appear in the list), use 'done'. "
-            f"If the comment fails to post, use 'fail' with the reason."
+            f"Post a comment on this social media post. Follow these steps in order:\n\n"
+            f"STEP 1 — Open comments: tap the comment icon (speech bubble) to open the comment section.\n"
+            f"STEP 2 — Type ONCE: use 'tap_and_type' on the comment input field (rounded box at BOTTOM "
+            f"of screen) to type the comment. Do this EXACTLY ONCE.\n"
+            f"STEP 3 — Submit: tap the blue POST or SEND button next to the input field or at the "
+            f"top-right of the keyboard. Do NOT tap the input field again.\n"
+            f"STEP 4 — Confirm: once the comment appears in the list, use 'done'.\n\n"
+            f"IMPORTANT: If you can already see the comment text in the input field, skip to STEP 3 — "
+            f"do NOT retype it.\n\n"
+            f'Comment text: "{comment_text}"\n\n'
+            f"Do NOT tap any post image, video content, or content area outside the comment UI."
         )
         return await self._run_goal(goal, pre_url=post_url)
 
