@@ -21,6 +21,7 @@ from src.gateways.adb_device import ADBDevice
 from src.gateways.mcp_dispatcher import MCPDispatcher
 from src.intelligence.entity_extractor import EntityExtractor
 from src.intelligence.qdrant_store import QdrantStore
+from src.intelligence.report_generator import generate_intsum_pdf
 from src.intelligence.source_tracker import (
     SourceTracker,
     audit_report,
@@ -1031,6 +1032,15 @@ class OsiaOrchestrator:
                         await self.send_signal_image(recipient, infographic_b64, caption="📊 OSIA Intelligence Brief")
                 except Exception as img_err:
                     logger.warning("Infographic delivery failed (non-fatal): %s", img_err)
+
+            # Archive a PDF copy of every completed analysis
+            try:
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: generate_intsum_pdf(analysis, assigned_desk, source),
+                )
+            except Exception as pdf_err:
+                logger.warning("PDF archival failed (non-fatal): %s", pdf_err)
 
         except Exception as e:
             logger.exception("Orchestration or desk analysis failed: %s", e)

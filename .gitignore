@@ -30,6 +30,9 @@ storage/
 # Temp files
 tmp/
 
+# Generated PDF reports (local archive — not committed)
+reports/
+
 # IDE & Tool Artifacts
 view.xml
 .idea/
