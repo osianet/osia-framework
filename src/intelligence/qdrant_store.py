@@ -50,6 +50,12 @@ DESK_COLLECTIONS: list[str] = [
     "epstein-files",  # declassified government documents — DOJ, House Oversight, federal courts
     "cybersecurity-attacks",  # 13K documented global cyber incidents — actors, TTPs, targets (vinitvek/cybersecurityattacks)
     "hackerone-reports",  # 12.6K publicly disclosed bug bounty reports — CVEs, weaknesses, affected assets (Hacker0x01)
+    "wikileaks-cables",  # 124K US diplomatic cables (1966–2010) — classified embassy traffic, geopolitical intel (fn5/wikileaks-cables)
+    "mitre-attack",     # MITRE ATT&CK: ~700 techniques, ~140 APT group profiles, ~600 malware/tools, mitigations (enterprise + mobile + ICS)
+    "cti-reports",      # 9.7K NER-annotated CTI report texts — malware, threat-actor, IOC entities (mrmoor/cyber-threat-intelligence-splited)
+    "ttp-mappings",     # 20.7K threat report snippets with expert ATT&CK technique ID labels (tumeteor/Security-TTP-Mapping)
+    "cve-database",     # 280K NVD CVEs 1999–2025 — descriptions, CVSS scores, CWE classifications (stasvinokur/cve-and-cwe-dataset-1999-2025)
+    "cti-bench",        # 5.6K analyst benchmark scenarios — malware→ATT&CK, threat actor attribution, CVE→CWE (AI4Sec/cti-bench)
 ]
 
 # ---------------------------------------------------------------------------
