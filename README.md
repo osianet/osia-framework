@@ -9,9 +9,10 @@ OSIA models the structure of a real intelligence agency: a **Chief of Staff** or
 ## Intelligence Lifecycle
 
 ### 1. Ingress
-Requests enter the system through two channels:
+Requests enter the system through three channels:
 - **Signal Gateway** — operatives send URLs or queries to a Signal group; the gateway pushes them to the Redis task queue.
 - **RSS Ingress** — a scheduled poller watches configured feeds and enqueues items automatically.
+- **Ingress API** — an authenticated HTTPS endpoint for programmatic submission from internal tooling or external callers (see [Ingress API](#ingress-api)).
 
 ### 2. Research & Collection
 The **Chief of Staff** (Venice `venice-uncensored`) reads the incoming task and kicks off a multi-turn research loop using MCP tools:
@@ -68,7 +69,7 @@ Venice desks (`venice-uncensored`, `mistral-31-24b`) call the Venice AI API dire
 ## Architecture
 
 ```
-Signal / RSS
+Signal / RSS / Ingress API
      │
      ▼
 Redis Task Queue (osia:task_queue)
@@ -133,7 +134,9 @@ Qdrant Collections (RAG namespaces):
 | `osia-orchestrator` | Main task router and research loop |
 | `osia-signal-ingress` | Signal group message handler |
 | `osia-rss-ingress` | RSS feed poller |
+| `osia-ingress-api` | Authenticated HTTPS ingress for programmatic task submission |
 | `osia-queue-api` | Redis queue HTTP wrapper |
+| `osia-status-api` | Service health, metrics, and log access |
 | `osia-persona-daemon` | Ghost persona — social media activity on the ADB device |
 | `osia-research-worker.timer` | Background research batch worker (every 2h) |
 | `osia-daily-sitrep.timer` | Scheduled daily SITREP (07:00 UTC) |
@@ -479,6 +482,65 @@ uv run python scripts/ingest_cti_bench.py
 
 # Test without writing anything
 uv run python scripts/ingest_cti_bench.py --dry-run
+```
+
+---
+
+## Ingress API
+
+A dedicated FastAPI service (`src/gateways/ingress_api.py`) provides an authenticated HTTPS endpoint for submitting intelligence tasks programmatically — from internal scripts, automation pipelines, or any external caller with a valid token.
+
+**Authentication:** Every request (except `/health`) requires a `Bearer` token in the `Authorization` header and a correct `User-Agent` sentinel. Wrong UA returns 404 so the service is invisible to scanners.
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/ingest` | Submit an intelligence query or URL for immediate processing → `osia:task_queue` |
+| `POST` | `/research` | Enqueue a deep-research topic → `osia:research_queue` (24h TTL dedup) |
+| `GET` | `/queue/status` | Current depth of both queues |
+| `GET` | `/health` | Liveness probe (UA-gated, no auth required) |
+
+**`POST /ingest` body:**
+
+```json
+{
+  "query": "Latest developments in hypersonic glide vehicles",
+  "label": "automation",
+  "priority": "normal"
+}
+```
+
+- `query` — the intelligence question or URL to analyse (required)
+- `label` — caller identifier, alphanumeric (optional; defaults to `external`). Appears as the task source in logs and Qdrant metadata as `api:<label>`.
+- `priority` — `"normal"` (default, appended to queue) or `"high"` (prepended, runs ahead of backlog)
+
+**`POST /research` body:**
+
+```json
+{
+  "topic": "Iranian drone proliferation networks",
+  "label": "daily-brief"
+}
+```
+
+Topics are MD5-deduplicated against a TTL key in Redis — duplicate submissions within the cooldown window (`RESEARCH_COOLDOWN_HOURS`, default 24h) are silently skipped and return `"queued": false`.
+
+**Token management:**
+
+```bash
+uv run python scripts/manage_ingress_token.py           # show token + example curl commands
+uv run python scripts/manage_ingress_token.py --rotate  # generate and save a new token
+```
+
+After rotating, restart the service: `sudo systemctl restart osia-ingress-api.service`
+
+**Environment variables:**
+
+```
+INGRESS_API_TOKEN=          # Bearer token (generate with manage_ingress_token.py --rotate)
+INGRESS_API_UA_SENTINEL=osia-ingress/1
+INGRESS_API_PORT=8097
 ```
 
 ---
