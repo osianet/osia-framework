@@ -67,7 +67,11 @@ class ADBDevice:
         await self._run_checked(["shell", "input", "tap", str(x), str(y)])
 
     async def type_text(self, text: str):
-        escaped_text = text.replace(" ", "%s")
+        # Spaces → %s (ADB input text convention).
+        # Wrap in single quotes so that $, ", `, &, |, ;, <, > etc. are all safe.
+        # The only character that breaks single-quoting is ' itself — escape it via '\''.
+        text_nospaces = text.replace(" ", "%s")
+        escaped_text = "'" + text_nospaces.replace("'", "'\\''") + "'"
         await self._run_checked(["shell", "input", "text", escaped_text])
 
     async def take_screenshot(self, save_path: str):

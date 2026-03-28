@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import random
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -206,11 +207,19 @@ Rules:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
+            # Gemini sometimes wraps JSON in prose reasoning — try to extract it
+            match = re.search(r"\{.*\}", text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    pass
             logger.warning("Gemini returned non-JSON response: %s", text[:200])
             return {
                 "description": text[:200],
                 "action": "fail",
                 "reasoning": "Could not parse vision response as JSON",
+                "_parse_error": True,
             }
 
     async def _execute_action(self, action: dict):
@@ -279,7 +288,9 @@ Rules:
         last_description: str = ""
         stuck_count: int = 0
         back_presses: int = 0
+        parse_retries: int = 0
         _MAX_BACK_PRESSES = 3
+        _MAX_PARSE_RETRIES = 1
         _STUCK_THRESHOLD = 2
 
         for step in range(_MAX_STEPS):
@@ -334,7 +345,31 @@ Rules:
             last_description = description
 
             if action == "fail" or stuck_count >= _STUCK_THRESHOLD:
+                # Parse errors are model output failures, not UI navigation failures.
+                # Retrying the screenshot is safer than pressing back, which can walk
+                # the user out of the app (feed → app drawer → home screen).
+                if analysis.get("_parse_error") and parse_retries < _MAX_PARSE_RETRIES:
+                    logger.info(
+                        "Step %d: vision model returned non-JSON — retrying screenshot (attempt %d/%d)",
+                        step + 1,
+                        parse_retries + 1,
+                        _MAX_PARSE_RETRIES,
+                    )
+                    parse_retries += 1
+                    stuck_count = 0
+                    last_description = ""
+                    await asyncio.sleep(1.5)
+                    continue
+
                 if back_presses < _MAX_BACK_PRESSES:
+                    # Guard: don't press back if we're already on the home screen —
+                    # that just opens the app drawer and burns steps.
+                    fg = await self.adb.get_foreground_app()
+                    if any(fg.startswith(pkg) for pkg in _HOME_SCREEN_PACKAGES):
+                        return ActionResult(
+                            success=False,
+                            error="Landed on home screen — aborting back-press recovery.",
+                        )
                     logger.warning(
                         "Agent stuck (action=%s, stuck_count=%d) — pressing back button (attempt %d/%d)",
                         action,

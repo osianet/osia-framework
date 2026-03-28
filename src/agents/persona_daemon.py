@@ -38,7 +38,7 @@ import redis.asyncio as aioredis
 from dotenv import load_dotenv
 from google import genai
 
-from src.agents.social_media_agent import HomeScreenError, SocialMediaAgent
+from src.agents.social_media_agent import _HOME_SCREEN_PACKAGES, HomeScreenError, SocialMediaAgent
 from src.gateways.adb_device import ADBDevice
 
 logger = logging.getLogger("osia.persona")
@@ -264,16 +264,22 @@ Also consider these interaction types:
 - "comment" — leave a short, natural comment
 - "share" — share/repost something particularly noteworthy (rare, ~5%)
 - "scroll" — just move on to the next post
-- "watch_video" — if this is a video, reel, short, or story, flag it for deeper viewing
+- "watch_video" — if this is a video, reel, or short (NOT a story), flag it for deeper viewing
 
-IMPORTANT: If the post contains a video, reel, short, or story (look for play buttons,
-video progress bars, reel/shorts UI, or video thumbnails), use "watch_video" so we can
+STORIES: If the screen shows an ephemeral story — recognised by a progress bar across the top,
+a "Send message" reply input at the bottom, or a full-screen vertical swipe UI with no
+visible like/comment/share buttons in the usual feed position — always use "scroll".
+Do NOT try to like, comment, or watch stories.
+
+IMPORTANT: If the post contains a video, reel, or short (look for play buttons,
+video progress bars, or reel/shorts UI), use "watch_video" so we can
 actually watch and understand the content before deciding how to engage.
 
 Respond with ONLY valid JSON (no markdown, no code fences):
 {{
     "post_summary": "Brief description of what the post is about",
     "is_video": true/false,
+    "is_story": true/false,
     "action": "scroll|like|comment|share|watch_video",
     "comment_text": "Only if action is comment — what {self.persona_name} would say. Must be specific to THIS post — reference something concrete from it. 1-2 sentences, casual and natural, no hashtags, no emojis unless it really fits. Sound like a real person, not a bot.",
     "reasoning": "Brief reason for the choice"
@@ -441,16 +447,20 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             logger.warning("[%s] Screen recording failed: %s", self.persona_name, e)
             return None
 
-    async def _capture_video(self, duration: int = 15) -> str | None:
+    async def _capture_video(self, duration: int = 15, app_name: str = "") -> str | None:
         """
         Tiered video capture:
-        1. Extract the post URL via the share button
+        1. Extract the post URL via the share button (skipped for Instagram — its share
+           button opens DMs, not a copy-link sheet, so URL extraction always fails there)
         2. Use yt-dlp --dump-json to get the actual duration (no download)
         3. Try yt-dlp to download the actual video (fast, full quality)
         4. Fall back to ADB screen recording using the real duration (capped at 60s)
         """
-        # Tier 1: try to get the URL
-        url = await self._extract_post_url()
+        # Tier 1: try to get the URL — skip for Instagram to avoid burning 7+ vision
+        # calls on a flow that reliably fails (share → DM sheet, not copy-link).
+        url = None
+        if app_name.lower() != "instagram":
+            url = await self._extract_post_url()
         if url:
             # Fetch real duration before attempting download — avoids over-recording
             real_duration = await self._get_video_duration(url)
@@ -865,6 +875,15 @@ Respond with ONLY valid JSON (no markdown, no code fences):
         action = decision.get("action", "scroll")
         name = self.persona_name
 
+        # Stories have no standard like/comment UI — skip them regardless of
+        # the model's action decision.
+        if decision.get("is_story"):
+            logger.info("[%s] Story detected — scrolling past", name)
+            w, h = await self.adb.get_screen_size()
+            x = w // 2 + random.randint(-30, 30)
+            await self.adb.swipe(x, h * 3 // 4, x, h // 4, duration_ms=random.randint(300, 600))
+            return
+
         if action == "like" and self.stats.likes < self._daily_like_cap:
             logger.info("[%s] Liking: %s", name, decision.get("post_summary", "")[:60])
 
@@ -1033,7 +1052,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
             # _capture_video will use yt-dlp metadata to determine real duration;
             # this fallback only applies if URL extraction fails entirely
             fallback_duration = random.randint(15, 30)
-            video_path = await self._capture_video(duration=fallback_duration)
+            video_path = await self._capture_video(duration=fallback_duration, app_name=app_name)
 
             if video_path:
                 # Analyze the video content with Gemini multimodal
@@ -1146,6 +1165,32 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 # Reading pause — varies like a real person
                 await asyncio.sleep(random.uniform(1.5, 4))
 
+                # Guard: if the phone drifted to the home screen between posts,
+                # re-launch the app rather than burning a Gemini call on a home screen shot.
+                foreground = await self.adb.get_foreground_app()
+                if any(foreground.startswith(pkg) for pkg in _HOME_SCREEN_PACKAGES):
+                    logger.warning(
+                        "[%s] Post %d/%d — home screen detected, re-launching %s",
+                        self.persona_name,
+                        i + 1,
+                        num_posts,
+                        app["name"],
+                    )
+                    await self.adb.wake_and_unlock()
+                    await self.adb._run_checked(
+                        [
+                            "shell",
+                            "monkey",
+                            "-p",
+                            app["package"],
+                            "-c",
+                            "android.intent.category.LAUNCHER",
+                            "1",
+                        ]
+                    )
+                    await asyncio.sleep(random.uniform(3, 5))
+                    continue
+
                 screenshot_path = await self.agent._screenshot()
                 decision = await self._decide_interaction(screenshot_path)
 
@@ -1205,8 +1250,8 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 await asyncio.sleep(random.uniform(3, 6))
                 continue
 
-            except Exception as e:
-                logger.warning("[%s] Error during post interaction: %s", self.persona_name, e)
+            except Exception:
+                logger.exception("[%s] Error during post interaction", self.persona_name)
                 try:
                     w, h = await self.adb.get_screen_size()
                     await self.adb.swipe(w // 2, h * 3 // 4, w // 2, h // 4)
