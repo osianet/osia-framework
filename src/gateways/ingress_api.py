@@ -129,6 +129,12 @@ class IngestRequest(BaseModel):
         default="normal",
         description="Task priority hint ('normal' or 'high'). High-priority tasks are prepended to the queue.",
     )
+    desk: str | None = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+        description="Optional desk slug to bypass AI routing and send directly to a named desk.",
+    )
 
     model_config = {"str_strip_whitespace": True}
 
@@ -140,6 +146,12 @@ class ResearchRequest(BaseModel):
         max_length=64,
         pattern=r"^[a-zA-Z0-9_\-\.]+$",
         description="Optional caller label. Used as dedup key prefix.",
+    )
+    desk: str | None = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+        description="Optional desk slug. Determines model routing in the research worker (e.g. cyber gets mistral-31-24b). Defaults to AI-selected routing.",
     )
 
     model_config = {"str_strip_whitespace": True}
@@ -183,6 +195,7 @@ async def ingest(request: Request, body: IngestRequest, _=Depends(_check_auth)):
         "query": body.query,
         "task_id": task_id,
         "timestamp": datetime.now(UTC).isoformat(),
+        **({"desk": body.desk} if body.desk else {}),
     }
 
     payload = json.dumps(task)
@@ -224,6 +237,7 @@ async def research(request: Request, body: ResearchRequest, _=Depends(_check_aut
         "topic": body.topic,
         "source": f"api:{label}",
         "timestamp": datetime.now(UTC).isoformat(),
+        **({"desk": body.desk} if body.desk else {}),
     }
     depth = await r.rpush(RESEARCH_QUEUE, json.dumps(task))
 

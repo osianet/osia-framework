@@ -959,15 +959,22 @@ class OsiaOrchestrator:
         """
 
         try:
-            assigned_desk = await self._route_to_desk(plan_prompt)
+            pinned_desk = task.get("desk")
+            if pinned_desk and pinned_desk in self.valid_desks:
+                assigned_desk = pinned_desk
+                logger.info("Task desk pre-assigned to '%s' (bypassing AI routing)", assigned_desk)
+            else:
+                if pinned_desk:
+                    logger.warning("Pre-assigned desk '%s' is not valid — falling back to AI routing", pinned_desk)
+                assigned_desk = await self._route_to_desk(plan_prompt)
 
-            if assigned_desk not in self.valid_desks:
-                logger.warning(
-                    "Gemini returned invalid desk '%s', routing to default '%s'",
-                    assigned_desk,
-                    self.default_desk,
-                )
-                assigned_desk = self.default_desk
+                if assigned_desk not in self.valid_desks:
+                    logger.warning(
+                        "Gemini returned invalid desk '%s', routing to default '%s'",
+                        assigned_desk,
+                        self.default_desk,
+                    )
+                    assigned_desk = self.default_desk
 
             logger.info("Task routed to: %s", assigned_desk)
 
