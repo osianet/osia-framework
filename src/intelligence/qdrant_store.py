@@ -56,6 +56,7 @@ DESK_COLLECTIONS: list[str] = [
     "ttp-mappings",  # 20.7K threat report snippets with expert ATT&CK technique ID labels (tumeteor/Security-TTP-Mapping)
     "cve-database",  # 280K NVD CVEs 1999–2025 — descriptions, CVSS scores, CWE classifications (stasvinokur/cve-and-cwe-dataset-1999-2025)
     "cti-bench",  # 5.6K analyst benchmark scenarios — malware→ATT&CK, threat actor attribution, CVE→CWE (AI4Sec/cti-bench)
+    "etymology-database",  # historical origin and evolution of words, terms, and concepts
 ]
 
 # ---------------------------------------------------------------------------

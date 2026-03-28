@@ -214,7 +214,11 @@ class PersonaDaemon:
             text = text[:-3]
         text = text.strip()
         try:
-            return json.loads(text)
+            parsed = json.loads(text)
+            # Gemini occasionally wraps the object in a list — unwrap it
+            if isinstance(parsed, list):
+                return parsed[0] if parsed else None
+            return parsed
         except json.JSONDecodeError:
             return None
 
@@ -678,7 +682,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                                         commented = True
                                         break
                             if not commented:
-                                await self.adb.press_enter()
+                                await self.adb.press_send()
                                 commented = True
                 except Exception as e:
                     logger.warning("[%s] UI tree comment failed: %s", name, e)
@@ -1006,8 +1010,8 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                                         commented = True
                                         break
                             if not commented:
-                                # Some apps just need Enter to submit
-                                await self.adb.press_enter()
+                                # Some apps just need Enter/Send to submit
+                                await self.adb.press_send()
                                 commented = True
                 except Exception as e:
                     logger.warning("[%s] UI tree comment failed: %s", name, e)

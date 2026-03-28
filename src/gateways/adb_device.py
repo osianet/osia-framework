@@ -119,6 +119,15 @@ class ADBDevice:
         """Press the Enter/Return key."""
         await self._run_checked(["shell", "input", "keyevent", "66"])
 
+    async def press_send(self):
+        """Simulate the Send/Submit action (e.g. keyboard send button)."""
+        # Using KEYCODE_NUMPAD_ENTER (160) often triggers the IME's editor action (like Send)
+        # on multiline fields where a regular Enter (66) would just insert a newline.
+        # Alternatively, apps like Instagram support Ctrl+Enter via keycombination.
+        # We try keycombination 113 66 (Ctrl+Enter) first, then fallback to 160 if needed.
+        # Android 15 supports keycombination, so let's use Ctrl+Enter.
+        await self._run_checked(["shell", "input", "keycombination", "113", "66"])
+
     async def get_screen_size(self) -> tuple[int, int]:
         """Return (width, height) of the device display."""
         output = await self._run_checked(["shell", "wm", "size"])
