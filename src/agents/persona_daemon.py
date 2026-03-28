@@ -689,8 +689,8 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                         f"STEP 1: Tap the comment icon (speech bubble) on the right side or bottom.\n"
                         f"STEP 2: Use 'tap_and_type' ONCE on the comment input field at the BOTTOM to type:\n"
                         f'   "{comment}"\n'
-                        f"STEP 3: Tap the blue POST or SEND button to submit.\n"
-                        f"CRITICAL: Only type once. If text is already in the field, go straight to STEP 3.",
+                        f"STEP 3: Use the 'submit' action to press Enter and post the comment.\n"
+                        f"CRITICAL: Only type once. If text is already in the field, use 'submit' immediately.",
                     )
                     commented = result.success
                 if commented:
@@ -1022,11 +1022,9 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                         f"STEP 2: Use 'tap_and_type' ONCE on the comment input field (rounded box at "
                         f"the BOTTOM of the screen) to type this comment:\n\n"
                         f'   "{comment}"\n\n'
-                        f"STEP 3: Tap the blue POST or SEND button next to the input field or at the "
-                        f"top-right of the keyboard. Submit it.\n"
+                        f"STEP 3: Use the 'submit' action to press Enter and post the comment.\n"
                         f"STEP 4: Once the comment appears, use 'done'.\n\n"
-                        f"CRITICAL: Only type the comment ONCE. If the text is already in the field, "
-                        f"skip straight to STEP 3 and tap POST/SEND. Do NOT retype.\n"
+                        f"CRITICAL: Only type once. If text is already in the field, use 'submit' immediately.\n"
                         f"Do NOT tap post images or video content.",
                     )
                     commented = result.success

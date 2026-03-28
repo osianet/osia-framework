@@ -173,7 +173,7 @@ Analyze this screenshot and decide the SINGLE next action to take.
 Respond with ONLY valid JSON (no markdown, no code fences):
 {{
     "description": "Brief description of what's currently on screen",
-    "action": "tap|swipe_down|swipe_up|type|tap_and_type|back|done|fail",
+    "action": "tap|swipe_down|swipe_up|type|tap_and_type|submit|back|done|fail",
     "coordinates": {{"x": 540, "y": 1200}},
     "swipe": {{"x1": 540, "y1": 1500, "x2": 540, "y2": 500}},
     "text": "text to type if action is type or tap_and_type",
@@ -186,6 +186,7 @@ Rules:
 - "swipe" is required when action is "swipe_down" or "swipe_up".
 - "text" is required when action is "type" or "tap_and_type".
 - "tap_and_type" should be used when you need to select an empty input field and type into it.
+- "submit" presses the Enter/Return key — use it to confirm a comment or search after typing.
 - Use "done" when the goal has been achieved. Put the final result in "data".
 - Use "fail" if the goal cannot be achieved from the current state.
 - If you need to scroll to see more content, use "swipe_down" or "swipe_up".
@@ -193,11 +194,9 @@ Rules:
 - For FEED posts: only tap UI chrome in the bottom interaction bar. Do not tap post images or video thumbnails.
 - For REELS/SHORTS: the action buttons (heart/comment/share) are on the RIGHT SIDE RAIL — tap those directly.
 - The comment input box is a rounded rectangle near the BOTTOM of the screen. Tap its CENTER.
-- CRITICAL — COMMENT FLOW: Use tap_and_type on the comment field ONCE to type the text. After typing, the keyboard will be visible with a blue POST or SEND button. Tap that button to submit. Do NOT tap the input field again or retype the comment — if the text is already in the field, just tap POST/SEND.
+- CRITICAL — COMMENT FLOW: (1) Use tap_and_type ONCE to focus the comment field and type the text. (2) Use "submit" to send it via Enter. Never tap the input field again or retype — if the text is already in the field, use "submit" immediately.
 - CRITICAL — GBOARD CLIPBOARD: If a Gboard clipboard strip appears at the top of the keyboard (showing clipboard snippets), tap the ✕ close button on that strip to dismiss it. Do NOT press back — that closes the keyboard entirely.
-- If a keyboard is visible and you need to submit, tap the blue Send/Post button on the keyboard or in the input bar.
 - If you see a full-screen image or video with no UI controls visible, use "back" to return to the post view.
-- CRITICAL: If a software keyboard is visible and you have already typed and do NOT need to type anything more, tap the Post/Send button — do NOT use "back" to dismiss the keyboard, as that cancels the comment.
 - CRITICAL: If you can see the Android home screen (wallpaper, app icons, clock/date, no social media app visible), use "fail" immediately — do not try to navigate back.
 """
 
@@ -274,6 +273,10 @@ Rules:
             await self.adb.tap(x, y)
             await asyncio.sleep(1.0)  # Wait for keyboard/focus
             await self.adb.type_text(text)
+
+        elif act == "submit":
+            logger.info("Submitting via Enter key — %s", action.get("reasoning", ""))
+            await self.adb.press_enter()
 
         elif act == "back":
             logger.info("Pressing back — %s", action.get("reasoning", ""))
@@ -451,11 +454,10 @@ Rules:
             f"STEP 1 — Open comments: tap the comment icon (speech bubble) to open the comment section.\n"
             f"STEP 2 — Type ONCE: use 'tap_and_type' on the comment input field (rounded box at BOTTOM "
             f"of screen) to type the comment. Do this EXACTLY ONCE.\n"
-            f"STEP 3 — Submit: tap the blue POST or SEND button next to the input field or at the "
-            f"top-right of the keyboard. Do NOT tap the input field again.\n"
+            f"STEP 3 — Submit: use the 'submit' action to press Enter and post the comment.\n"
             f"STEP 4 — Confirm: once the comment appears in the list, use 'done'.\n\n"
-            f"IMPORTANT: If you can already see the comment text in the input field, skip to STEP 3 — "
-            f"do NOT retype it.\n\n"
+            f"IMPORTANT: If the comment text is already in the input field, skip to STEP 3 immediately — "
+            f"do NOT retype it, just use 'submit'.\n\n"
             f'Comment text: "{comment_text}"\n\n'
             f"Do NOT tap any post image, video content, or content area outside the comment UI."
         )
