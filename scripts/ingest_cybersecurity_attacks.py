@@ -282,6 +282,9 @@ class CybersecurityAttacksIngestor:
                     size=EMBEDDING_DIM,
                     distance=qdrant_models.Distance.COSINE,
                 ),
+                optimizers_config=qdrant_models.OptimizersConfigDiff(
+                    indexing_threshold=1000,
+                ),
             )
             logger.info("Created Qdrant collection '%s'.", COLLECTION_NAME)
         else:
