@@ -102,10 +102,16 @@ osia-research-worker.timer (every 2h)
 
 Qdrant Collections (RAG namespaces):
      ├── per-desk collections (one per desk slug)
-     ├── osia_research_cache  (background research worker output)
-     ├── epstein-files        (declassified government documents — see below)
-     ├── cybersecurity-attacks (13K global cyber incidents — see below)
-     └── hackerone-reports     (12.6K disclosed bug bounty reports — see below)
+     ├── osia_research_cache   (background research worker output)
+     ├── epstein-files         (declassified government documents)
+     ├── wikileaks-cables      (124K US diplomatic cables 1966–2010)
+     ├── cybersecurity-attacks (13K global cyber incidents)
+     ├── hackerone-reports     (12.6K disclosed bug bounty reports)
+     ├── mitre-attack          (~1,400 ATT&CK techniques, groups, malware, mitigations)
+     ├── cti-reports           (9.7K NER-annotated CTI report texts)
+     ├── ttp-mappings          (20.7K threat report snippets with ATT&CK labels)
+     ├── cve-database          (280K NVD CVEs 1999–2025)
+     └── cti-bench             (5.6K analyst benchmark scenarios)
 ```
 
 ---
@@ -291,6 +297,189 @@ uv run python scripts/ingest_hackerone_reports.py --resume
 ```
 
 Upserts are idempotent (deterministic point IDs from report ID). Re-running the script is safe and will update any changed payloads.
+
+---
+
+## WikiLeaks Cables Knowledge Base
+
+A dedicated Qdrant collection (`wikileaks-cables`) holds 124,747 US diplomatic cables spanning 1966–2010, sourced from the WikiLeaks cable release. Cables are chunked with a paragraph-aware splitter (1,500-char chunks, 225-char overlap), with the cable header (ID, origin, classification, date, references) prepended to every chunk so each embedding is fully self-contained.
+
+**Dataset:** [`fn5/wikileaks-cables`](https://huggingface.co/datasets/fn5/wikileaks-cables) — 124,747 rows, ~1 GB Parquet, MIT
+
+**Fields indexed per cable:**
+
+| Field | Description |
+|-------|-------------|
+| `cable_id` | Cable identifier (e.g. `66BUENOSAIRES2481`) |
+| `origin` | Originating embassy or consulate (272 unique origins) |
+| `classification` | UNCLASSIFIED / CONFIDENTIAL / SECRET / TOP SECRET |
+| `datetime` | Cable timestamp |
+| `references` | Referenced cable IDs |
+| `body` | Full cable text (chunked if > 1,500 chars) |
+
+**Ingestion:**
+
+```bash
+# Full ingest — all 124K cables
+uv run python scripts/ingest_wikileaks_cables.py --resume
+
+# Classified cables only
+uv run python scripts/ingest_wikileaks_cables.py --classification SECRET CONFIDENTIAL --resume
+
+# Enqueue SECRET/CONFIDENTIAL cables to Geopolitical desk research queue
+uv run python scripts/ingest_wikileaks_cables.py --classification SECRET CONFIDENTIAL --enqueue-classified
+
+# Test without writing anything
+uv run python scripts/ingest_wikileaks_cables.py --limit 500 --dry-run
+```
+
+Long bodies are chunked — expect significantly more Qdrant points than source records. `--enqueue-classified` is rate-controlled: each cable is TTL-deduplicated in Redis (30-day window) to avoid re-enqueueing across runs.
+
+---
+
+## MITRE ATT&CK Knowledge Base
+
+A dedicated Qdrant collection (`mitre-attack`) holds the full MITRE ATT&CK knowledge base downloaded directly from the [mitre-attack/attack-stix-data](https://github.com/mitre-attack/attack-stix-data) GitHub repository (Apache 2.0). All entity types — techniques, threat actor groups, software (malware/tools), and mitigations — are ingested with relationship data resolved: group documents list their attributed techniques and malware; technique documents list known groups and software that use them.
+
+**Coverage (enterprise domain):**
+
+| Entity Type | Count | Description |
+|-------------|-------|-------------|
+| Techniques | ~700 | ATT&CK techniques and sub-techniques with tactic, platform, detection, and data source metadata |
+| Groups | ~140 | APT and criminal group profiles with aliases, descriptions, and attributed TTPs |
+| Software | ~600 | Malware families and offensive tools with platform and usage attribution |
+| Mitigations | ~40 | M1xxx mitigation controls |
+
+**Ingestion:**
+
+```bash
+# Enterprise domain only (default)
+uv run python scripts/ingest_mitre_attack.py
+
+# All three domains
+uv run python scripts/ingest_mitre_attack.py --domains enterprise mobile ics
+
+# Use locally pre-downloaded JSON files (skips GitHub download)
+uv run python scripts/ingest_mitre_attack.py --local-dir /tmp/attack-stix
+
+# Test without writing anything
+uv run python scripts/ingest_mitre_attack.py --dry-run
+```
+
+The script downloads each domain's STIX bundle via HTTPS, builds the full relationship graph in memory, then flushes all entity documents to Qdrant in a single pass. Re-running is safe — point IDs are deterministic hashes of the STIX object ID.
+
+---
+
+## CTI Reports Knowledge Base
+
+A dedicated Qdrant collection (`cti-reports`) holds 9,732 expert NER-annotated CTI (Cyber Threat Intelligence) report texts from the [`mrmoor/cyber-threat-intelligence-splited`](https://huggingface.co/datasets/mrmoor/cyber-threat-intelligence-splited) dataset. Each point stores the raw CTI text augmented with a structured entity summary block, and carries per-type metadata arrays for Qdrant payload filtering.
+
+**Dataset:** `mrmoor/cyber-threat-intelligence-splited` — 6,810 train / 1,460 validation / 1,460 test, CC BY 4.0
+
+**Entity types extracted per document:**
+
+| Category | Types |
+|----------|-------|
+| Semantic | `malware`, `threat-actor`, `attack-pattern`, `identity`, `campaign` |
+| IOC | `IPV4`, `DOMAIN`, `SHA1`, `SHA256`, `MD5`, `FILEPATH`, `EMAIL`, `CVE`, `URL` |
+
+**Ingestion:**
+
+```bash
+# All splits
+uv run python scripts/ingest_cti_reports.py --resume
+
+# Training split only
+uv run python scripts/ingest_cti_reports.py --splits train
+
+# Test without writing anything
+uv run python scripts/ingest_cti_reports.py --limit 200 --dry-run
+```
+
+---
+
+## TTP Mappings Knowledge Base
+
+A dedicated Qdrant collection (`ttp-mappings`) holds 20,736 threat report text snippets from the [`tumeteor/Security-TTP-Mapping`](https://huggingface.co/datasets/tumeteor/Security-TTP-Mapping) dataset, each labelled with one or more MITRE ATT&CK technique IDs by domain experts. ATT&CK technique IDs are stored as a payload array (`ttp_ids`) on each point, enabling Qdrant payload filter queries such as "all documents referencing T1566".
+
+**Dataset:** `tumeteor/Security-TTP-Mapping` — 14,900 train / 2,630 validation / 3,170 test, CC BY 4.0
+
+**Ingestion:**
+
+```bash
+# All splits
+uv run python scripts/ingest_ttp_mappings.py --resume
+
+# Training split only
+uv run python scripts/ingest_ttp_mappings.py --splits train
+
+# Test without writing anything
+uv run python scripts/ingest_ttp_mappings.py --limit 500 --dry-run
+```
+
+---
+
+## CVE Database Knowledge Base
+
+A dedicated Qdrant collection (`cve-database`) holds 280,694 NVD CVE records from 1999 through May 2025, sourced from the [`stasvinokur/cve-and-cwe-dataset-1999-2025`](https://huggingface.co/datasets/stasvinokur/cve-and-cwe-dataset-1999-2025) dataset. Each point stores the CVE ID, CVSS scores, CWE classification, severity, and full NVD description. CVSS severity is stored as both a string and an ordinal integer (`severity_score`) for range filtering.
+
+**Dataset:** `stasvinokur/cve-and-cwe-dataset-1999-2025` — 280,694 rows, ~103 MB CSV, CC0-1.0 (public domain)
+
+**Fields indexed per CVE:**
+
+| Field | Description |
+|-------|-------------|
+| `cve_id` | CVE identifier (e.g. `CVE-2021-44228`) |
+| `severity` | CRITICAL / HIGH / MEDIUM / LOW / NONE |
+| `severity_score` | Ordinal: CRITICAL=4, HIGH=3, MEDIUM=2, LOW=1, NONE=0 |
+| `cvss_v4` / `cvss_v3` / `cvss_v2` | CVSS scores |
+| `cwe_id` | CWE weakness classification |
+| `text` | Full NVD description |
+
+**Ingestion:**
+
+```bash
+# Full ingest — all 280K CVEs (use --resume; checkpoints every 2,000 records)
+uv run python scripts/ingest_cve_database.py --resume
+
+# High-priority CVEs first
+uv run python scripts/ingest_cve_database.py --severity CRITICAL HIGH --resume
+
+# Test without writing anything
+uv run python scripts/ingest_cve_database.py --limit 500 --dry-run
+```
+
+At 280K records this is the largest ingest job. Recommended approach: run CRITICAL/HIGH first to populate the high-value subset immediately, then run the full ingest in a background pass.
+
+---
+
+## CTI-Bench Knowledge Base
+
+A dedicated Qdrant collection (`cti-bench`) holds 5,610 analyst-grade CTI evaluation scenarios from the [`AI4Sec/cti-bench`](https://huggingface.co/datasets/AI4Sec/cti-bench) dataset (CC BY-NC-SA 4.0 — internal use only). Each of the six task configurations produces a different document format optimised for RAG retrieval.
+
+**Task configurations:**
+
+| Task | Rows | Format | Intel value |
+|------|------|--------|-------------|
+| `cti-ate` | 60 | Malware report → ATT&CK technique IDs (ground truth) | Highest — real reports with expert TTP labels |
+| `cti-taa` | 50 | Threat report → threat actor attribution | Highest — actor attribution examples |
+| `cti-mcq` | 2,500 | Cybersecurity knowledge MCQ with answer | Broad — Q&A knowledge base |
+| `cti-rcm` | 1,000 | CVE description → CWE mapping (2024 CVEs) | CVE classification context |
+| `cti-rcm-2021` | 1,000 | CVE description → CWE mapping (2021 CVEs) | CVE classification context |
+| `cti-vsp` | 1,000 | Vulnerability description → CVSS severity | Severity prediction context |
+
+**Ingestion:**
+
+```bash
+# High-value tasks first
+uv run python scripts/ingest_cti_bench.py --tasks cti-ate cti-taa
+
+# All tasks
+uv run python scripts/ingest_cti_bench.py
+
+# Test without writing anything
+uv run python scripts/ingest_cti_bench.py --dry-run
+```
 
 ---
 
