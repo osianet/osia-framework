@@ -63,6 +63,7 @@ SERVICES: list[str] = [
     "osia-cyber-bridge.service",
     "osia-status-api.service",
     "osia-queue-api.service",
+    "osia-ingress-api.service",
 ]
 
 TIMERS: list[str] = [

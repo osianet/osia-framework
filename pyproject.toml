@@ -76,3 +76,8 @@ ignore = [
 pythonVersion = "3.11"
 include = ["src"]
 typeCheckingMode = "basic"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.7",
+]
