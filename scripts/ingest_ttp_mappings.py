@@ -326,9 +326,11 @@ class TtpMappingsIngestor:
 
         it = _iter()
         _sentinel = object()
+        _exhausted = False
         while True:
             row = await loop.run_in_executor(None, next, it, _sentinel)
             if row is _sentinel:
+                _exhausted = True
                 break
             stats.records_seen += 1
             if stats.records_seen <= checkpoint:
@@ -340,6 +342,13 @@ class TtpMappingsIngestor:
             if limit and stats.records_seen - checkpoint >= limit:
                 logger.info("[%s] Reached --limit %d.", stats.split, limit)
                 break
+
+        if _exhausted:
+            logger.info(
+                "[%s] Dataset exhausted at %d total records — ingestion complete.",
+                stats.split,
+                stats.records_seen,
+            )
 
     async def _save_checkpoint(self, split: str, cursor: int) -> None:
         if self.dry_run or not self._redis:

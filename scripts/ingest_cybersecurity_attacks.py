@@ -522,9 +522,11 @@ class CybersecurityAttacksIngestor:
         it = _iter()
 
         _sentinel = object()
+        _exhausted = False
         while True:
             row = await loop.run_in_executor(None, next, it, _sentinel)
             if row is _sentinel:
+                _exhausted = True
                 break
 
             stats.records_seen += 1
@@ -540,6 +542,9 @@ class CybersecurityAttacksIngestor:
             if limit and stats.records_seen - checkpoint >= limit:
                 logger.info("Reached --limit %d — stopping.", limit)
                 break
+
+        if _exhausted:
+            logger.info("Dataset exhausted at %d total records — ingestion complete.", stats.records_seen)
 
     # ------------------------------------------------------------------
     # Checkpointing
