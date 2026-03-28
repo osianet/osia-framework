@@ -204,7 +204,7 @@ class IngestStats:
 class EtymologyIngestor:
     def __init__(self, args: argparse.Namespace) -> None:
         self.dry_run: bool = args.dry_run
-        self.lang_filter: set[str] | None = {l.lower() for l in args.lang} if args.lang else None
+        self.lang_filter: set[str] | None = {lang_code.lower() for lang_code in args.lang} if args.lang else None
         self.reltype_filter: set[str] | None = {r.lower() for r in args.reltype} if args.reltype else None
         self.embed_batch_size: int = args.embed_batch_size
         self.embed_concurrency: int = args.embed_concurrency
