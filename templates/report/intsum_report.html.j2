@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OSIA INTSUM — {{ ref_number }}</title>
+<style>
+/* ================================================================
+   OSIA INTELLIGENCE SUMMARY — DOCUMENT STYLESHEET
+   Aesthetic: Traditional Intelligence Agency + Cyber Operations
+   ================================================================ */
+
+@page {
+    size: A4;
+    margin: 0;
+
+    @top-center {
+        content: "";
+    }
+    @bottom-center {
+        font-family: 'Courier New', Courier, monospace;
+        font-size: 7pt;
+        color: #ff2222;
+        content: "⬛ OSIA INTERNAL USE ONLY ⬛  |  " attr(data-ref) "  |  PAGE " counter(page) " OF " counter(pages);
+        border-top: 1pt solid #3a0000;
+        padding-top: 4pt;
+        letter-spacing: 0.05em;
+    }
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    background-color: #080c08;
+    color: #b8d4b0;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 9.5pt;
+    line-height: 1.55;
+}
+
+/* ── Classification Banner ─────────────────────────────────────── */
+.classification-banner {
+    background-color: #6b0000;
+    color: #ffffff;
+    text-align: center;
+    padding: 5pt 0;
+    font-size: 8pt;
+    font-weight: bold;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    border-bottom: 2pt solid #cc0000;
+    page-break-after: avoid;
+}
+
+/* ── Document Header ───────────────────────────────────────────── */
+.doc-header {
+    background: linear-gradient(180deg, #0c110c 0%, #080c08 100%);
+    border-bottom: 1pt solid #1e4a1e;
+    padding: 14pt 22pt 10pt 22pt;
+    page-break-after: avoid;
+}
+
+.header-inner {
+    display: flex;
+    align-items: center;
+    gap: 16pt;
+}
+
+.logo-cell {
+    flex-shrink: 0;
+}
+
+.logo-cell img {
+    height: 52pt;
+    width: auto;
+    opacity: 0.92;
+}
+
+.logo-placeholder {
+    height: 52pt;
+    width: 52pt;
+    border: 1.5pt solid #2a5a2a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 7pt;
+    color: #2a5a2a;
+    letter-spacing: 0.1em;
+}
+
+.agency-identity {
+    flex: 1;
+}
+
+.agency-name {
+    font-size: 15pt;
+    font-weight: bold;
+    color: #00dd55;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    line-height: 1.1;
+}
+
+.agency-subtitle {
+    font-size: 7.5pt;
+    color: #4a8a4a;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: 2pt;
+}
+
+.doc-type {
+    font-size: 11pt;
+    font-weight: bold;
+    color: #ff8c00;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-top: 5pt;
+}
+
+.header-meta {
+    text-align: right;
+    flex-shrink: 0;
+    min-width: 120pt;
+}
+
+.ref-number {
+    font-size: 8pt;
+    color: #ff8c00;
+    letter-spacing: 0.08em;
+    font-weight: bold;
+}
+
+.header-timestamp {
+    font-size: 7.5pt;
+    color: #4a8a4a;
+    margin-top: 3pt;
+}
+
+/* ── Metadata Bar ──────────────────────────────────────────────── */
+.metadata-bar {
+    background-color: #0c150c;
+    border-top: 1pt solid #1a3a1a;
+    border-bottom: 2pt solid #1a3a1a;
+    padding: 6pt 22pt;
+    display: flex;
+    gap: 24pt;
+    page-break-after: avoid;
+}
+
+.meta-item {
+    font-size: 7.5pt;
+    color: #4a8a4a;
+    letter-spacing: 0.05em;
+}
+
+.meta-item strong {
+    color: #ffa040;
+    letter-spacing: 0.08em;
+}
+
+/* ── Scanline overlay effect (visual texture) ──────────────────── */
+.page-body {
+    padding: 16pt 22pt 20pt 22pt;
+    background-image: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 20, 0, 0.03) 2px,
+        rgba(0, 20, 0, 0.03) 3px
+    );
+    min-height: 600pt;
+}
+
+/* ── Body Content Typography ───────────────────────────────────── */
+h1 {
+    font-size: 13pt;
+    font-weight: bold;
+    color: #ff8c00;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin: 18pt 0 6pt 0;
+    padding-bottom: 4pt;
+    border-bottom: 1pt solid #3a2000;
+    page-break-after: avoid;
+}
+
+h2 {
+    font-size: 11pt;
+    font-weight: bold;
+    color: #ffa040;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin: 14pt 0 5pt 0;
+    padding-left: 8pt;
+    border-left: 3pt solid #ff8c00;
+    page-break-after: avoid;
+}
+
+h3 {
+    font-size: 10pt;
+    font-weight: bold;
+    color: #ffd060;
+    letter-spacing: 0.08em;
+    margin: 10pt 0 4pt 0;
+    page-break-after: avoid;
+}
+
+h4 {
+    font-size: 9.5pt;
+    font-weight: bold;
+    color: #c0b040;
+    margin: 8pt 0 3pt 0;
+    page-break-after: avoid;
+}
+
+p {
+    margin: 0 0 7pt 0;
+    text-align: justify;
+    hyphens: auto;
+}
+
+strong, b {
+    color: #ddc090;
+    font-weight: bold;
+}
+
+em, i {
+    color: #90b890;
+    font-style: italic;
+}
+
+a {
+    color: #20c0e0;
+    text-decoration: none;
+}
+
+/* ── Lists ─────────────────────────────────────────────────────── */
+ul, ol {
+    margin: 4pt 0 8pt 16pt;
+    padding: 0;
+}
+
+li {
+    margin-bottom: 3pt;
+    text-align: left;
+}
+
+ul li::marker {
+    color: #ff8c00;
+    content: "▸ ";
+}
+
+ol li::marker {
+    color: #ff8c00;
+}
+
+/* ── Code & Pre ────────────────────────────────────────────────── */
+code {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 8.5pt;
+    background-color: #0a180a;
+    color: #00dd55;
+    padding: 1pt 3pt;
+    border: 0.5pt solid #1a3a1a;
+}
+
+pre {
+    background-color: #040c04;
+    border: 1pt solid #1a3a1a;
+    border-left: 3pt solid #00aa44;
+    padding: 8pt 10pt;
+    margin: 8pt 0;
+    overflow-x: auto;
+    font-size: 8pt;
+    color: #00ee55;
+    line-height: 1.4;
+}
+
+pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+}
+
+/* ── Tables ────────────────────────────────────────────────────── */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8pt 0;
+    font-size: 8.5pt;
+}
+
+th {
+    background-color: #0c1c0c;
+    color: #ffa040;
+    font-weight: bold;
+    padding: 5pt 8pt;
+    text-align: left;
+    border: 0.5pt solid #1e3a1e;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+td {
+    padding: 4pt 8pt;
+    border: 0.5pt solid #162016;
+    vertical-align: top;
+}
+
+tr:nth-child(even) td {
+    background-color: #0a120a;
+}
+
+tr:nth-child(odd) td {
+    background-color: #080c08;
+}
+
+/* ── Horizontal Rules ──────────────────────────────────────────── */
+hr {
+    border: none;
+    border-top: 1pt dashed #1e3a1e;
+    margin: 12pt 0;
+}
+
+/* ── Blockquotes (used for key assessments) ────────────────────── */
+blockquote {
+    border-left: 3pt solid #ffa040;
+    background-color: #0c140a;
+    margin: 8pt 0;
+    padding: 6pt 12pt;
+    color: #c8d8c0;
+    font-style: italic;
+}
+
+/* ── Sources Section ───────────────────────────────────────────── */
+h2#sources,
+h2:has(+ ul > li > a),
+.sources-section h2 {
+    color: #40c0ff;
+    border-left-color: #40c0ff;
+}
+
+/* ── Source Confidence indicator ───────────────────────────────── */
+.source-confidence-high {
+    color: #00dd55;
+    font-weight: bold;
+}
+
+.source-confidence-moderate {
+    color: #ffa040;
+    font-weight: bold;
+}
+
+.source-confidence-low {
+    color: #ff4444;
+    font-weight: bold;
+}
+
+/* ── TIMESTAMP line ────────────────────────────────────────────── */
+p:first-child,
+p strong:first-child {
+    /* Keep timestamp visible */
+}
+
+/* ── Citation markers [N] ──────────────────────────────────────── */
+/* These appear as inline text in the content */
+
+/* ── Corner bracket accent (decorative) ───────────────────────── */
+.corner-accent {
+    color: #1e4a1e;
+    font-size: 7pt;
+    letter-spacing: 0.05em;
+}
+
+/* ── Section divider ───────────────────────────────────────────── */
+.section-divider {
+    text-align: center;
+    color: #1e3a1e;
+    font-size: 8pt;
+    letter-spacing: 0.3em;
+    margin: 10pt 0;
+}
+
+/* ── Page break helpers ─────────────────────────────────────────── */
+.page-break {
+    page-break-before: always;
+}
+
+.no-break {
+    page-break-inside: avoid;
+}
+</style>
+</head>
+<body data-ref="{{ ref_number }}">
+
+  <!-- Classification Banner -->
+  <div class="classification-banner">
+    ⬛&nbsp;&nbsp;OSIA INTERNAL USE ONLY — NOT FOR PUBLIC DISTRIBUTION&nbsp;&nbsp;⬛
+  </div>
+
+  <!-- Document Header -->
+  <div class="doc-header">
+    <div class="header-inner">
+      <div class="logo-cell">
+        {% if logo_data_uri %}
+          <img src="{{ logo_data_uri }}" alt="OSIA Logo">
+        {% else %}
+          <div class="logo-placeholder">OSIA</div>
+        {% endif %}
+      </div>
+      <div class="agency-identity">
+        <div class="agency-name">Open Source Intelligence Agency</div>
+        <div class="agency-subtitle">Automated Intelligence Collection &amp; Analysis Framework</div>
+        <div class="doc-type">Intelligence Summary</div>
+      </div>
+      <div class="header-meta">
+        <div class="ref-number">REF: {{ ref_number }}</div>
+        <div class="header-timestamp">{{ timestamp }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metadata Bar -->
+  <div class="metadata-bar">
+    <div class="meta-item"><strong>DESK:</strong> {{ desk_name }}</div>
+    <div class="meta-item"><strong>SLUG:</strong> {{ desk_slug }}</div>
+    <div class="meta-item"><strong>SOURCE:</strong> {{ source }}</div>
+    <div class="meta-item"><strong>CLASS:</strong> INTERNAL USE ONLY</div>
+  </div>
+
+  <!-- Report Body -->
+  <div class="page-body">
+    <div class="section-divider">· · · · · · · · · · BEGIN TRANSMISSION · · · · · · · · · ·</div>
+
+    {{ report_body | safe }}
+
+    <div class="section-divider">· · · · · · · · · · END TRANSMISSION · · · · · · · · · · ·</div>
+  </div>
+
+  <!-- Bottom Classification Banner -->
+  <div class="classification-banner">
+    ⬛&nbsp;&nbsp;OSIA INTERNAL USE ONLY — NOT FOR PUBLIC DISTRIBUTION&nbsp;&nbsp;⬛
+  </div>
+
+</body>
+</html>
