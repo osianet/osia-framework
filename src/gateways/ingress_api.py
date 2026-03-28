@@ -25,6 +25,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Literal
 
 import redis.asyncio as aioredis
 import uvicorn
@@ -124,7 +125,7 @@ class IngestRequest(BaseModel):
         pattern=r"^[a-zA-Z0-9_\-\.]+$",
         description="Optional caller label (alphanumeric, hyphens, underscores, dots). Appears as the task source.",
     )
-    priority: str = Field(
+    priority: Literal["normal", "high"] = Field(
         default="normal",
         description="Task priority hint ('normal' or 'high'). High-priority tasks are prepended to the queue.",
     )
@@ -194,7 +195,7 @@ async def ingest(request: Request, body: IngestRequest, _=Depends(_check_auth)):
         "Ingress task queued [%s] priority=%s source=%s depth=%d",
         task_id,
         body.priority,
-        source,
+        source.replace("\n", "").replace("\r", ""),
         depth,
     )
     return {"ok": True, "task_id": task_id, "queue": TASK_QUEUE, "queue_depth": depth}
@@ -235,7 +236,8 @@ async def research(request: Request, body: ResearchRequest, _=Depends(_check_aut
     cooldown_hours = int(os.getenv("RESEARCH_COOLDOWN_HOURS", "24"))
     await r.setex(seen_key, cooldown_hours * 3600, "1")
 
-    logger.info("Research topic queued: source=%s depth=%d", f"api:{label}", depth)
+    safe_label = label.replace("\n", "").replace("\r", "")
+    logger.info("Research topic queued: source=api:%s depth=%d", safe_label, depth)
     return {"ok": True, "queued": True, "queue": RESEARCH_QUEUE, "queue_depth": depth}
 
 
