@@ -236,20 +236,45 @@ async def embed_texts(texts: list[str], http: httpx.AsyncClient) -> list[list[fl
 # ---------------------------------------------------------------------------
 
 
+async def tool_search_duckduckgo(query: str, _http: httpx.AsyncClient) -> str:
+    """DuckDuckGo web search — no API key required."""
+    try:
+        from duckduckgo_search import DDGS
+
+        results = await asyncio.to_thread(lambda: list(DDGS().text(query, max_results=5)))
+        if not results:
+            return "No DuckDuckGo results found."
+        return "\n\n".join(f"[{r.get('title', '')}]({r.get('href', '')})\n{r.get('body', '')[:500]}" for r in results)
+    except Exception as e:
+        return f"DuckDuckGo search error: {e}"
+
+
 async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
+    """Live web search via Tavily (primary) with automatic DuckDuckGo fallback."""
     if not TAVILY_API_KEY:
-        return "Tavily API key not configured."
+        logger.info("TAVILY_API_KEY not set — using DuckDuckGo for web search")
+        return await tool_search_duckduckgo(query, http)
     try:
         resp = await http.post(
             "https://api.tavily.com/search",
             json={"api_key": TAVILY_API_KEY, "query": query, "max_results": 5},
             timeout=15.0,
         )
+        if resp.status_code == 432:
+            logger.warning("Tavily quota exhausted (432) — falling back to DuckDuckGo")
+            return await tool_search_duckduckgo(query, http)
         resp.raise_for_status()
         results = resp.json().get("results", [])
         return "\n\n".join(f"[{r.get('title', '')}]({r.get('url', '')})\n{r.get('content', '')[:500]}" for r in results)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 432:
+            logger.warning("Tavily quota exhausted — falling back to DuckDuckGo")
+            return await tool_search_duckduckgo(query, http)
+        logger.warning("Tavily HTTP error %d — falling back to DuckDuckGo: %s", e.response.status_code, e)
+        return await tool_search_duckduckgo(query, http)
     except Exception as e:
-        return f"Web search error: {e}"
+        logger.warning("Tavily error — falling back to DuckDuckGo: %s", e)
+        return await tool_search_duckduckgo(query, http)
 
 
 async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
@@ -349,8 +374,35 @@ async def tool_search_semantic_scholar(query: str, http: httpx.AsyncClient) -> s
         return f"Semantic Scholar error: {e}"
 
 
+async def tool_search_intel_kb(query: str, _http: httpx.AsyncClient) -> str:
+    """Semantic search across all OSIA Qdrant collections."""
+    try:
+        from src.intelligence.qdrant_store import QdrantStore
+
+        store = QdrantStore()
+        results = await store.cross_desk_search(query, top_k=5)
+        # Filter low-confidence matches — cosine similarity below 0.45 is noise
+        results = [r for r in results if r.score >= 0.45]
+        if not results:
+            return "No relevant intel found in the knowledge base for this query."
+        parts = []
+        for r in results:
+            source = r.metadata.get("source", r.collection)
+            date = r.metadata.get("collected_at", r.metadata.get("date", ""))
+            header = f"[KB: {r.collection} | score={r.score:.2f} | source={source}"
+            if date:
+                header += f" | {date[:10]}"
+            header += "]"
+            parts.append(f"{header}\n{r.text[:600]}")
+        return "\n\n---\n\n".join(parts)
+    except Exception as e:
+        return f"Intel KB search error: {e}"
+
+
 TOOL_REGISTRY = {
+    "search_intel_kb": tool_search_intel_kb,
     "search_web": tool_search_web,
+    "search_duckduckgo": tool_search_duckduckgo,
     "search_wikipedia": tool_search_wikipedia,
     "search_arxiv": tool_search_arxiv,
     "search_semantic_scholar": tool_search_semantic_scholar,
@@ -361,8 +413,37 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "search_intel_kb",
+            "description": (
+                "Semantic search across all OSIA intelligence collections: desk reports, INTSUM archives, "
+                "past research, MITRE ATT&CK, CVE database, CTI reports, TTP mappings, WikiLeaks cables, "
+                "Epstein files, HackerOne disclosures, and more. "
+                "Always call this first — it may surface directly relevant existing intel and avoid redundant external queries."
+            ),
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_web",
-            "description": "Search the live web for current events and news.",
+            "description": (
+                "Live web search (Tavily → DuckDuckGo fallback). "
+                "Use for: current events, recent news, threat activity, market data, product launches, living persons. "
+                "Skip for: well-established facts, historical topics, academic literature."
+            ),
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_duckduckgo",
+            "description": (
+                "DuckDuckGo web search — no quota. "
+                "Use ONLY if search_web already failed or returned poor results for this query. "
+                "Never call both search_web and search_duckduckgo for the same query."
+            ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
     },
@@ -370,7 +451,11 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_wikipedia",
-            "description": "Search Wikipedia for factual background.",
+            "description": (
+                "Wikipedia background lookup. "
+                "Use for: established entities (orgs, countries, historical events, concepts, known persons). "
+                "Skip for: breaking news, highly operational topics, financial data, niche technical specs."
+            ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
     },
@@ -378,7 +463,11 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_arxiv",
-            "description": "Search ArXiv for academic papers.",
+            "description": (
+                "ArXiv pre-print search. "
+                "Use for: novel STEM research, ML/AI papers, cryptography, emerging technical concepts. "
+                "Skip for: current events, politics, HUMINT, financial news, cultural topics."
+            ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
     },
@@ -386,19 +475,67 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "search_semantic_scholar",
-            "description": "Search Semantic Scholar for peer-reviewed literature.",
+            "description": (
+                "Semantic Scholar peer-reviewed literature search. "
+                "Use for: established scientific topics requiring citation-heavy sourcing. "
+                "Skip for: current events, HUMINT, geopolitics, finance, cyber threat intelligence."
+            ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
     },
 ]
 
+# Per-desk guidance on which tools are most appropriate.
+# Injected into the system prompt so the model makes informed choices upfront.
+_DESK_TOOL_GUIDANCE: dict[str, str] = {
+    "cyber-intelligence-and-warfare-desk": (
+        "search_intel_kb FIRST (MITRE ATT&CK, CVE database, CTI reports, TTP mappings, HackerOne disclosures are all in the KB), "
+        "then search_web for recent threat actor activity, CVE news, IOCs, campaign reporting. "
+        "search_wikipedia for background on APT groups or malware families not covered by KB results. "
+        "search_arxiv only for novel malware research or cryptographic vulnerabilities. "
+        "search_semantic_scholar is rarely appropriate."
+    ),
+    "human-intelligence-and-profiling-desk": (
+        "search_intel_kb FIRST (Epstein files, WikiLeaks cables, and past HUMINT research may surface direct leads), "
+        "then search_web for current activity, affiliations, recent statements. "
+        "search_wikipedia for background on subjects, organisations, or related events. "
+        "Academic tools are not appropriate for profiling."
+    ),
+    "cultural-and-theological-intelligence-desk": (
+        "search_intel_kb FIRST (past cultural/theological research and Watch Floor INTSUMs may have relevant context), "
+        "then search_wikipedia for deep doctrinal or historical background. "
+        "search_web for current movements, recent events, or contemporary actors. "
+        "Academic tools only if the topic is specifically scholarly religious studies."
+    ),
+    "geopolitical-and-security-desk": (
+        "search_intel_kb FIRST (WikiLeaks cables, past geopolitical INTSUMs, and desk archives may have directly relevant intel), "
+        "then search_web for current events, diplomatic developments, conflict reporting. "
+        "search_wikipedia for geopolitical context, state actors, historical background. "
+        "Academic tools rarely needed unless the topic involves strategic theory or sanctions research."
+    ),
+    "finance-and-economics-directorate": (
+        "search_intel_kb FIRST (past financial research and desk archives), "
+        "then search_web for market news, economic indicators, corporate reporting, sanctions. "
+        "search_wikipedia for company or institution background. "
+        "Academic tools are rarely appropriate for financial intelligence."
+    ),
+    "science-technology-and-commercial-desk": (
+        "search_intel_kb FIRST (past science/tech research may already cover this topic), "
+        "then search_arxiv and search_semantic_scholar for technical research, patents, emerging science. "
+        "search_web for recent product launches, commercial developments, company news. "
+        "Wikipedia for established technical background."
+    ),
+}
+
 # ReAct pattern — parsed when native tool_calls are absent
 _REACT_PATTERN = re.compile(
-    r"(?:SEARCH_WEB|SEARCH_WIKIPEDIA|SEARCH_ARXIV|SEARCH_SEMANTIC_SCHOLAR):\s*(.+)",
+    r"(?:SEARCH_INTEL_KB|SEARCH_WEB|SEARCH_DUCKDUCKGO|SEARCH_WIKIPEDIA|SEARCH_ARXIV|SEARCH_SEMANTIC_SCHOLAR):\s*(.+)",
     re.IGNORECASE,
 )
 _REACT_TOOL_MAP = {
+    "search_intel_kb": "search_intel_kb",
     "search_web": "search_web",
+    "search_duckduckgo": "search_duckduckgo",
     "search_wikipedia": "search_wikipedia",
     "search_arxiv": "search_arxiv",
     "search_semantic_scholar": "search_semantic_scholar",
@@ -439,16 +576,31 @@ async def run_research_loop_openai_compat(
         else ""
     )
 
+    desk_tool_guidance = _DESK_TOOL_GUIDANCE.get(
+        job.desk, "search_web for current context, search_wikipedia for background."
+    )
+
     messages = [
         {
             "role": "system",
             "content": (
                 f"You are an OSINT research analyst for the {job.desk}. "
-                "Conduct thorough multi-source research and produce a comprehensive "
-                f"intelligence brief with citations.{directives}\n\n"
+                f"Produce a focused intelligence brief with citations.{directives}\n\n"
+                "TOOL SELECTION — be deliberate and conservative:\n"
+                "• search_intel_kb: ALWAYS call this first. Searches all OSIA collections (MITRE ATT&CK, CVEs, CTI, WikiLeaks, Epstein, past research). If KB results are sufficient, skip external tools.\n"
+                "• search_web: current events, recent news, live threat data, market updates.\n"
+                "• search_duckduckgo: web fallback only — do NOT call if search_web already ran for the same query.\n"
+                "• search_wikipedia: background on established entities, concepts, or historical events.\n"
+                "• search_arxiv: novel STEM/ML/security research papers. Not for news or politics.\n"
+                "• search_semantic_scholar: peer-reviewed science. Not for HUMINT, cyber ops, or finance.\n\n"
+                f"For this desk, preferred tools are: {desk_tool_guidance}\n\n"
+                "Call only the tools that add distinct value for this specific topic. "
+                "2-3 tool calls total is usually sufficient; stop as soon as you have enough to write the brief. "
+                "Never run the same query through multiple tools.\n\n"
                 "If native tool calling is unavailable, use the ReAct format:\n"
-                "SEARCH_WEB: <query>\nSEARCH_WIKIPEDIA: <query>\n"
-                "SEARCH_ARXIV: <query>\nSEARCH_SEMANTIC_SCHOLAR: <query>"
+                "SEARCH_INTEL_KB: <query>\nSEARCH_WEB: <query>\nSEARCH_DUCKDUCKGO: <query>\n"
+                "SEARCH_WIKIPEDIA: <query>\nSEARCH_ARXIV: <query>\n"
+                "SEARCH_SEMANTIC_SCHOLAR: <query>"
             ),
         },
         {"role": "user", "content": f"Research topic: {job.topic}"},
@@ -572,29 +724,67 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
         types.Tool(
             function_declarations=[
                 types.FunctionDeclaration(
+                    name="search_intel_kb",
+                    description=(
+                        "Semantic search across all OSIA intelligence collections: desk reports, INTSUM archives, "
+                        "past research, MITRE ATT&CK, CVE database, CTI reports, TTP mappings, WikiLeaks cables, "
+                        "Epstein files, HackerOne disclosures. Always call this first."
+                    ),
+                    parameters=types.Schema(
+                        type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
+                    ),
+                ),
+                types.FunctionDeclaration(
                     name="search_web",
-                    description="Search the live web for current events and news.",
+                    description=(
+                        "Live web search (Tavily → DuckDuckGo fallback). "
+                        "Use for current events, recent news, threat activity, market data. "
+                        "Skip for well-established facts or academic literature."
+                    ),
+                    parameters=types.Schema(
+                        type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
+                    ),
+                ),
+                types.FunctionDeclaration(
+                    name="search_duckduckgo",
+                    description=(
+                        "DuckDuckGo web search — no quota. "
+                        "Use ONLY if search_web already failed for this query. "
+                        "Never call both search_web and search_duckduckgo for the same query."
+                    ),
                     parameters=types.Schema(
                         type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="search_wikipedia",
-                    description="Search Wikipedia for factual background.",
+                    description=(
+                        "Wikipedia background lookup. "
+                        "Use for established entities, historical events, concepts. "
+                        "Skip for breaking news, financial data, niche operational topics."
+                    ),
                     parameters=types.Schema(
                         type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="search_arxiv",
-                    description="Search ArXiv for academic papers.",
+                    description=(
+                        "ArXiv pre-print search. "
+                        "Use for novel STEM/ML/security research papers only. "
+                        "Not for current events, politics, HUMINT, or finance."
+                    ),
                     parameters=types.Schema(
                         type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
                     ),
                 ),
                 types.FunctionDeclaration(
                     name="search_semantic_scholar",
-                    description="Search Semantic Scholar for peer-reviewed literature.",
+                    description=(
+                        "Semantic Scholar peer-reviewed literature. "
+                        "Use for established scientific topics needing citation-heavy sourcing. "
+                        "Not for HUMINT, cyber ops, geopolitics, or finance."
+                    ),
                     parameters=types.Schema(
                         type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
                     ),
@@ -603,10 +793,18 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
         )
     ]
 
+    desk_tool_guidance = _DESK_TOOL_GUIDANCE.get(
+        job.desk, "search_intel_kb first, then search_web for current context, search_wikipedia for background."
+    )
     system = (
         f"You are an OSINT research analyst for the {job.desk}. "
-        "Conduct thorough research and produce a comprehensive intelligence brief with citations."
-        f"{directives}"
+        f"Produce a focused intelligence brief with citations.{directives}\n\n"
+        "TOOL SELECTION — be deliberate and conservative. "
+        "Always call search_intel_kb first — it searches all internal OSIA collections and may make external queries unnecessary. "
+        f"For this desk, preferred tools are: {desk_tool_guidance} "
+        "Call only the tools that add distinct value for this specific topic. "
+        "2-3 tool calls total is usually sufficient. "
+        "Never run the same query through multiple tools."
     )
     contents = [types.Content(role="user", parts=[types.Part(text=f"{system}\n\nResearch topic: {job.topic}")])]
 

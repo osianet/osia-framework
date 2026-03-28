@@ -20,7 +20,7 @@ Usage:
   uv run python scripts/seed_cyber_desk.py --mode ingest     # ingest mode (INTSUMs)
   uv run python scripts/seed_cyber_desk.py --mode both       # research + ingest
   uv run python scripts/seed_cyber_desk.py --dry-run         # print topics, no requests
-  uv run python scripts/seed_cyber_desk.py --delay 3         # seconds between requests
+  uv run python scripts/seed_cyber_desk.py --delay 5         # seconds between requests (min 3s — 20/min rate limit)
   uv run python scripts/seed_cyber_desk.py --category apt    # specific category only
   uv run python scripts/seed_cyber_desk.py --list-categories # show available categories
 """
@@ -189,7 +189,12 @@ def main():
     )
     parser.add_argument("--list-categories", action="store_true", help="Print available research categories and exit")
     parser.add_argument("--dry-run", action="store_true", help="Print what would be submitted without making requests")
-    parser.add_argument("--delay", type=float, default=1.5, help="Seconds to wait between requests (default: 1.5)")
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=4.0,
+        help="Seconds to wait between requests (default: 4.0). /research is rate-limited to 20/min — keep above 3s.",
+    )
     args = parser.parse_args()
 
     if args.list_categories:
