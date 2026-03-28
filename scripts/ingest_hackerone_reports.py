@@ -493,9 +493,11 @@ class HackerOneIngestor:
         it = _iter()
 
         _sentinel = object()
+        _exhausted = False
         while True:
             row = await loop.run_in_executor(None, next, it, _sentinel)
             if row is _sentinel:
+                _exhausted = True
                 break
 
             stats.records_seen += 1
@@ -516,6 +518,13 @@ class HackerOneIngestor:
             if limit and stats.records_seen - checkpoint >= limit:
                 logger.info("[%s] Reached --limit %d — stopping.", stats.split, limit)
                 break
+
+        if _exhausted:
+            logger.info(
+                "[%s] Dataset exhausted at %d total records — ingestion complete.",
+                stats.split,
+                stats.records_seen,
+            )
 
     # ------------------------------------------------------------------
     # Checkpointing

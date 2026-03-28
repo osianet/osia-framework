@@ -376,6 +376,10 @@ class EpsteinIngestor:
             await self._qdrant.close()
             if self._redis:
                 await self._redis.aclose()
+            # Allow gRPC background threads to release the GIL cleanly before
+            # the interpreter shuts down, preventing the PyGILState_Release
+            # fatal error on exit.
+            await asyncio.sleep(0.5)
 
     # ------------------------------------------------------------------
     # Collection setup
@@ -898,9 +902,11 @@ class EpsteinIngestor:
         it = _iter()
 
         _sentinel = object()
+        _exhausted = False
         while True:
             row = await loop.run_in_executor(None, next, it, _sentinel)
             if row is _sentinel:
+                _exhausted = True
                 break
 
             stats.records_seen += 1
@@ -917,6 +923,9 @@ class EpsteinIngestor:
             if limit and stats.records_seen - checkpoint >= limit:
                 logger.info("Reached --limit %d — stopping.", limit)
                 break
+
+        if _exhausted:
+            logger.info("Dataset exhausted at %d total records — ingestion complete.", stats.records_seen)
 
     # ------------------------------------------------------------------
     # Checkpointing
