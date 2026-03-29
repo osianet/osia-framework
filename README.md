@@ -37,9 +37,9 @@ After the research loop completes, the Chief of Staff selects the most appropria
 - **Cross-desk RAG** — always fans out across all 17 registered collections; uses extracted entity names when available, falls back to the raw query so collections like `epstein-files` and `wikileaks-cables` are searched even on sensitive topics.
 - **Boost collections** — each desk has a YAML-configured list of knowledge base collections that are searched with a *guaranteed* per-collection quota, independent of global cross-desk ranking. This ensures domain-specific KBs always contribute context:
   - Cyber desk boosts: `mitre-attack`, `cve-database`, `hackerone-reports`, `ttp-mappings`, `cti-reports`, `cybersecurity-attacks`
-  - Geopolitical and HUMINT desks boost: `wikileaks-cables`, `epstein-files`, `collection-directorate`
+  - Geopolitical and HUMINT desks boost: `wikileaks-cables`, `epstein-files`, `collection-directorate`, `iran-israel-war-2026`
   - Finance and Cultural desks boost: `wikileaks-cables`, `collection-directorate`
-  - Watch Floor boosts: `collection-directorate`, `osia_research_cache`, `wikileaks-cables`, `epstein-files`
+  - Watch Floor boosts: `collection-directorate`, `osia_research_cache`, `wikileaks-cables`, `epstein-files`, `iran-israel-war-2026`
 - **Real UTC timestamp** — injected at the top of every message; no tool call needed.
 
 ### 5. INTSUM Synthesis
@@ -98,13 +98,14 @@ OSIA Orchestrator (Chief of Staff)
      ▼                                                                 │
 DeskRegistry ◀──────── INTELLIGENCE CONTEXT injected ────────────────┘
      ├── Geopolitical & Security  (OpenRouter / Claude Sonnet 4.6)
-     │     boost: wikileaks-cables, epstein-files, collection-directorate
+     │     boost: wikileaks-cables, epstein-files, collection-directorate,
+     │            iran-israel-war-2026
      ├── Cultural & Theological   (Venice / venice-uncensored)
      │     boost: etymology-database, collection-directorate, wikileaks-cables
      ├── Science & Technology     (OpenRouter / Claude Sonnet 4.6)
      │     boost: cve-database, mitre-attack, collection-directorate
      ├── Human Intelligence       (Venice / venice-uncensored)
-     │     boost: epstein-files, wikileaks-cables
+     │     boost: epstein-files, wikileaks-cables, iran-israel-war-2026
      ├── Finance & Economics      (OpenRouter / GPT-4o mini)
      │     boost: wikileaks-cables, epstein-files, collection-directorate
      └── Cyber Intelligence       (Venice / mistral-31-24b)
@@ -114,7 +115,8 @@ DeskRegistry ◀──────── INTELLIGENCE CONTEXT injected ───
            ▼
      The Watch Floor (OpenRouter / Claude Sonnet 4.6)
            boost: collection-directorate, osia_research_cache,
-                  wikileaks-cables, epstein-files
+                  wikileaks-cables, epstein-files,
+                  iran-israel-war-2026
            │
            ├──▶ Signal Group — INTSUM Briefing
            ├──▶ PDF Archive (reports/)
