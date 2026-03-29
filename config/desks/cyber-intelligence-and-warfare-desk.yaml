@@ -19,6 +19,14 @@ qdrant:
   context_top_k: 5
   cross_desk_search: true
   cross_desk_top_k: 3
+  boost_collections:
+    - mitre-attack
+    - cve-database
+    - hackerone-reports
+    - ttp-mappings
+    - cti-reports
+    - cybersecurity-attacks
+  boost_top_k: 3
 
 tools:
   - search_web

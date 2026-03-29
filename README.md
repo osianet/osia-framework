@@ -28,17 +28,25 @@ The **Chief of Staff** (Venice `venice-uncensored`) reads the incoming task and 
 **Media Interception (PHINT):** If a social media link is received, a physical Moto g06 Android device connected via ADB records the screen for the duration of the video. Gemini Vision analyses the recording. Post metadata and comments are extracted first via `yt-dlp` (no phone required); ADB is only used as a fallback.
 
 ### 3. Background Research Worker
-A local oneshot service (`osia-research-worker.timer`, every 2 hours) drains a separate `osia:research_queue` from Redis. It runs a multi-turn Venice AI research loop per topic, then chunks and embeds the results into the `osia_research_cache` Qdrant collection. Topic deduplication is enforced via TTL-keyed Redis entries (default 24h cooldown).
+A local oneshot service (`osia-research-worker.timer`, every 2 hours) drains a separate `osia:research_queue` from Redis. It runs a multi-turn Venice AI research loop per topic, then chunks and embeds the results **directly into the originating desk's Qdrant collection** (falling back to `osia_research_cache` if no desk is specified). Every chunk payload carries `entity_tags` (the researched topic plus significant tokens) and `ingested_at_unix` (unix timestamp) for temporal decay scoring. Topic deduplication is enforced via TTL-keyed Redis entries (default 72h cooldown).
 
 ### 4. Desk Routing & RAG
-After the research loop completes, the Chief of Staff selects the most appropriate desk. Each desk query is enriched with:
-- **Per-desk RAG** — top-K results from that desk's Qdrant collection.
-- **Cross-desk RAG** — always fans out across all registered collections, including the Epstein Files, Cybersecurity Attacks, and HackerOne Reports knowledge bases. Falls back to the raw query when entity extraction produces nothing, so sensitive topics are never blocked from retrieval.
-- **Research cache** — recent background research on relevant entities.
+After the research loop completes, the Chief of Staff selects the most appropriate desk. Each desk query is enriched with three tiers of Qdrant context, all scored with a **70-day half-life temporal decay** so recent intelligence ranks above stale entries:
+
+- **Per-desk RAG** — top-K results from that desk's own Qdrant collection (contains past INTSUMs, research worker output, and RSS summaries routed here).
+- **Cross-desk RAG** — always fans out across all 17 registered collections; uses extracted entity names when available, falls back to the raw query so collections like `epstein-files` and `wikileaks-cables` are searched even on sensitive topics.
+- **Boost collections** — each desk has a YAML-configured list of knowledge base collections that are searched with a *guaranteed* per-collection quota, independent of global cross-desk ranking. This ensures domain-specific KBs always contribute context:
+  - Cyber desk boosts: `mitre-attack`, `cve-database`, `hackerone-reports`, `ttp-mappings`, `cti-reports`, `cybersecurity-attacks`
+  - Geopolitical and HUMINT desks boost: `wikileaks-cables`, `epstein-files`, `collection-directorate`
+  - Finance and Cultural desks boost: `wikileaks-cables`, `collection-directorate`
+  - Watch Floor boosts: `collection-directorate`, `osia_research_cache`, `wikileaks-cables`, `epstein-files`
 - **Real UTC timestamp** — injected at the top of every message; no tool call needed.
 
 ### 5. INTSUM Synthesis
-The **Watch Floor** receives all desk reports and synthesises them into a final **INTSUM** (Intelligence Summary) — a structured briefing with sourced citations, reliability ratings, and an overall confidence assessment. The finished report is delivered back to the Signal group.
+The **Watch Floor** receives all desk reports and synthesises them into a final **INTSUM** (Intelligence Summary) — a structured briefing with sourced citations, reliability ratings, and an overall confidence assessment. The finished INTSUM is then **written back into the desk's Qdrant collection**, creating a self-reinforcing knowledge accumulation loop where every analysis enriches future RAG context. The finished report is also archived as a PDF and delivered back to the Signal group.
+
+### 6. Daily SITREP
+The 07:00 UTC daily SITREP (`osia-daily-sitrep.timer`) now runs **Qdrant pre-seeding** before building its prompt: it fans out four standing intelligence queries (geopolitics, cyber, finance, technology) across the full cross-desk store with temporal decay, pulling accumulated OSIA intelligence from all research archives and knowledge bases. This historical context is injected as an "ACCUMULATED OSIA INTELLIGENCE" block alongside the 24-hour RSS digest, so six months of embedded research informs every morning briefing — even on days with sparse RSS coverage.
 
 ---
 
@@ -81,29 +89,51 @@ OSIA Orchestrator (Chief of Staff)
      ├── yt-dlp social metadata (comments, captions, stats)       ← primary for social posts
      ├── Entity Extractor → research jobs → osia:research_queue
      ├── Desk Router (Venice uncensored)
-     │
-     ▼
-DeskRegistry
+     ├── RAG Context Builder ─────────────────────────────────────────┐
+     │     ├── [1] Desk primary collection (top-K, 70-day decay)      │
+     │     ├── [2] Cross-desk fan-out (all 17 collections, top-3)     │
+     │     └── [3] Boost collections (desk-specific KB quota,         │
+     │               guaranteed hits from MITRE/CVE/WikiLeaks/etc.)   │
+     │                                                                 │
+     ▼                                                                 │
+DeskRegistry ◀──────── INTELLIGENCE CONTEXT injected ────────────────┘
      ├── Geopolitical & Security  (OpenRouter / Claude Sonnet 4.6)
+     │     boost: wikileaks-cables, epstein-files, collection-directorate
      ├── Cultural & Theological   (Venice / venice-uncensored)
+     │     boost: etymology-database, collection-directorate, wikileaks-cables
      ├── Science & Technology     (OpenRouter / Claude Sonnet 4.6)
+     │     boost: cve-database, mitre-attack, collection-directorate
      ├── Human Intelligence       (Venice / venice-uncensored)
+     │     boost: epstein-files, wikileaks-cables
      ├── Finance & Economics      (OpenRouter / GPT-4o mini)
+     │     boost: wikileaks-cables, epstein-files, collection-directorate
      └── Cyber Intelligence       (Venice / mistral-31-24b)
+           boost: mitre-attack, cve-database, hackerone-reports,
+                  ttp-mappings, cti-reports, cybersecurity-attacks
            │
            ▼
      The Watch Floor (OpenRouter / Claude Sonnet 4.6)
+           boost: collection-directorate, osia_research_cache,
+                  wikileaks-cables, epstein-files
            │
-           ▼
-     Signal Group — INTSUM Briefing
+           ├──▶ Signal Group — INTSUM Briefing
+           ├──▶ PDF Archive (reports/)
+           └──▶ Qdrant write-back (analysis → desk collection)
 
 Background:
 osia-research-worker.timer (every 2h)
-     └── Venice AI research loop → Qdrant osia_research_cache
+     └── Venice AI research loop → Qdrant desk collection
+           (entity_tags + ingested_at_unix stamped on every chunk)
+
+osia-daily-sitrep.timer (07:00 UTC)
+     ├── Drain Redis osia:rss:daily_digest
+     ├── Qdrant pre-seed: 4 standing queries × cross-desk search (70-day decay)
+     └── Push enriched SITREP task → osia:task_queue
 
 Qdrant Collections (RAG namespaces):
-     ├── per-desk collections (one per desk slug)
-     ├── osia_research_cache   (background research worker output)
+     ├── per-desk collections (one per desk slug — primary + research worker + INTSUM write-back)
+     ├── collection-directorate (RSS summaries, routing fallback)
+     ├── osia_research_cache   (fallback for unrouted research jobs)
      ├── epstein-files         (declassified government documents)
      ├── wikileaks-cables      (124K US diplomatic cables 1966–2010)
      ├── cybersecurity-attacks (13K global cyber incidents)
@@ -112,7 +142,8 @@ Qdrant Collections (RAG namespaces):
      ├── cti-reports           (9.7K NER-annotated CTI report texts)
      ├── ttp-mappings          (20.7K threat report snippets with ATT&CK labels)
      ├── cve-database          (280K NVD CVEs 1999–2025)
-     └── cti-bench             (5.6K analyst benchmark scenarios)
+     ├── cti-bench             (5.6K analyst benchmark scenarios)
+     └── etymology-database    (historical word/term/concept origins)
 ```
 
 ---

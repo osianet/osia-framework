@@ -16,7 +16,7 @@ Environment variables:
 import asyncio
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -71,6 +71,8 @@ class QdrantConfig:
     context_top_k: int = DEFAULT_CONTEXT_TOP_K
     cross_desk_search: bool = True
     cross_desk_top_k: int = DEFAULT_CROSS_DESK_TOP_K
+    boost_collections: list[str] = field(default_factory=list)
+    boost_top_k: int = 2
 
 
 @dataclass
@@ -167,6 +169,8 @@ def _parse_desk_yaml(path: Path, mandate_text: str, citation_protocol: str) -> D
         context_top_k=int(qdrant_block.get("context_top_k", DEFAULT_CONTEXT_TOP_K)),
         cross_desk_search=bool(qdrant_block.get("cross_desk_search", True)),
         cross_desk_top_k=int(qdrant_block.get("cross_desk_top_k", DEFAULT_CROSS_DESK_TOP_K)),
+        boost_collections=list(qdrant_block.get("boost_collections") or []),
+        boost_top_k=int(qdrant_block.get("boost_top_k", 2)),
     )
 
     tools: list[str] = list(raw["tools"] or [])
