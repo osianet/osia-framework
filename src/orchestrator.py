@@ -1180,7 +1180,8 @@ class OsiaOrchestrator:
                     logger.warning("Infographic delivery failed (non-fatal): %s", img_err)
 
             # Archive a PDF copy of every completed analysis
-            logger.info("Attempting PDF archival for desk %s, source %s", assigned_desk, source)
+            if os.getenv("OSIA_DEBUG_PDF", "false").lower() == "true":
+                logger.info("Attempting PDF archival for desk %s, source %s", assigned_desk, source)
             try:
                 await asyncio.get_event_loop().run_in_executor(
                     None,
