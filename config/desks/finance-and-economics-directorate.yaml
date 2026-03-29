@@ -25,6 +25,7 @@ qdrant:
     - collection-directorate
     - icij-offshore-leaks
     - yahoo-finance
+    - ofac-sanctions
   boost_top_k: 3
 
 tools:
