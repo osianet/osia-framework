@@ -24,6 +24,7 @@ qdrant:
     - epstein-files
     - collection-directorate
     - icij-offshore-leaks
+    - yahoo-finance
   boost_top_k: 3
 
 tools:
