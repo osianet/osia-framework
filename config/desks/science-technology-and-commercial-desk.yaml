@@ -19,6 +19,11 @@ qdrant:
   context_top_k: 5
   cross_desk_search: true
   cross_desk_top_k: 3
+  boost_collections:
+    - cve-database
+    - mitre-attack
+    - collection-directorate
+  boost_top_k: 2
 
 tools:
   - search_web

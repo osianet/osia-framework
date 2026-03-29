@@ -21,6 +21,66 @@ logger = logging.getLogger("osia.sitrep")
 
 DAILY_DIGEST_KEY = "osia:rss:daily_digest"
 
+# Standing queries for Qdrant pre-seed — one per SITREP section.
+# These pull accumulated OSIA intelligence into the briefing regardless of the
+# day's RSS haul, giving the Watch Floor six months of context to draw on.
+_SITREP_SEED_QUERIES = [
+    ("geopolitics", "geopolitical conflicts military threats diplomacy sanctions state actors"),
+    ("cyber", "cyber attacks threat actors nation state intrusions malware campaigns"),
+    ("finance", "financial market risks economic policy trade sanctions fiscal instability"),
+    ("technology", "emerging technology AI developments scientific breakthroughs dual-use"),
+]
+_SEED_TOP_K = 3  # results per standing query
+_SEED_MIN_SCORE = 0.45  # discard low-confidence matches
+
+
+async def _pull_qdrant_seed() -> str | None:
+    """
+    Run standing intelligence queries against all OSIA Qdrant collections and
+    return a formatted 'ACCUMULATED OSIA INTELLIGENCE' block, or None on failure.
+    Uses 70-day half-life temporal decay so stale entries rank lower.
+    """
+    try:
+        from src.intelligence.qdrant_store import QdrantStore
+
+        store = QdrantStore()
+        sections: list[str] = []
+
+        async def _query(label: str, q: str) -> tuple[str, list]:
+            results = await store.cross_desk_search(q, top_k=_SEED_TOP_K, decay_half_life_days=70.0)
+            filtered = [r for r in results if r.score >= _SEED_MIN_SCORE]
+            return label, filtered
+
+        pairs = await asyncio.gather(*[_query(lbl, q) for lbl, q in _SITREP_SEED_QUERIES])
+
+        for label, hits in pairs:
+            if not hits:
+                continue
+            block_lines = [f"### {label.upper()} — accumulated intelligence"]
+            for r in hits:
+                src = r.metadata.get("source", r.collection)
+                ts = r.metadata.get("collected_at", r.metadata.get("timestamp", ""))
+                date_str = ts[:10] if ts else ""
+                block_lines.append(
+                    f"[{r.collection} | {src}{' | ' + date_str if date_str else ''} | score={r.score:.2f}]\n{r.text}"
+                )
+            sections.append("\n\n".join(block_lines))
+
+        if not sections:
+            return None
+
+        header = (
+            "## ACCUMULATED OSIA INTELLIGENCE\n\n"
+            "The following entries were retrieved from OSIA's long-term knowledge base "
+            "(research archives, past INTSUMs, RSS summaries, and KB collections). "
+            "Use these to provide historical context and continuity in the SITREP.\n\n"
+        )
+        return header + "\n\n---\n\n".join(sections)
+
+    except Exception as exc:
+        logger.warning("Qdrant SITREP pre-seed failed (non-fatal): %s", exc)
+        return None
+
 
 async def _drain_digest(r: redis.Redis) -> list[str]:
     """Pop all items from the daily digest list atomically."""
@@ -50,9 +110,16 @@ async def trigger_sitrep():
 
     r = redis.from_url(redis_url)
 
-    # Pull all RSS intelligence collected since last SITREP
-    digest_items = await _drain_digest(r)
-    logger.info("Collected %d RSS intelligence items for today's briefing.", len(digest_items))
+    # Pull RSS digest and Qdrant accumulated intelligence concurrently
+    digest_items, qdrant_seed = await asyncio.gather(
+        _drain_digest(r),
+        _pull_qdrant_seed(),
+    )
+    logger.info(
+        "SITREP seed: %d RSS items, Qdrant pre-seed %s",
+        len(digest_items),
+        "loaded" if qdrant_seed else "unavailable",
+    )
 
     # Build the digest section for the SITREP prompt
     if digest_items:
@@ -70,10 +137,14 @@ async def trigger_sitrep():
             "Rely on live research tools (Tavily web search, Wikipedia, ArXiv) to gather current events."
         )
 
+    # Inject Qdrant accumulated intelligence if available
+    qdrant_section = f"\n\n{qdrant_seed}" if qdrant_seed else ""
+
     query = (
         f"Generate a Daily SITREP (Situational Report) for {today}.\n\n"
         f"## Pre-Collected Intelligence\n\n"
-        f"{digest_section}\n\n"
+        f"{digest_section}"
+        f"{qdrant_section}\n\n"
         f"## Instructions\n\n"
         f"Using the pre-collected intelligence above AND your research tools, produce a formal "
         f"Intelligence Summary (INTSUM) covering:\n"

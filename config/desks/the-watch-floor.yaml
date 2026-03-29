@@ -18,7 +18,13 @@ qdrant:
   collection: the-watch-floor
   context_top_k: 5
   cross_desk_search: true
-  cross_desk_top_k: 3
+  cross_desk_top_k: 5
+  boost_collections:
+    - collection-directorate
+    - osia_research_cache
+    - wikileaks-cables
+    - epstein-files
+  boost_top_k: 3
 
 tools:
   - search_web

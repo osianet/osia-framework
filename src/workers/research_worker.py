@@ -1110,7 +1110,10 @@ async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, q
         return
     embeddings = await embed_texts(chunks, http)
     now = datetime.now(UTC).isoformat()
+    now_unix = int(time.time())
     collection = job.desk if job.desk else RESEARCH_COLLECTION
+    # Entity tags: the researched topic itself + individual tokens for filter matching
+    entity_tags = list({job.topic} | {t for t in job.topic.split() if len(t) > 3})
     points = []
     for i, (chunk, vector) in enumerate(zip(chunks, embeddings, strict=False)):
         point_id = int(hashlib.md5(f"{job.job_id}:{i}".encode()).hexdigest()[:8], 16)  # noqa: S324
@@ -1127,7 +1130,9 @@ async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, q
                     "total_chunks": len(chunks),
                     "triggered_by": job.triggered_by,
                     "collected_at": now,
+                    "ingested_at_unix": now_unix,
                     "source": "research_worker",
+                    "entity_tags": entity_tags,
                 },
             }
         )

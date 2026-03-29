@@ -14,7 +14,9 @@ Environment variables:
 import asyncio
 import hashlib
 import logging
+import math
 import os
+import time
 import uuid
 from dataclasses import dataclass, field
 
@@ -123,6 +125,23 @@ class QdrantStore:
             return [[0.0] * EMBEDDING_DIM for _ in texts]
 
     # ------------------------------------------------------------------
+    # Temporal decay
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _apply_decay(results: list["SearchResult"], half_life_days: float) -> list["SearchResult"]:
+        """Re-score results with exponential time decay on ingested_at_unix payload field.
+        Points without the field are left unmodified (no penalty for legacy data).
+        """
+        now = time.time()
+        for r in results:
+            ts = r.metadata.get("ingested_at_unix")
+            if ts is not None:
+                age_days = (now - float(ts)) / 86400.0
+                r.score = r.score * math.exp(-math.log(2) * age_days / half_life_days)
+        return sorted(results, key=lambda x: x.score, reverse=True)
+
+    # ------------------------------------------------------------------
     # Point ID generation
     # ------------------------------------------------------------------
 
@@ -181,7 +200,7 @@ class QdrantStore:
         point_id = self._point_id(text)
         vector = await self._embed(text)
 
-        payload = {"text": text, **metadata}
+        payload = {"text": text, "ingested_at_unix": int(time.time()), **metadata}
 
         await self._client.upsert(
             collection_name=collection,
@@ -206,10 +225,13 @@ class QdrantStore:
         query: str,
         top_k: int,
         filters: dict | None = None,
+        decay_half_life_days: float | None = None,
     ) -> list[SearchResult]:
         """
         Embed query and return top-K semantically similar points.
         Supports optional payload filters (Qdrant filter dict format).
+        If decay_half_life_days is set, re-scores results by exponential time decay
+        on ingested_at_unix and re-sorts before returning.
         """
         vector = await self._embed(query)
 
@@ -235,7 +257,7 @@ class QdrantStore:
 
         results = []
         for hit in hits:
-            payload = hit.payload or {}
+            payload = dict(hit.payload or {})
             text = payload.pop("text", "")
             results.append(
                 SearchResult(
@@ -245,6 +267,8 @@ class QdrantStore:
                     metadata=payload,
                 )
             )
+        if decay_half_life_days:
+            results = self._apply_decay(results, decay_half_life_days)
         return results
 
     # ------------------------------------------------------------------
@@ -256,10 +280,12 @@ class QdrantStore:
         query: str,
         top_k: int,
         entity_tags: list[str] | None = None,
+        decay_half_life_days: float | None = None,
     ) -> list[SearchResult]:
         """
         Fan out across all registered desk collections + osia:research_cache.
         Rank by score descending, deduplicate by point ID.
+        If decay_half_life_days is set, applies exponential recency decay before final ranking.
         """
         vector = await self._embed(query)
 
@@ -318,6 +344,8 @@ class QdrantStore:
             if point_id not in seen or result.score > seen[point_id].score:
                 seen[point_id] = result
 
-        # Sort by score descending, return top_k
+        # Sort by score descending, apply optional decay, return top_k
         ranked = sorted(seen.values(), key=lambda r: r.score, reverse=True)
+        if decay_half_life_days:
+            ranked = self._apply_decay(ranked, decay_half_life_days)
         return ranked[:top_k]

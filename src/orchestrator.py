@@ -874,9 +874,12 @@ class OsiaOrchestrator:
         entity_names: list[str],
     ) -> str | None:
         """
-        Fetch desk-specific and cross-desk Qdrant results, deduplicate by point ID,
-        and format an ## INTELLIGENCE CONTEXT block. Returns None if no results.
+        Fetch desk-specific, cross-desk, and boost-collection Qdrant results.
+        Applies 70-day half-life temporal decay so recent intel ranks higher.
+        Deduplicates by text fingerprint and formats an ## INTELLIGENCE CONTEXT block.
+        Returns None if no results.
         """
+        desk_cfg = None
         try:
             desk_cfg = self.desk_registry.get(assigned_desk)
             collection = desk_cfg.qdrant.collection
@@ -885,39 +888,62 @@ class OsiaOrchestrator:
             collection = "collection-directorate"
             top_k = 5
 
+        # Primary desk collection search with temporal decay
         results = []
         try:
-            results = await self.qdrant.search(collection, query, top_k)
+            results = await self.qdrant.search(collection, query, top_k, decay_half_life_days=70.0)
         except Exception as e:
             logger.warning("Qdrant desk search unavailable (%s) — proceeding without context", e)
 
-        # Cross-desk search always runs — uses entity names when available, falls back
-        # to the raw query so collections like epstein-files are searched even when
-        # entity extraction produces nothing (e.g. Gemini being conservative on sensitive topics).
+        # Cross-desk search — uses entity names when available, falls back to raw query.
+        # Always runs so collections like epstein-files surface even without entity extraction.
         cross_search_query = " ".join(entity_names) if entity_names else query
         cross_results = []
         try:
-            cross_results = await self.qdrant.cross_desk_search(cross_search_query, top_k=3)
+            cross_results = await self.qdrant.cross_desk_search(cross_search_query, top_k=3, decay_half_life_days=70.0)
         except Exception as e:
             logger.warning("Qdrant cross-desk search unavailable (%s)", e)
 
-        # Deduplicate by point ID (SearchResult has no id field; deduplicate by text+collection)
-        seen: set[tuple[str, str]] = set()
+        # Boost collections — guaranteed hits from desk-specific KB collections
+        # regardless of their global ranking vs. other collections.
+        boost_results = []
+        if desk_cfg and desk_cfg.qdrant.boost_collections:
+            boost_top_k = desk_cfg.qdrant.boost_top_k
+
+            async def _search_boost(col: str) -> list:
+                try:
+                    return await self.qdrant.search(col, cross_search_query, boost_top_k, decay_half_life_days=70.0)
+                except Exception as e:
+                    logger.warning("Boost collection '%s' unavailable: %s", col, e)
+                    return []
+
+            boost_batches = await asyncio.gather(*[_search_boost(col) for col in desk_cfg.qdrant.boost_collections])
+            for batch in boost_batches:
+                boost_results.extend(batch)
+
+        # Deduplicate by (collection, text fingerprint), keeping highest-scoring copy
+        seen: dict[tuple[str, str], float] = {}
         combined = []
-        for r in results + cross_results:
+        for r in results + cross_results + boost_results:
             key = (r.collection, r.text[:120])
-            if key not in seen:
-                seen.add(key)
+            if key not in seen or r.score > seen[key]:
+                seen[key] = r.score
                 combined.append(r)
 
         if not combined:
             return None
 
+        # Sort combined results by score descending for presentation
+        combined.sort(key=lambda r: r.score, reverse=True)
+
         lines = ["## INTELLIGENCE CONTEXT\n"]
         for r in combined:
             reliability = r.metadata.get("reliability_tier", "?")
-            timestamp = r.metadata.get("timestamp", "")
-            lines.append(f"[{r.collection}] (Reliability: {reliability}) {timestamp}\n{r.text}\n")
+            timestamp = r.metadata.get("timestamp", r.metadata.get("collected_at", ""))
+            source_label = r.metadata.get("source", r.collection)
+            lines.append(
+                f"[{r.collection} | {source_label}] (Reliability: {reliability}, Score: {r.score:.2f}) {timestamp[:10] if timestamp else ''}\n{r.text}\n"
+            )
         return "\n".join(lines)
 
     # ------------------------------------------------------------------
