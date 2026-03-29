@@ -225,12 +225,14 @@ async def research(request: Request, body: ResearchRequest, _=Depends(_check_aut
 
     label = body.label or "external"
     dedup_key = hashlib.md5(body.topic.lower().strip().encode(), usedforsecurity=False).hexdigest()
-    seen_key = f"osia:research:seen:{dedup_key}"
+    # Use a separate namespace from the research worker's post-processing seen keys
+    # (osia:research:seen:{md5}) to avoid pre-poisoning the worker's dedup check.
+    queued_key = f"osia:research:queued:{dedup_key}"
 
-    already_seen = await r.exists(seen_key)
-    if already_seen:
+    already_queued = await r.exists(queued_key)
+    if already_queued:
         depth = await r.llen(RESEARCH_QUEUE)
-        logger.debug("Research dedup skip: topic already seen (key=%s)", seen_key)
+        logger.debug("Research dedup skip: topic already queued (key=%s)", queued_key)
         return {"ok": True, "queued": False, "reason": "duplicate", "queue_depth": depth}
 
     task = {
@@ -241,9 +243,10 @@ async def research(request: Request, body: ResearchRequest, _=Depends(_check_aut
     }
     depth = await r.rpush(RESEARCH_QUEUE, json.dumps(task))
 
-    # Mirror the research worker's dedup TTL (default 24 h)
+    # TTL matches the research worker's cooldown so the same topic can be re-submitted
+    # after the cooldown window expires (same as before, different key namespace).
     cooldown_hours = int(os.getenv("RESEARCH_COOLDOWN_HOURS", "24"))
-    await r.setex(seen_key, cooldown_hours * 3600, "1")
+    await r.setex(queued_key, cooldown_hours * 3600, "1")
 
     # Log only internally-generated depth — label is user-controlled
     logger.info("Research topic queued depth=%d", depth)

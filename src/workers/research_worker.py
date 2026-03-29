@@ -187,15 +187,15 @@ class QdrantClient:
         self._http = http
         self._headers = {"api-key": QDRANT_API_KEY, "Content-Type": "application/json"}
 
-    async def ensure_collection(self):
+    async def ensure_collection(self, collection: str = RESEARCH_COLLECTION):
         check = await self._http.get(
-            f"{QDRANT_URL}/collections/{RESEARCH_COLLECTION}",
+            f"{QDRANT_URL}/collections/{collection}",
             headers=self._headers,
         )
         if check.status_code == 200:
             return
         resp = await self._http.put(
-            f"{QDRANT_URL}/collections/{RESEARCH_COLLECTION}",
+            f"{QDRANT_URL}/collections/{collection}",
             headers=self._headers,
             json={
                 "vectors": {"size": EMBEDDING_DIM, "distance": "Cosine"},
@@ -203,17 +203,17 @@ class QdrantClient:
             },
         )
         resp.raise_for_status()
-        logger.info("Created Qdrant collection: %s", RESEARCH_COLLECTION)
+        logger.info("Created Qdrant collection: %s", collection)
 
-    async def upsert_points(self, points: list[dict]):
+    async def upsert_points(self, points: list[dict], collection: str = RESEARCH_COLLECTION):
         resp = await self._http.put(
-            f"{QDRANT_URL}/collections/{RESEARCH_COLLECTION}/points",
+            f"{QDRANT_URL}/collections/{collection}/points",
             headers=self._headers,
             json={"points": points},
             timeout=30.0,
         )
         resp.raise_for_status()
-        logger.info("Upserted %d points into %s", len(points), RESEARCH_COLLECTION)
+        logger.info("Upserted %d points into %s", len(points), collection)
 
 
 # ---------------------------------------------------------------------------
@@ -1110,6 +1110,7 @@ async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, q
         return
     embeddings = await embed_texts(chunks, http)
     now = datetime.now(UTC).isoformat()
+    collection = job.desk if job.desk else RESEARCH_COLLECTION
     points = []
     for i, (chunk, vector) in enumerate(zip(chunks, embeddings, strict=False)):
         point_id = int(hashlib.md5(f"{job.job_id}:{i}".encode()).hexdigest()[:8], 16)  # noqa: S324
@@ -1130,7 +1131,8 @@ async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, q
                 },
             }
         )
-    await qdrant.upsert_points(points)
+    await qdrant.ensure_collection(collection)
+    await qdrant.upsert_points(points, collection)
 
 
 # ---------------------------------------------------------------------------
@@ -1163,11 +1165,6 @@ async def main():
 
     async with httpx.AsyncClient(timeout=60.0) as http:
         qdrant = QdrantClient(http)
-        try:
-            await qdrant.ensure_collection()
-        except Exception as e:
-            logger.error("Failed to ensure Qdrant collection: %s", e)
-            return
 
         # Drain the queue
         jobs: list[ResearchJob] = []
