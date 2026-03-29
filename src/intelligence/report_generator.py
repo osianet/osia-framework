@@ -6,6 +6,7 @@ with an intelligence agency + cyber aesthetic template.
 
 import base64
 import logging
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -77,6 +78,11 @@ def generate_intsum_pdf(
     """
     # Lazy import — WeasyPrint is only needed at call time, keeping startup fast.
     from weasyprint import HTML  # noqa: PLC0415
+
+    # Suppress verbose WeasyPrint and fontTools logging unless explicitly enabled
+    if os.getenv("OSIA_DEBUG_PDF", "false").lower() != "true":
+        logging.getLogger("weasyprint").setLevel(logging.ERROR)
+        logging.getLogger("fontTools").setLevel(logging.ERROR)
 
     output_dir = reports_dir or _REPORTS_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
