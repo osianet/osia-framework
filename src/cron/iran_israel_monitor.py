@@ -22,10 +22,11 @@ RESEARCH_QUEUE_KEY = "osia:research_queue"
 SEEN_TOPICS_KEY = "osia:research:seen_topics"
 DESK = "iran-israel-war-2026"
 
+
 async def trigger_monitor():
     load_dotenv()
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    
+
     today = datetime.now(UTC).strftime("%Y-%m-%d")
     topics = [
         f"Latest political developments in the Iran-Israel conflict as of {today}",
@@ -34,7 +35,7 @@ async def trigger_monitor():
     ]
 
     r = aioredis.from_url(redis_url, decode_responses=True)
-    
+
     enqueued = 0
     for topic in topics:
         normalised = topic.lower().strip()
@@ -42,7 +43,7 @@ async def trigger_monitor():
         if already_seen:
             logger.debug("Skipping already-seen topic: %r", topic)
             continue
-            
+
         payload = json.dumps(
             {
                 "job_id": str(uuid.uuid4()),
@@ -53,19 +54,20 @@ async def trigger_monitor():
                 "triggered_by": "iran_israel_monitor",
             }
         )
-        
+
         await r.rpush(RESEARCH_QUEUE_KEY, payload)
         await r.sadd(SEEN_TOPICS_KEY, normalised)
-        
+
         logger.info(
             "Enqueued research job for %r → %s (triggered_by: iran_israel_monitor)",
             topic,
             DESK,
         )
         enqueued += 1
-        
+
     logger.info("Enqueued %d new research jobs for the Iran-Israel monitor.", enqueued)
     await r.aclose()
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
