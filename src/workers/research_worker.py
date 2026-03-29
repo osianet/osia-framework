@@ -583,7 +583,10 @@ TOOL_SCHEMAS = [
             "description": (
                 "Semantic search across all OSIA intelligence collections: desk reports, INTSUM archives, "
                 "past research, MITRE ATT&CK, CVE database, CTI reports, TTP mappings, WikiLeaks cables, "
-                "Epstein files, HackerOne disclosures, and more. "
+                "Epstein files, HackerOne disclosures, ICIJ Offshore Leaks (Panama Papers / Pandora Papers / "
+                "Paradise Papers — 810K offshore entities, beneficial owners, shell companies), "
+                "OFAC SDN sanctions list (18K+ sanctioned individuals and entities), "
+                "Yahoo Finance news articles and earnings call transcripts. "
                 "Always call this first — it may surface directly relevant existing intel and avoid redundant external queries."
             ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
@@ -735,18 +738,22 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
         "Academic tools only if the topic is specifically scholarly religious studies."
     ),
     "geopolitical-and-security-desk": (
-        "search_intel_kb FIRST (WikiLeaks cables, past geopolitical INTSUMs, and desk archives may have directly relevant intel), "
-        "search_aleph when the topic involves state actors, oligarchs, sanctioned entities, or offshore financial networks. "
+        "search_intel_kb FIRST (WikiLeaks cables, past geopolitical INTSUMs, desk archives, and OFAC SDN sanctions list "
+        "may have directly relevant intel on state actors, sanctioned individuals, or blocked entities). "
+        "search_aleph when the topic involves oligarchs, sanctioned entities, or offshore financial networks. "
         "search_web for current events, diplomatic developments, conflict reporting. "
         "search_wikipedia for geopolitical context, state actors, historical background. "
         "Academic tools rarely needed unless the topic involves strategic theory or sanctions research."
     ),
     "finance-and-economics-directorate": (
-        "search_intel_kb FIRST (past financial research and desk archives), "
-        "search_aleph for corporate ownership, shell companies, offshore entities, PEP connections, and sanctions exposure. "
-        "search_web for market news, economic indicators, corporate reporting, sanctions. "
+        "search_intel_kb FIRST — the KB contains ICIJ Offshore Leaks (Panama Papers, Pandora Papers, Paradise Papers: "
+        "810K+ offshore entities, beneficial owners, shell company chains, intermediaries), "
+        "OFAC SDN sanctions list (18K+ sanctioned individuals and entities with aliases, DOB, passports, addresses), "
+        "Yahoo Finance news articles and earnings call transcripts, WikiLeaks cables, and Epstein files. "
+        "search_aleph for additional corporate ownership, PEP connections, and leak datasets not yet in KB. "
+        "search_web for market news, economic indicators, corporate reporting, recent sanctions updates. "
         "search_wikipedia for company or institution background. "
-        "Academic tools are rarely appropriate for financial intelligence."
+        "search_arxiv for economic research papers or monetary policy studies."
     ),
     "science-technology-and-commercial-desk": (
         "search_intel_kb FIRST (past science/tech research may already cover this topic), "
@@ -821,7 +828,7 @@ async def run_research_loop_openai_compat(
                 f"You are an OSINT research analyst for the {job.desk}. "
                 f"Produce a focused intelligence brief with citations.{directives}\n\n"
                 "TOOL SELECTION — be deliberate and conservative:\n"
-                "• search_intel_kb: ALWAYS call this first. Searches all OSIA collections (MITRE ATT&CK, CVEs, CTI, WikiLeaks, Epstein, past research). If KB results are sufficient, skip external tools.\n"
+                "• search_intel_kb: ALWAYS call this first. Searches all OSIA collections (MITRE ATT&CK, CVEs, CTI, WikiLeaks, Epstein, ICIJ Offshore Leaks, OFAC sanctions, Yahoo Finance, past research). If KB results are sufficient, skip external tools.\n"
                 "• search_web: current events, recent news, live threat data, market updates.\n"
                 "• search_duckduckgo: web fallback only — do NOT call if search_web already ran for the same query.\n"
                 "• search_wikipedia: background on established entities, concepts, or historical events.\n"
@@ -962,7 +969,10 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
                     description=(
                         "Semantic search across all OSIA intelligence collections: desk reports, INTSUM archives, "
                         "past research, MITRE ATT&CK, CVE database, CTI reports, TTP mappings, WikiLeaks cables, "
-                        "Epstein files, HackerOne disclosures. Always call this first."
+                        "Epstein files, HackerOne disclosures, ICIJ Offshore Leaks (Panama Papers / Pandora Papers / "
+                        "Paradise Papers — 810K offshore entities and beneficial owners), "
+                        "OFAC SDN sanctions list (18K+ sanctioned individuals and entities), "
+                        "Yahoo Finance news and earnings call transcripts. Always call this first."
                     ),
                     parameters=types.Schema(
                         type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
