@@ -6,9 +6,9 @@ Venice AI (uncensored/permissive model routing per desk), then chunks and
 embeds results into Qdrant for retrieval-augmented generation at report time.
 
 Desk → model routing:
-  HUMINT / Cultural / Geopolitical  → venice-uncensored (no guardrails, ReAct tool use)
-  Cyber                             → mistral-31-24b    (Venice-private, native FC)
-  Finance / Science / default       → mistral-small-3-2-24b-instruct (cheap, native FC)
+  HUMINT / Cultural / Geopolitical  → venice-uncensored          (no guardrails, ReAct tool use)
+  Cyber / Finance                   → mistral-31-24b             (Venice-private, native FC)
+  Science / default                 → mistral-small-3-2-24b-instruct (cheap, native FC)
 
 Fallback chain: Venice → OpenRouter → Gemini
 
@@ -105,6 +105,9 @@ UNCENSORED_DESKS = {
 CYBER_DESKS = {
     "cyber-intelligence-and-warfare-desk",
 }
+FINANCE_DESKS = {
+    "finance-and-economics-directorate",
+}
 
 RESEARCH_COLLECTION = "osia_research_cache"
 EMBEDDING_DIM = 384
@@ -117,6 +120,8 @@ def _model_for_desk(desk: str) -> str:
         return VENICE_MODEL_UNCENSORED
     if desk in CYBER_DESKS:
         return VENICE_MODEL_CYBER
+    if desk in FINANCE_DESKS:
+        return VENICE_MODEL_CYBER  # mistral-31-24b — same tier as Cyber
     return VENICE_MODEL_DEFAULT
 
 
@@ -626,8 +631,8 @@ TOOL_SCHEMAS = [
             "name": "search_arxiv",
             "description": (
                 "ArXiv pre-print search. "
-                "Use for: novel STEM research, ML/AI papers, cryptography, emerging technical concepts. "
-                "Skip for: current events, politics, HUMINT, financial news, cultural topics."
+                "Use for: novel STEM research, ML/AI papers, cryptography, emerging technical concepts, economic research papers, monetary policy studies. "
+                "Skip for: current events, politics, HUMINT, cultural topics."
             ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
@@ -1000,8 +1005,8 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
                     name="search_arxiv",
                     description=(
                         "ArXiv pre-print search. "
-                        "Use for novel STEM/ML/security research papers only. "
-                        "Not for current events, politics, HUMINT, or finance."
+                        "Use for novel STEM/ML/security research papers, economic research papers, and monetary policy studies. "
+                        "Not for current events, politics, or HUMINT."
                     ),
                     parameters=types.Schema(
                         type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
