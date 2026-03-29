@@ -669,14 +669,31 @@ class OsiaOrchestrator:
         if not yt_dlp_bin.exists():
             yt_dlp_bin = Path("yt-dlp")
 
-        cmd = [str(yt_dlp_bin), "--dump-json", "--no-playlist", url]
+        cmd = [
+            str(yt_dlp_bin),
+            "--dump-json",
+            "--no-playlist",
+            "--write-comments",
+            "--extractor-args", "youtube:max_comments=50",
+        ]
+        # Inject platform-specific cookie files when available
+        _COOKIE_FILES = {
+            "instagram.com": self.base_dir / "config" / "instagram_cookies.txt",
+            "youtube.com": self.base_dir / "config" / "youtube_cookies.txt",
+            "youtu.be": self.base_dir / "config" / "youtube_cookies.txt",
+        }
+        for domain, cookie_path in _COOKIE_FILES.items():
+            if domain in url and cookie_path.exists():
+                cmd.extend(["--cookies", str(cookie_path)])
+                break
+        cmd.append(url)
         try:
             proc = await asyncio.to_thread(
                 subprocess.run,
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=60,
             )
             if proc.returncode == 0 and proc.stdout.strip():
                 return json.loads(proc.stdout)
@@ -725,6 +742,39 @@ class OsiaOrchestrator:
             lines.append("\nNo comments available via metadata.")
 
         return "\n".join(lines)
+
+    async def _analyse_comment_sentiment(self, comments: list[dict]) -> str | None:
+        """
+        Run LLM-based sentiment analysis on video/post comments.
+        Returns a formatted COMMS SENTIMENT block, or None on failure.
+        """
+        if not comments:
+            return None
+
+        comment_text = "\n".join(
+            f"@{c.get('author', 'unknown')}: {c.get('text', '')}"
+            for c in comments[:50]
+        )
+
+        prompt = (
+            "You are an intelligence analyst. Analyse the following social media comments for "
+            "sentiment and key themes. Respond with a concise structured block in this exact format:\n\n"
+            "## COMMS SENTIMENT\n"
+            "Overall: [POSITIVE/NEGATIVE/MIXED/NEUTRAL] — one-line characterisation\n"
+            "Dominant themes: [comma-separated key themes, max 5]\n"
+            "Notable signals:\n"
+            "  - \"[quote]\" [@author] [LABEL: HOSTILE/SUPPORTIVE/SUSPICIOUS/CONSPIRATORIAL/SCEPTICAL/OTHER]\n"
+            "  (2-4 entries)\n"
+            "Intelligence value: [HIGH/MODERATE/LOW] — reason\n\n"
+            f"Comments:\n{comment_text}"
+        )
+
+        try:
+            response = self.client.models.generate_content(model=self.model_id, contents=prompt)
+            return response.text.strip()
+        except Exception as e:
+            logger.warning("Comment sentiment analysis failed: %s", e)
+            return None
 
     async def process_media_link(self, url: str) -> str:
         """Uses ADB to capture media from a URL, then analyzes it with Gemini."""
@@ -899,16 +949,80 @@ class OsiaOrchestrator:
 
             if any(domain in url_lower for domain in YOUTUBE_DOMAINS):
                 try:
-                    media_analysis = await self._extract_youtube_transcript(url)
-                    if media_analysis:
-                        query = f"A YouTube transcript from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
+                    transcript, yt_meta = await asyncio.gather(
+                        self._extract_youtube_transcript(url),
+                        self._fetch_yt_dlp_metadata(url),
+                        return_exceptions=True,
+                    )
+                    if isinstance(transcript, BaseException):
+                        logger.error("YouTube transcript extraction failed: %s", transcript)
+                        transcript = None
+                    if isinstance(yt_meta, BaseException):
+                        logger.warning("YouTube metadata fetch failed: %s", yt_meta)
+                        yt_meta = None
+
+                    context_parts: list[str] = []
+                    if transcript:
+                        context_parts.append(f"## TRANSCRIPT\n{transcript}")
+
+                    if yt_meta:
+                        if yt_meta.get("description"):
+                            context_parts.append(f"## VIDEO DESCRIPTION\n{yt_meta['description']}")
+                        comments = yt_meta.get("comments") or []
+                        if comments:
+                            sentiment = await self._analyse_comment_sentiment(comments)
+                            if sentiment:
+                                context_parts.append(sentiment)
+
+                    if context_parts:
+                        media_analysis = "\n\n".join(context_parts)
+                        query = f"A YouTube video from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
                 except Exception as e:
-                    logger.error("YouTube transcript extraction failed: %s", e)
+                    logger.error("YouTube ingress failed: %s", e)
 
             elif any(domain in url_lower for domain in MEDIA_DOMAINS):
                 try:
-                    media_analysis = await self.process_media_link(url)
-                    query = f"A media intercept from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
+                    adb_analysis, raw_meta = await asyncio.gather(
+                        self.process_media_link(url),
+                        self._fetch_yt_dlp_metadata(url),
+                        return_exceptions=True,
+                    )
+                    if isinstance(adb_analysis, BaseException):
+                        logger.error("Media interception failed: %s", adb_analysis)
+                        adb_analysis = None
+                    if isinstance(raw_meta, BaseException):
+                        logger.warning("Social metadata fetch failed: %s", raw_meta)
+                        raw_meta = None
+
+                    context_parts = []
+                    if adb_analysis:
+                        context_parts.append(f"## VISUAL INTERCEPT\n{adb_analysis}")
+
+                    if raw_meta:
+                        # Format description/caption block from raw metadata
+                        meta_lines = []
+                        if raw_meta.get("uploader") or raw_meta.get("channel"):
+                            meta_lines.append(f"Author: {raw_meta.get('uploader') or raw_meta.get('channel')}")
+                        if raw_meta.get("description"):
+                            meta_lines.append(f"Caption: {raw_meta['description']}")
+                        if raw_meta.get("like_count") is not None:
+                            meta_lines.append(f"Likes: {raw_meta['like_count']}")
+                        if raw_meta.get("comment_count") is not None:
+                            meta_lines.append(f"Total comments: {raw_meta['comment_count']}")
+                        if raw_meta.get("upload_date"):
+                            meta_lines.append(f"Posted: {raw_meta['upload_date']}")
+                        if meta_lines:
+                            context_parts.append("## POST METADATA\n" + "\n".join(meta_lines))
+
+                        comments = raw_meta.get("comments") or []
+                        if comments:
+                            sentiment = await self._analyse_comment_sentiment(comments)
+                            if sentiment:
+                                context_parts.append(sentiment)
+
+                    if context_parts:
+                        media_analysis = "\n\n".join(context_parts)
+                        query = f"A media intercept from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
                 except Exception as e:
                     logger.error("Media interception failed: %s", e)
 
