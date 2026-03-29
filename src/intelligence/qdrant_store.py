@@ -59,6 +59,9 @@ DESK_COLLECTIONS: list[str] = [
     "cve-database",  # 280K NVD CVEs 1999–2025 — descriptions, CVSS scores, CWE classifications (stasvinokur/cve-and-cwe-dataset-1999-2025)
     "cti-bench",  # 5.6K analyst benchmark scenarios — malware→ATT&CK, threat actor attribution, CVE→CWE (AI4Sec/cti-bench)
     "etymology-database",  # historical origin and evolution of words, terms, and concepts
+    "icij-offshore-leaks",  # 810K+ offshore entities from Panama Papers, Pandora Papers, Paradise Papers, Bahamas Leaks, Offshore Leaks — beneficial owners, intermediaries, jurisdictions
+    "yahoo-finance",  # Yahoo Finance news articles, earnings call transcripts, and company profiles
+    "ofac-sanctions",  # OFAC Specially Designated Nationals (SDN) list — 18K+ sanctioned individuals, entities, vessels across all programs
 ]
 
 # ---------------------------------------------------------------------------

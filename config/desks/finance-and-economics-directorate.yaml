@@ -5,7 +5,7 @@ prompt_file: templates/prompts/finance-and-economics-directorate.txt
 model:
   primary:
     provider: openrouter
-    model_id: openai/gpt-4o-mini
+    model_id: anthropic/claude-sonnet-4-6
     temperature: 0.3
     max_tokens: 8192
   fallback:
@@ -23,14 +23,19 @@ qdrant:
     - wikileaks-cables
     - epstein-files
     - collection-directorate
-  boost_top_k: 2
+    - icij-offshore-leaks
+    - yahoo-finance
+    - ofac-sanctions
+  boost_top_k: 3
 
 tools:
   - search_web
   - search_wikipedia
+  - search_arxiv
 
 mcp_servers:
   - tavily
   - wikipedia
+  - arxiv
 
 entity_research_target: true
