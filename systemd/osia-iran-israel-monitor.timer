@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for OSIA Iran-Israel War Monitor
+Requires=osia-iran-israel-monitor.service
+
+[Timer]
+Unit=osia-iran-israel-monitor.service
+OnCalendar=*-*-* 00/6:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -42,6 +42,7 @@ TIMERS=(
     osia-rss-ingress
     osia-research-worker
     osia-daily-sitrep
+    osia-iran-israel-monitor
 )
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
