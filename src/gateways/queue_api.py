@@ -25,6 +25,7 @@ import hmac
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -63,26 +64,24 @@ ALLOWED_SEEN_SETS: set[str] = {
 # App setup
 # ---------------------------------------------------------------------------
 
-limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-security = HTTPBearer()
-
 _redis: aioredis.Redis | None = None
 
 
-@app.on_event("startup")
-async def _startup():
+@asynccontextmanager
+async def _lifespan(app):
     global _redis
     _redis = aioredis.from_url(REDIS_URL, decode_responses=True)
     logger.info("Queue API connected to Redis at %s", REDIS_URL)
-
-
-@app.on_event("shutdown")
-async def _shutdown():
+    yield
     if _redis:
         await _redis.aclose()
+
+
+limiter = Limiter(key_func=get_remote_address)
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=_lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+security = HTTPBearer()
 
 
 def _get_redis() -> aioredis.Redis:

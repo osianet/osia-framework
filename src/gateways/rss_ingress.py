@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import feedparser
+import httpx
 import redis.asyncio as redis
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -57,7 +58,14 @@ class RSSIngress:
         for url in feeds:
             try:
                 logger.info("Polling: %s", url)
-                feed = feedparser.parse(url)
+                try:
+                    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                        resp = await client.get(url, headers={"User-Agent": "OSIA RSS Ingress/1.0"})
+                        resp.raise_for_status()
+                        feed = feedparser.parse(resp.text)
+                except Exception as e:
+                    logger.warning("Feed fetch failed for %s: %s", url, e)
+                    continue
 
                 if feed.bozo and not feed.entries:
                     logger.warning("Feed parse error for %s: %s", url, feed.bozo_exception)
