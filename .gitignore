@@ -42,6 +42,7 @@ view.xml
 
 # Claude Code tooling (local only)
 CLAUDE.md
+.claude/settings.local.json
 
 # Captured media (local working files)
 *.mp4
