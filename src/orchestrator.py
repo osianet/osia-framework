@@ -674,7 +674,8 @@ class OsiaOrchestrator:
             "--dump-json",
             "--no-playlist",
             "--write-comments",
-            "--extractor-args", "youtube:max_comments=50",
+            "--extractor-args",
+            "youtube:max_comments=50",
         ]
         # Inject platform-specific cookie files when available
         _COOKIE_FILES = {
@@ -751,10 +752,7 @@ class OsiaOrchestrator:
         if not comments:
             return None
 
-        comment_text = "\n".join(
-            f"@{c.get('author', 'unknown')}: {c.get('text', '')}"
-            for c in comments[:50]
-        )
+        comment_text = "\n".join(f"@{c.get('author', 'unknown')}: {c.get('text', '')}" for c in comments[:50])
 
         prompt = (
             "You are an intelligence analyst. Analyse the following social media comments for "
@@ -763,7 +761,7 @@ class OsiaOrchestrator:
             "Overall: [POSITIVE/NEGATIVE/MIXED/NEUTRAL] — one-line characterisation\n"
             "Dominant themes: [comma-separated key themes, max 5]\n"
             "Notable signals:\n"
-            "  - \"[quote]\" [@author] [LABEL: HOSTILE/SUPPORTIVE/SUSPICIOUS/CONSPIRATORIAL/SCEPTICAL/OTHER]\n"
+            '  - "[quote]" [@author] [LABEL: HOSTILE/SUPPORTIVE/SUSPICIOUS/CONSPIRATORIAL/SCEPTICAL/OTHER]\n'
             "  (2-4 entries)\n"
             "Intelligence value: [HIGH/MODERATE/LOW] — reason\n\n"
             f"Comments:\n{comment_text}"
