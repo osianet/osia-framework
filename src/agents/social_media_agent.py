@@ -600,7 +600,7 @@ Rules:
         try:
             await self.adb.press_back()
         except Exception:
-            pass
+            pass  # best-effort back navigation; failure is non-fatal
         return result
 
     async def like_post(self, post_url: str) -> ActionResult:

@@ -6,6 +6,7 @@ import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import redis.asyncio as redis
@@ -723,7 +724,7 @@ class OsiaOrchestrator:
 
         # Instagram does not expose comment_count (or like_count) via yt-dlp.
         # Fall back to a single ADB screen-capture read to get the real numbers.
-        if "instagram.com" in url and not data.get("comment_count"):
+        if urlparse(url).hostname in ("instagram.com", "www.instagram.com") and not data.get("comment_count"):
             logger.info("_fetch_social_metadata: Instagram comment_count missing — trying screen capture fallback")
             try:
                 screen_counts = await self.social_agent.read_engagement_counts(url)
@@ -1045,10 +1046,7 @@ class OsiaOrchestrator:
 
             if attach_parts:
                 attach_block = "\n\n".join(attach_parts)
-                if media_analysis:
-                    media_analysis += f"\n\n## SIGNAL ATTACHMENTS\n{attach_block}"
-                else:
-                    media_analysis = f"## SIGNAL ATTACHMENTS\n{attach_block}"
+                media_analysis = f"## SIGNAL ATTACHMENTS\n{attach_block}"
                 # Inject attachment analysis into the query so the desk and router
                 # see the actual content — mirrors how the YouTube/ADB paths work.
                 if original_query:
