@@ -6,6 +6,7 @@ import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import redis.asyncio as redis
@@ -593,7 +594,7 @@ class OsiaOrchestrator:
         if not transcript:
             logger.warning("All extraction methods blocked. Triggering PHINT capture...")
             try:
-                transcript = await self.process_media_link(video_url)
+                transcript, _ = await self.process_media_link(video_url)
                 transcript = f"PHYSICAL INTERCEPT REPORT:\n{transcript}"
             except Exception as e:
                 transcript = f"ERROR: All extraction methods failed, including physical capture. {e}"
@@ -721,6 +722,19 @@ class OsiaOrchestrator:
         if not data:
             return None
 
+        # Instagram does not expose comment_count (or like_count) via yt-dlp.
+        # Fall back to a single ADB screen-capture read to get the real numbers.
+        if urlparse(url).hostname in ("instagram.com", "www.instagram.com") and not data.get("comment_count"):
+            logger.info("_fetch_social_metadata: Instagram comment_count missing — trying screen capture fallback")
+            try:
+                screen_counts = await self.social_agent.read_engagement_counts(url)
+                if screen_counts.get("comments") is not None:
+                    data["comment_count"] = screen_counts["comments"]
+                if screen_counts.get("likes") is not None and not data.get("like_count"):
+                    data["like_count"] = screen_counts["likes"]
+            except Exception as _sc_err:
+                logger.warning("Screen engagement fallback failed: %s", _sc_err)
+
         lines = []
         if data.get("uploader") or data.get("channel"):
             lines.append(f"Author: {data.get('uploader') or data.get('channel')}")
@@ -775,8 +789,16 @@ class OsiaOrchestrator:
             logger.warning("Comment sentiment analysis failed: %s", e)
             return None
 
-    async def process_media_link(self, url: str) -> str:
-        """Uses ADB to capture media from a URL, then analyzes it with Gemini."""
+    async def process_media_link(self, url: str) -> tuple[str, dict]:
+        """
+        Uses ADB to capture media from a URL, then analyzes it with Gemini.
+
+        Returns:
+            (analysis_text, engagement_counts) where engagement_counts is a dict
+            with keys ``likes``, ``comments``, ``shares`` (int or None).
+            engagement_counts is populated via a single screenshot taken while the
+            reel is loaded, before recording begins — no extra URL open needed.
+        """
         logger.info("Triggering ADB capture for URL: %s", url)
 
         _FALLBACK_DURATION = 60
@@ -794,9 +816,17 @@ class OsiaOrchestrator:
         # Acquire ADB lock BEFORE touching the phone so the persona daemon yields
         lock_ttl = record_duration + 120
         await self.redis.set("osia:adb:lock", "orchestrator", ex=lock_ttl)
+        engagement_counts: dict = {}
         try:
             await self.adb.open_url(url)
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
+
+            # Reel is now loaded — grab engagement counts from the live screen
+            # before recording starts (no second URL open required).
+            try:
+                engagement_counts = await self.social_agent._read_engagement_from_current_screen()
+            except Exception as _ec_err:
+                logger.warning("Engagement count screenshot failed: %s", _ec_err)
 
             remote_path = "/sdcard/osia_capture.mp4"
             local_path = str(self.base_dir / "osia_capture.mp4")
@@ -830,7 +860,7 @@ class OsiaOrchestrator:
         capture_path = Path(local_path)
         if capture_path.exists():
             capture_path.unlink()
-        return response.text
+        return response.text, engagement_counts
 
     # ------------------------------------------------------------------
     # Desk routing via Venice (uncensored — no query is refused or misrouted)
@@ -966,7 +996,65 @@ class OsiaOrchestrator:
 
         logger.info("Received new task from %s: %s", source, query)
 
-        # 1. Media Link Interception
+        # 1a. Signal attachment analysis (images / videos sent directly to the chat)
+        signal_attachments = task.get("attachments") or []
+        if signal_attachments:
+            attach_parts: list[str] = []
+            for att in signal_attachments:
+                att_path = att.get("path", "")
+                att_type = att.get("content_type", "")
+                if not att_path or not Path(att_path).exists():
+                    continue
+                try:
+                    logger.info("Uploading Signal attachment to Gemini: %s (%s)", att_path, att_type)
+                    att_file = self.client.files.upload(file=att_path)
+                    while att_file.state.name == "PROCESSING":
+                        await asyncio.sleep(2)
+                        att_file = self.client.files.get(name=att_file.name)
+
+                    if att_type.startswith("image/"):
+                        att_prompt = (
+                            "Analyse this image sent as a Signal intelligence attachment. "
+                            "Describe all visible content in detail: text, faces, locations, objects, "
+                            "maps, documents, or any other identifiable elements. "
+                            "Summarise the intelligence value."
+                        )
+                    else:
+                        att_prompt = (
+                            "Analyse this video sent as a Signal intelligence attachment. "
+                            "Transcribe any spoken audio, describe the visual content, identify text on screen, "
+                            "and summarise the core message or intelligence value."
+                        )
+
+                    att_response = self.client.models.generate_content(
+                        model=self.model_id,
+                        contents=[att_file, att_prompt],
+                    )
+                    attach_parts.append(f"[{att_type}]\n{att_response.text.strip()}")
+                except Exception as _att_err:
+                    logger.error("Signal attachment analysis failed (%s): %s", att_path, _att_err)
+                finally:
+                    # Clean up temp file
+                    try:
+                        Path(att_path).unlink(missing_ok=True)
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "Failed to delete temporary Signal attachment file (%s): %s",
+                            att_path,
+                            cleanup_err,
+                        )
+
+            if attach_parts:
+                attach_block = "\n\n".join(attach_parts)
+                media_analysis = f"## SIGNAL ATTACHMENTS\n{attach_block}"
+                # Inject attachment analysis into the query so the desk and router
+                # see the actual content — mirrors how the YouTube/ADB paths work.
+                if original_query:
+                    query = f"{original_query}\n\n{media_analysis}"
+                else:
+                    query = f"A Signal media attachment was intercepted and analysed:\n\n{media_analysis}"
+
+        # 1b. Media Link Interception
         url_match = re.search(r"(https?://[^\s]+)", query)
         if url_match:
             url = url_match.group(1)
@@ -1007,17 +1095,31 @@ class OsiaOrchestrator:
 
             elif any(domain in url_lower for domain in MEDIA_DOMAINS):
                 try:
-                    adb_analysis, raw_meta = await asyncio.gather(
+                    media_result, raw_meta = await asyncio.gather(
                         self.process_media_link(url),
                         self._fetch_yt_dlp_metadata(url),
                         return_exceptions=True,
                     )
-                    if isinstance(adb_analysis, BaseException):
-                        logger.error("Media interception failed: %s", adb_analysis)
+                    if isinstance(media_result, BaseException):
+                        logger.error("Media interception failed: %s", media_result)
                         adb_analysis = None
+                        screen_counts: dict = {}
+                    else:
+                        adb_analysis, screen_counts = media_result
                     if isinstance(raw_meta, BaseException):
                         logger.warning("Social metadata fetch failed: %s", raw_meta)
                         raw_meta = None
+
+                    # Merge screen-captured engagement counts into yt-dlp metadata.
+                    # Instagram never exposes comment_count via yt-dlp; the screenshot
+                    # taken while the reel was loaded gives us the real numbers.
+                    if raw_meta and screen_counts:
+                        if screen_counts.get("comments") is not None and not raw_meta.get("comment_count"):
+                            raw_meta["comment_count"] = screen_counts["comments"]
+                        if screen_counts.get("likes") is not None and not raw_meta.get("like_count"):
+                            raw_meta["like_count"] = screen_counts["likes"]
+                        if screen_counts.get("shares") is not None:
+                            raw_meta["shares_count"] = screen_counts["shares"]
 
                     context_parts = []
                     if adb_analysis:
@@ -1034,6 +1136,8 @@ class OsiaOrchestrator:
                             meta_lines.append(f"Likes: {raw_meta['like_count']}")
                         if raw_meta.get("comment_count") is not None:
                             meta_lines.append(f"Total comments: {raw_meta['comment_count']}")
+                        if raw_meta.get("shares_count") is not None:
+                            meta_lines.append(f"Shares: {raw_meta['shares_count']}")
                         if raw_meta.get("upload_date"):
                             meta_lines.append(f"Posted: {raw_meta['upload_date']}")
                         if meta_lines:
@@ -1053,7 +1157,7 @@ class OsiaOrchestrator:
 
         # 2. Automated Research (multi-turn tool calling)
         try:
-            research_summary, source_tracker = await self.handle_research(original_query)
+            research_summary, source_tracker = await self.handle_research(original_query or media_analysis or query)
             if research_summary:
                 logger.info("Research complete.")
                 manifest = source_tracker.format_manifest() if source_tracker else ""
@@ -1089,7 +1193,7 @@ class OsiaOrchestrator:
 
         ---
 
-        You are the Chief of Staff for OSIA. A new Request for Information (RFI) has come in: '{query}'
+        You are the Chief of Staff for OSIA. A new Request for Information (RFI) has come in: '{query if original_query else (media_analysis or query)}'
 
         Which of our specialized desks should analyze this? Choose ONE from the following list:
 {valid_desks_list}
@@ -1156,7 +1260,7 @@ class OsiaOrchestrator:
                     analysis,
                     metadata={
                         "desk": assigned_desk,
-                        "topic": original_query[:200],
+                        "topic": (original_query or "")[:200],
                         "source": source,
                         "reliability_tier": "A",
                         "timestamp": datetime.now(UTC).isoformat(),

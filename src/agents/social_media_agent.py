@@ -517,6 +517,92 @@ Rules:
         )
         return await self._run_goal(goal, pre_url=post_url)
 
+    async def _read_engagement_from_current_screen(self) -> dict:
+        """
+        Read engagement counts (likes, comments, shares) from whatever is currently
+        on screen — no navigation.  Sends a single screenshot to Gemini Vision and
+        parses the JSON response.
+
+        Returns:
+            dict with keys ``likes``, ``comments``, ``shares`` (int or None each).
+            Returns an empty dict on failure.
+        """
+        try:
+            screenshot_path = await self._screenshot()
+        except Exception as exc:
+            logger.warning("_read_engagement_from_current_screen: screenshot failed: %s", exc)
+            return {}
+
+        screen_file = self.gemini.files.upload(file=screenshot_path)
+
+        if self._screen_width and self._screen_height:
+            right_bar_x = int(self._screen_width * 0.85)
+            layout_hint = (
+                f"Screen resolution: {self._screen_width}x{self._screen_height} pixels. "
+                f"For Reels/Shorts (full-screen vertical video), engagement icons are stacked in "
+                f"the right-side rail (x >= {right_bar_x}): heart icon = likes, speech-bubble icon = comments, "
+                f"arrow/paper-plane icon = shares. Each icon has a number directly below or beside it. "
+                f"For feed posts (static image with bottom bar), the like/comment/share counts appear "
+                f"in the interaction bar at the bottom of the screen."
+            )
+        else:
+            layout_hint = (
+                "For Reels/Shorts, engagement icons (heart = likes, speech bubble = comments, "
+                "arrow = shares) are in the right-side rail with counts beside them. "
+                "For feed posts, the interaction bar with counts is at the bottom."
+            )
+
+        prompt = (
+            "You are reading a social media post or Reel on an Android phone.\n"
+            "Your ONLY task is to find and read the engagement counts shown next to the icons.\n\n"
+            f"{layout_hint}\n\n"
+            "Counts may be formatted as:\n"
+            "  - Plain integers: 1234\n"
+            "  - K-abbreviated: 1.2K → 1200, 45K → 45000\n"
+            "  - M-abbreviated: 4.5M → 4500000\n"
+            "Convert any abbreviations to whole integers.\n\n"
+            "Respond with ONLY valid JSON (no markdown fences, no prose):\n"
+            '{"likes": <integer or null>, "comments": <integer or null>, "shares": <integer or null>}\n\n'
+            "Use null for any count that is not visible or clearly readable. Do not guess."
+        )
+
+        try:
+            response = self.gemini.models.generate_content(
+                model=self.model_id,
+                contents=[screen_file, prompt],
+            )
+            text = response.text.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            result = json.loads(text.strip())
+            logger.info("_read_engagement_from_current_screen: %s", result)
+            return result
+        except Exception as exc:
+            logger.warning("_read_engagement_from_current_screen: Gemini/parse error: %s", exc)
+            return {}
+
+    async def read_engagement_counts(self, post_url: str) -> dict:
+        """
+        Open a post/reel, read engagement counts from the loaded screen, then navigate back.
+
+        Used when the phone is not already on the post (e.g. the tool-call path).
+        For cases where the reel is already on screen, call
+        ``_read_engagement_from_current_screen()`` directly.
+
+        Returns:
+            dict with keys ``likes``, ``comments``, ``shares`` (int or None each).
+        """
+        await self.adb.open_url(post_url)
+        await asyncio.sleep(3)
+        result = await self._read_engagement_from_current_screen()
+        try:
+            await self.adb.press_back()
+        except Exception:
+            pass  # best-effort back navigation; failure is non-fatal
+        return result
+
     async def like_post(self, post_url: str) -> ActionResult:
         """Navigate to a post and like it."""
         goal = (
