@@ -6,9 +6,9 @@ Venice AI (uncensored/permissive model routing per desk), then chunks and
 embeds results into Qdrant for retrieval-augmented generation at report time.
 
 Desk → model routing:
-  HUMINT / Cultural / Geopolitical  → venice-uncensored          (no guardrails, ReAct tool use)
-  Cyber / Finance                   → mistral-31-24b             (Venice-private, native FC)
-  Science / default                 → mistral-small-3-2-24b-instruct (cheap, native FC)
+  HUMINT / Cultural / Geopolitical / InfoWar  → venice-uncensored          (no guardrails, ReAct tool use)
+  Cyber / Finance                             → mistral-31-24b             (Venice-private, native FC)
+  Science / Environment / default             → mistral-small-3-2-24b-instruct (cheap, native FC)
 
 Fallback chain: Venice → OpenRouter → Gemini
 
@@ -101,6 +101,7 @@ UNCENSORED_DESKS = {
     "human-intelligence-and-profiling-desk",
     "cultural-and-theological-intelligence-desk",
     "geopolitical-and-security-desk",
+    "information-warfare-desk",
 }
 CYBER_DESKS = {
     "cyber-intelligence-and-warfare-desk",
@@ -730,6 +731,23 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
         "then search_arxiv and search_semantic_scholar for technical research, patents, emerging science. "
         "search_web for recent product launches, commercial developments, company news. "
         "Wikipedia for established technical background."
+    ),
+    "information-warfare-desk": (
+        "search_intel_kb FIRST (WikiLeaks cables and Epstein files may surface funding trails, "
+        "personnel links, or documented covert influence programs directly relevant to the topic). "
+        "search_web for current influence operations, disinformation campaign reporting, NGO funding disclosures, "
+        "and academic or investigative journalism on propaganda and psyops. "
+        "search_wikipedia for background on organisations, historical psyops operations, or media ownership. "
+        "Academic tools rarely needed unless the topic is formal propaganda studies or media theory."
+    ),
+    "environment-and-ecology-desk": (
+        "search_web FIRST for current environmental events: extreme weather, disaster reports, crop failure news, "
+        "corporate pollution incidents, ecocide reporting, and official agency bulletins (NOAA, NASA, WMO, IPCC). "
+        "search_arxiv and search_semantic_scholar for climate science research, ecological studies, "
+        "and peer-reviewed environmental impact assessments. "
+        "search_intel_kb for past environmental intelligence, WikiLeaks cables on resource negotiations or "
+        "corporate environmental lobbying. "
+        "search_wikipedia for background on ecosystems, species, geographic regions, or corporations under investigation."
     ),
 }
 

@@ -1,0 +1,37 @@
+slug: environment-and-ecology-desk
+name: "Environment & Ecological Intelligence Desk"
+prompt_file: templates/prompts/environment-and-ecology-desk.txt
+
+model:
+  primary:
+    provider: openrouter
+    model_id: anthropic/claude-sonnet-4-6
+    temperature: 0.3
+    max_tokens: 4096
+  fallback:
+    provider: openrouter
+    model_id: google/gemini-2.5-flash
+    temperature: 0.3
+    max_tokens: 4096
+
+qdrant:
+  collection: environment-and-ecology-desk
+  context_top_k: 5
+  cross_desk_search: true
+  cross_desk_top_k: 3
+  boost_collections:
+    - wikileaks-cables
+    - collection-directorate
+  boost_top_k: 2
+
+tools:
+  - search_web
+  - search_arxiv
+  - search_wikipedia
+
+mcp_servers:
+  - tavily
+  - arxiv
+  - wikipedia
+
+entity_research_target: true
