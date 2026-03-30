@@ -1036,8 +1036,12 @@ class OsiaOrchestrator:
                     # Clean up temp file
                     try:
                         Path(att_path).unlink(missing_ok=True)
-                    except Exception:
-                        pass
+                    except Exception as cleanup_err:
+                        logger.warning(
+                            "Failed to delete temporary Signal attachment file (%s): %s",
+                            att_path,
+                            cleanup_err,
+                        )
 
             if attach_parts:
                 attach_block = "\n\n".join(attach_parts)
