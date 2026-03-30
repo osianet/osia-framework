@@ -19,7 +19,7 @@ dependencies = [
     "python-dotenv==1.2.2",
     "pyyaml==6.0.3",
     "qdrant-client==1.17.1",
-    "redis==7.3.0",
+    "redis==7.4.0",
     "slowapi==0.1.9",
     "starlette-context==0.5.1",
     "uvicorn==0.42.0",
