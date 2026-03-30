@@ -1,0 +1,36 @@
+slug: information-warfare-desk
+name: "Information & Psychological Warfare Desk"
+prompt_file: templates/prompts/information-warfare-desk.txt
+
+model:
+  primary:
+    provider: venice
+    model_id: venice-uncensored
+    temperature: 0.4
+    max_tokens: 4096
+  fallback:
+    provider: openrouter
+    model_id: google/gemini-2.5-flash
+    temperature: 0.3
+    max_tokens: 4096
+
+qdrant:
+  collection: information-warfare-desk
+  context_top_k: 5
+  cross_desk_search: true
+  cross_desk_top_k: 3
+  boost_collections:
+    - wikileaks-cables
+    - epstein-files
+    - collection-directorate
+  boost_top_k: 2
+
+tools:
+  - search_web
+  - search_wikipedia
+
+mcp_servers:
+  - tavily
+  - wikipedia
+
+entity_research_target: true

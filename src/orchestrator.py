@@ -62,6 +62,8 @@ BOOTSTRAP_COLLECTIONS = [
     "cybersecurity-attacks",
     "hackerone-reports",
     "iran-israel-war-2026",
+    "information-warfare-desk",
+    "environment-and-ecology-desk",
 ]
 
 
