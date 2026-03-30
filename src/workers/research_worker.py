@@ -655,34 +655,6 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "search_censys",
-            "description": (
-                "Search Censys for internet-facing hosts, open services, and TLS certificate data. "
-                "ONLY use for Cyber desk topics requiring network infrastructure mapping or attack surface analysis. "
-                "Good queries: Censys search syntax e.g. 'services.port:22 and autonomous_system.name:TargetOrg', "
-                "'services.service_name:ELASTICSEARCH and location.country=CN', or a plain org/hostname. "
-                "Do NOT call for APT background, malware analysis, geopolitics, HUMINT, finance, or general news."
-            ),
-            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_criminalip",
-            "description": (
-                "Search Criminal IP for threat-scored hosts, exposed vulnerable services, and C2 infrastructure. "
-                "ONLY use for Cyber desk topics where you need IP threat scores, vulnerability counts, or "
-                "identifying malicious/compromised infrastructure associated with a threat actor or campaign. "
-                "Good queries: IP addresses, org names, CVE identifiers, malware family names. "
-                "Do NOT call for non-infrastructure topics, geopolitics, HUMINT, finance, or general news."
-            ),
-            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "search_otx",
             "description": (
                 "Search AlienVault OTX (Open Threat Exchange) for community threat intelligence pulses. "
@@ -715,11 +687,9 @@ TOOL_SCHEMAS = [
 # Injected into the system prompt so the model makes informed choices upfront.
 _DESK_TOOL_GUIDANCE: dict[str, str] = {
     "cyber-intelligence-and-warfare-desk": (
-        "search_intel_kb FIRST (MITRE ATT&CK, CVE database, CTI reports, TTP mappings, HackerOne disclosures are all in the KB), "
-        "then search_otx for live threat intelligence pulses, IOCs, and campaign reporting from the OTX community. "
-        "search_censys to map exposed infrastructure or enumerate services for a specific org/host (network-level topics only). "
-        "search_criminalip when you need threat scores or vulnerability exposure data on specific IPs or C2 infrastructure. "
-        "search_web for recent CVE news, threat actor activity, or campaign reporting not in KB or OTX. "
+        "search_intel_kb FIRST (MITRE ATT&CK, CVE database, CTI reports, TTP mappings, HackerOne disclosures are all in the KB). "
+        "search_otx for live threat intelligence pulses, IOCs, and campaign reporting when the topic involves an active threat actor or malware campaign. "
+        "search_web for recent CVE news or campaign reporting not covered by KB or OTX. "
         "search_wikipedia for background on APT groups or malware families. "
         "search_arxiv only for novel malware research or cryptographic vulnerabilities. "
         "search_semantic_scholar is rarely appropriate."
@@ -766,7 +736,7 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
 # ReAct pattern — parsed when native tool_calls are absent
 _REACT_PATTERN = re.compile(
     r"(?:SEARCH_INTEL_KB|SEARCH_WEB|SEARCH_DUCKDUCKGO|SEARCH_WIKIPEDIA|SEARCH_ARXIV|SEARCH_SEMANTIC_SCHOLAR"
-    r"|SEARCH_CENSYS|SEARCH_CRIMINALIP|SEARCH_OTX|SEARCH_ALEPH):\s*(.+)",
+    r"|SEARCH_OTX|SEARCH_ALEPH):\s*(.+)",
     re.IGNORECASE,
 )
 _REACT_TOOL_MAP = {
@@ -776,8 +746,6 @@ _REACT_TOOL_MAP = {
     "search_wikipedia": "search_wikipedia",
     "search_arxiv": "search_arxiv",
     "search_semantic_scholar": "search_semantic_scholar",
-    "search_censys": "search_censys",
-    "search_criminalip": "search_criminalip",
     "search_otx": "search_otx",
     "search_aleph": "search_aleph",
 }
@@ -841,7 +809,7 @@ async def run_research_loop_openai_compat(
                 "If native tool calling is unavailable, use the ReAct format:\n"
                 "SEARCH_INTEL_KB: <query>\nSEARCH_WEB: <query>\nSEARCH_DUCKDUCKGO: <query>\n"
                 "SEARCH_WIKIPEDIA: <query>\nSEARCH_ARXIV: <query>\nSEARCH_SEMANTIC_SCHOLAR: <query>\n"
-                "SEARCH_CENSYS: <query>\nSEARCH_CRIMINALIP: <query>\nSEARCH_OTX: <query>\nSEARCH_ALEPH: <query>"
+                "SEARCH_OTX: <query>\nSEARCH_ALEPH: <query>"
             ),
         },
         {"role": "user", "content": f"Research topic: {job.topic}"},
