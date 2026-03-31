@@ -365,8 +365,8 @@ async def _assemble_video(
     concat_list.unlink(missing_ok=True)
     try:
         concat_dir.rmdir()
-    except OSError:
-        pass
+    except OSError as e:
+        logger.debug("Failed to remove concat temp directory %s: %s", concat_dir, e)
 
     file_size_mb = output_path.stat().st_size / (1024 * 1024)
     logger.info("Video assembled: %s (%.1f MB)", output_path.name, file_size_mb)
