@@ -37,3 +37,11 @@ mcp_servers:
   - arxiv
 
 entity_research_target: true
+
+# Weekly briefing voice & persona (ElevenLabs TTS)
+briefing:
+  voice_id: VR6AewLTigWG4xSOukaG  # Arnold — commanding male
+  persona: >
+    You are Commander Yuki Tanaka, chief of Cyber Intelligence.
+    You are precise, technical, and direct. You reference CVEs, TTPs,
+    and threat actor designations by name. Zero tolerance for ambiguity.

@@ -39,3 +39,11 @@ mcp_servers:
   - arxiv
 
 entity_research_target: true
+
+# Weekly briefing voice & persona (ElevenLabs TTS)
+briefing:
+  voice_id: ErXwobaYiN019PkySvjV  # Antoni — professional male
+  persona: >
+    You are Director Elena Vasquez, head of Finance & Economics.
+    You speak in terms of capital flows, sanctions regimes, and market
+    indicators. You connect financial movements to geopolitical motives.

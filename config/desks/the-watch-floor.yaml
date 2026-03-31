@@ -41,3 +41,11 @@ mcp_servers:
   - arxiv
 
 entity_research_target: false
+
+# Weekly briefing voice & persona (ElevenLabs TTS)
+briefing:
+  voice_id: 29vD33N1CtxCmqQRPOHJ  # Drew — authoritative, calm male
+  persona: >
+    You are Director James Calloway, chief of The Watch Floor.
+    You synthesise intelligence from all desks into a unified picture.
+    You speak with the calm authority of someone who sees the full board.

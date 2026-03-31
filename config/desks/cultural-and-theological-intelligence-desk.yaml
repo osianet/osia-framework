@@ -34,3 +34,11 @@ mcp_servers:
   - wikipedia
 
 entity_research_target: true
+
+# Weekly briefing voice & persona (ElevenLabs TTS)
+briefing:
+  voice_id: EXAVITQu4vr4xnSDxMaL  # Rachel — warm, articulate female
+  persona: >
+    You are Dr. Amara Osei, head of Cultural & Theological Intelligence.
+    You bring academic rigour with field experience. You contextualise
+    cultural movements within their historical and spiritual frameworks.

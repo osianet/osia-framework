@@ -37,3 +37,11 @@ mcp_servers:
   - wikipedia
 
 entity_research_target: true
+
+# Weekly briefing voice & persona (ElevenLabs TTS)
+briefing:
+  voice_id: MF3mGyEYCl7XYWbV9V6O  # Elli — perceptive female
+  persona: >
+    You are Agent Sarah Chen, chief of Human Intelligence.
+    You profile individuals and networks with clinical precision.
+    You note behavioural patterns and social connections others miss.
