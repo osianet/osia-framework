@@ -20,6 +20,10 @@ load_dotenv()
 logger = logging.getLogger("osia.tts")
 
 
+class QuotaExceededError(RuntimeError):
+    """Raised when the ElevenLabs account quota is exhausted."""
+
+
 class TTSClient:
     """Async wrapper around ElevenLabs TTS for briefing narration."""
 
@@ -86,13 +90,21 @@ class TTSClient:
             kwargs["next_text"] = next_text
 
         # ElevenLabs SDK is synchronous — run in thread pool
-        audio_iter = await asyncio.to_thread(self._client.text_to_speech.convert, **kwargs)
+        from elevenlabs.core.api_error import ApiError
 
-        # The SDK returns a generator of bytes chunks
-        with open(output_path, "wb") as f:
-            for chunk in audio_iter:
-                if isinstance(chunk, bytes):
-                    f.write(chunk)
+        try:
+            audio_iter = await asyncio.to_thread(self._client.text_to_speech.convert, **kwargs)
+
+            # The SDK returns a generator of bytes chunks
+            with open(output_path, "wb") as f:
+                for chunk in audio_iter:
+                    if isinstance(chunk, bytes):
+                        f.write(chunk)
+        except ApiError as e:
+            if isinstance(e.body, dict) and e.body.get("detail", {}).get("status") == "quota_exceeded":
+                detail = e.body["detail"]
+                raise QuotaExceededError(detail.get("message", "ElevenLabs quota exceeded")) from e
+            raise
 
         file_size = output_path.stat().st_size
         logger.info(
@@ -112,6 +124,7 @@ class TTSClient:
         stability: float = 0.5,
         similarity_boost: float = 0.75,
         style: float = 0.4,
+        resume: bool = False,
     ) -> list[Path]:
         """Generate narration audio for each slide sequentially.
 
@@ -133,10 +146,13 @@ class TTSClient:
                 logger.warning("Slide %d has empty narration, skipping TTS", i)
                 continue
 
-            prev_text = slides[i - 1].get("narration") if i > 0 else None
-            next_text = slides[i + 1].get("narration") if i < len(slides) - 1 else None
-
             output_path = output_dir / f"slide_{i:02d}.mp3"
+
+            if resume and output_path.exists() and output_path.stat().st_size > 1024:
+                logger.info("Resume: skipping TTS for slide %d — %s already exists", i, output_path.name)
+                audio_paths.append(output_path)
+                continue
+
             await self.generate_speech(
                 text=narration,
                 voice_id=voice_id,
@@ -144,8 +160,6 @@ class TTSClient:
                 stability=stability,
                 similarity_boost=similarity_boost,
                 style=style,
-                previous_text=prev_text,
-                next_text=next_text,
             )
             audio_paths.append(output_path)
 

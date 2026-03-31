@@ -35,6 +35,7 @@ dependencies = [
     "pygments==2.20.0",
     "elevenlabs==2.40.0",
     "pydub==0.25.1",
+    "pymupdf==1.25.5",
 ]
 
 [project.optional-dependencies]
