@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 from src.intelligence.qdrant_store import QdrantStore
 from src.intelligence.slide_renderer import SlideRenderer
 from src.intelligence.tts_client import QuotaExceededError, TTSClient
+from src.intelligence.venice_image_client import VeniceImageClient
 
 load_dotenv()
 
@@ -484,6 +485,35 @@ async def generate_desk_briefing(
     )
     renderer = SlideRenderer()
 
+    # Generate AI background images via Venice (shared between orientations)
+    img_cfg = global_config.get("image_generation", {})
+    bg_images_by_orientation: dict[str, list[Path | None]] = {}
+    if img_cfg.get("enabled", False):
+        venice_img = VeniceImageClient(
+            model=img_cfg.get("model", "flux-2-pro"),
+            style_preset=img_cfg.get("style_preset", "Digital Art"),
+            steps=img_cfg.get("steps", 20),
+            cfg_scale=img_cfg.get("cfg_scale", 7.5),
+            negative_prompt=img_cfg.get("negative_prompt", ""),
+        )
+        formats = global_config.get("output", {}).get("formats", ["landscape", "portrait"])
+        from src.intelligence.slide_renderer import DIMENSIONS
+
+        for orientation in formats:
+            w, h = DIMENSIONS[orientation]
+            img_dir = output_base / desk_slug / orientation / "bg_images"
+            bg_images = await venice_img.generate_slide_images(
+                slides=slides,
+                desk_name=desk_name,
+                width=w,
+                height=h,
+                output_dir=img_dir,
+                resume=resume,
+            )
+            bg_images_by_orientation[orientation] = bg_images
+    else:
+        logger.debug("Image generation disabled — slides will use plain backgrounds")
+
     artifacts: dict = {
         "desk_slug": desk_slug,
         "desk_name": desk_name,
@@ -510,6 +540,7 @@ async def generate_desk_briefing(
         orient_dir = output_base / desk_slug / orientation
 
         # Render slide images
+        bg_images = bg_images_by_orientation.get(orientation)
         image_paths = renderer.render_deck(
             slides=slides,
             desk_slug=desk_slug,
@@ -518,6 +549,7 @@ async def generate_desk_briefing(
             orientation=orientation,
             output_dir=orient_dir / "slides",
             week_label=week_label,
+            bg_images=bg_images,
         )
 
         # Render PDF deck
@@ -530,6 +562,7 @@ async def generate_desk_briefing(
             orientation=orientation,
             output_path=pdf_path,
             week_label=week_label,
+            bg_images=bg_images,
         )
         artifacts[f"pdf_{orientation}"] = str(pdf_path)
 

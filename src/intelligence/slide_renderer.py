@@ -70,6 +70,7 @@ class SlideRenderer:
         orientation: str,
         output_dir: Path,
         week_label: str,
+        bg_images: list[Path | None] | None = None,
     ) -> list[Path]:
         """Render all slides to PNG images.
 
@@ -81,6 +82,7 @@ class SlideRenderer:
             orientation: 'landscape' or 'portrait'.
             output_dir: Directory to write PNG files.
             week_label: e.g. '2026-W14'.
+            bg_images: Optional list of Paths to background images (one per slide, None entries OK).
 
         Returns:
             List of Paths to rendered PNG images.
@@ -104,6 +106,12 @@ class SlideRenderer:
         for i, slide in enumerate(slides):
             body_html = _md_to_html(slide.get("body", ""))
 
+            # Encode background image as data URI if available
+            bg_image_data_uri = None
+            if bg_images and i < len(bg_images) and bg_images[i] and bg_images[i].exists():
+                raw = bg_images[i].read_bytes()
+                bg_image_data_uri = "data:image/png;base64," + base64.b64encode(raw).decode()
+
             html_content = template.render(
                 slide_title=slide.get("title", ""),
                 slide_body=body_html,
@@ -119,6 +127,7 @@ class SlideRenderer:
                 width=width,
                 height=height,
                 logo_data_uri=self._logo_uri,
+                bg_image_data_uri=bg_image_data_uri,
                 timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
             )
 
@@ -156,6 +165,7 @@ class SlideRenderer:
         orientation: str,
         output_path: Path,
         week_label: str,
+        bg_images: list[Path | None] | None = None,
     ) -> Path:
         """Render all slides into a single multi-page PDF.
 
@@ -167,6 +177,7 @@ class SlideRenderer:
             orientation: 'landscape' or 'portrait'.
             output_path: Path for the output PDF.
             week_label: e.g. '2026-W14'.
+            bg_images: Optional list of Paths to background images (one per slide, None entries OK).
 
         Returns:
             Path to the generated PDF.
@@ -189,6 +200,12 @@ class SlideRenderer:
         for i, slide in enumerate(slides):
             body_html = _md_to_html(slide.get("body", ""))
 
+            # Encode background image as data URI if available
+            bg_image_data_uri = None
+            if bg_images and i < len(bg_images) and bg_images[i] and bg_images[i].exists():
+                raw = bg_images[i].read_bytes()
+                bg_image_data_uri = "data:image/png;base64," + base64.b64encode(raw).decode()
+
             html_content = template.render(
                 slide_title=slide.get("title", ""),
                 slide_body=body_html,
@@ -204,6 +221,7 @@ class SlideRenderer:
                 width=width,
                 height=height,
                 logo_data_uri=self._logo_uri,
+                bg_image_data_uri=bg_image_data_uri,
                 timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
             )
             all_pages.append(html_content)

@@ -29,6 +29,15 @@ tts:
   similarity_boost: 0.75        # Voice consistency
   style: 0.4                    # Expressiveness
 
+# AI-generated slide background images (Venice API)
+image_generation:
+  enabled: true
+  model: flux-2-pro             # $0.04/image — good quality/cost balance
+  style_preset: "Digital Art"   # Venice style preset
+  steps: 20                     # Diffusion steps (higher = better but slower)
+  cfg_scale: 7.5                # Prompt adherence (1-20)
+  negative_prompt: "text, words, letters, watermark, logo, UI elements, bright colors, white background, cartoon, anime"
+
 # Video encoding (ffmpeg)
 # h264_rkmpp uses Rockchip MPP hardware encoder (RK3588 native, much faster).
 # hevc_rkmpp is also available for better compression at the same quality.

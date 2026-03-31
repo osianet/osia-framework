@@ -44,6 +44,30 @@ html, body {
     background: linear-gradient(160deg, #0a0e0a 0%, #0c140c 40%, #081008 100%);
 }
 
+/* ── AI-generated background image ─────────────────────────────── */
+.slide-bg-image {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    z-index: 0;
+}
+
+/* Dark gradient overlay — ensures text legibility over the image */
+.slide-bg-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(
+        160deg,
+        rgba(10, 14, 10, 0.88) 0%,
+        rgba(12, 20, 12, 0.82) 30%,
+        rgba(8, 16, 8, 0.85) 70%,
+        rgba(10, 14, 10, 0.92) 100%
+    );
+    z-index: 0;
+}
+
 /* ── Scanline texture ──────────────────────────────────────────── */
 .slide::before {
     content: '';
@@ -368,6 +392,11 @@ html, body {
 <body>
 
 <div class="slide {% if slide_type == 'title' %}title-slide{% elif slide_type == 'closing' %}closing-slide{% endif %}">
+
+  {% if bg_image_data_uri %}
+  <div class="slide-bg-image" style="background-image: url('{{ bg_image_data_uri }}');"></div>
+  <div class="slide-bg-overlay"></div>
+  {% endif %}
 
   <!-- Top bar -->
   <div class="top-bar">
