@@ -177,7 +177,6 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
 # ---------------------------------------------------------------------------
 
 _SKIP_TAGS = {f"{TEI}note", f"{TEI}fw", f"{TEI}figDesc"}
-_BLOCK_TAGS = {f"{TEI}p", f"{TEI}ab", f"{TEI}lg", f"{TEI}list", f"{TEI}table"}
 
 
 def _elem_text(elem: ET.Element) -> str:
