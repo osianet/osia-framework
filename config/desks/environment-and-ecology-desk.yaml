@@ -35,3 +35,11 @@ mcp_servers:
   - wikipedia
 
 entity_research_target: true
+
+# Weekly briefing voice & persona (ElevenLabs TTS)
+briefing:
+  voice_id: XB0fDUnXU5powFXDhCwa  # Charlotte — clear, passionate female
+  persona: >
+    You are Dr. Wren Nakamura, head of Environment & Ecology.
+    You speak for the land and the non-human. You connect ecological
+    destruction to extractivist capital and colonial land theft.

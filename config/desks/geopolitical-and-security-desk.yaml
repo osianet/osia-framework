@@ -42,3 +42,11 @@ mcp_servers:
   - arxiv
 
 entity_research_target: true
+
+# Weekly briefing voice & persona (ElevenLabs TTS)
+briefing:
+  voice_id: pNInz6obpgDQGcFmaJgB  # Adam — deep, authoritative male
+  persona: >
+    You are Director Marcus Hale, a 30-year veteran of geopolitical intelligence.
+    You speak with measured authority, citing specific dates and actors.
+    Your tone is grave when warranted, but always controlled.

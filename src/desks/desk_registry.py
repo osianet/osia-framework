@@ -76,6 +76,14 @@ class QdrantConfig:
 
 
 @dataclass
+class BriefingConfig:
+    """ElevenLabs voice and persona for weekly department briefings."""
+
+    voice_id: str
+    persona: str
+
+
+@dataclass
 class DeskConfig:
     slug: str
     name: str
@@ -88,6 +96,7 @@ class DeskConfig:
     mcp_servers: list[str]
     system_prompt: str  # fully assembled: prompt + mandate + citation protocol
     entity_research_target: bool = True
+    briefing: BriefingConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +189,15 @@ def _parse_desk_yaml(path: Path, mandate_text: str, citation_protocol: str) -> D
     # Assemble full system prompt
     system_prompt = _assemble_system_prompt(prompt_text, mandate_text, citation_protocol)
 
+    # Parse optional briefing block (ElevenLabs voice for weekly briefings)
+    briefing_cfg: BriefingConfig | None = None
+    briefing_block = raw.get("briefing")
+    if isinstance(briefing_block, dict) and briefing_block.get("voice_id"):
+        briefing_cfg = BriefingConfig(
+            voice_id=briefing_block["voice_id"],
+            persona=str(briefing_block.get("persona", "")),
+        )
+
     return DeskConfig(
         slug=slug,
         name=name,
@@ -192,6 +210,7 @@ def _parse_desk_yaml(path: Path, mandate_text: str, citation_protocol: str) -> D
         mcp_servers=mcp_servers,
         system_prompt=system_prompt,
         entity_research_target=entity_research_target,
+        briefing=briefing_cfg,
     )
 
 

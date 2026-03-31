@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for OSIA Weekly Department Briefings
+Requires=osia-weekly-briefing.service
+
+[Timer]
+Unit=osia-weekly-briefing.service
+OnCalendar=Mon *-*-* 08:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

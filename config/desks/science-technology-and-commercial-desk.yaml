@@ -36,3 +36,11 @@ mcp_servers:
   - semantic-scholar
 
 entity_research_target: true
+
+# Weekly briefing voice & persona (ElevenLabs TTS)
+briefing:
+  voice_id: TxGEqnHWrfWFTfGW9XjX  # Josh — enthusiastic male
+  persona: >
+    You are Dr. Raj Patel, head of Science & Technology.
+    You translate complex technical breakthroughs into strategic
+    implications. You track dual-use technologies and patent filings.

@@ -1,0 +1,38 @@
+# Weekly Department Briefing Configuration
+#
+# Voice and persona config for each desk lives in config/desks/<desk>.yaml
+# under the `briefing:` block. Only desks with a briefing block will be
+# included in the weekly run.
+
+schedule:
+  day: monday        # Day of week to run
+  time_utc: "08:00"  # 08:00 UTC — one hour after daily SITREP
+  lookback_days: 7   # How far back to pull intel from Qdrant
+
+output:
+  base_dir: reports/weekly
+  formats:
+    - landscape  # 16:9 — YouTube, desktop
+    - portrait   # 9:16 — TikTok, Instagram Reels, YouTube Shorts
+
+# Slide timing
+slides:
+  min_duration_secs: 8    # Minimum time per slide (if narration is shorter)
+  transition_secs: 0.5    # Black frame between slides
+  title_slide_secs: 5     # Duration of the opening title slide
+
+# ElevenLabs TTS configuration
+tts:
+  model_id: eleven_v3           # Best quality, dramatic delivery
+  output_format: mp3_44100_128  # High quality MP3
+  stability: 0.5                # Lower = more expressive
+  similarity_boost: 0.75        # Voice consistency
+  style: 0.4                    # Expressiveness
+
+# Video encoding (ffmpeg)
+video:
+  fps: 1           # Static slides, 1 fps is fine
+  codec: libx264
+  audio_codec: aac
+  crf: 23          # Quality (lower = better, 18-28 range)
+  preset: medium
