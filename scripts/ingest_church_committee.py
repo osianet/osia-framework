@@ -50,7 +50,9 @@ Rate limiting / polite scraping:
 
 import argparse
 import asyncio
+import base64
 import hashlib
+import io
 import json
 import logging
 import os
@@ -79,6 +81,7 @@ logger = logging.getLogger("osia.church_committee_ingest")
 # ---------------------------------------------------------------------------
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "") or None
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -117,7 +120,15 @@ BOOKS: list[dict] = [
         "number": 1,
         "title": "Book I: Foreign and Military Intelligence",
         "govinfo_pkg": "CDOC-94sdoc755",
-        "ia_id": "churchcommitteebook1",
+        # archive.org candidates tried in order; govinfo PDF also attempted first.
+        # ia_pdf_pattern: substring matched against filenames in ChurchCommittee_FullReport.
+        "ia_candidates": [
+            "churchcommitteebook1",
+            "ChurchCommittee_FullReport",
+            "ChurchCommittee",
+            "nsia-ChurchCommittee",
+        ],
+        "ia_pdf_pattern": "Book-I",
         "desk_hint": "geopolitical-and-security-desk",
         "date": "1976",
     },
@@ -125,7 +136,12 @@ BOOKS: list[dict] = [
         "number": 2,
         "title": "Book II: Intelligence Activities and the Rights of Americans",
         "govinfo_pkg": "CDOC-94sdoc756",
-        "ia_id": "churchcommitteebook2",
+        "ia_candidates": [
+            "churchcommitteebook2",
+            "ChurchCommittee_FullReport",
+            "ChurchCommittee",
+        ],
+        "ia_pdf_pattern": "Book-II",
         "desk_hint": "information-warfare-desk",
         "date": "1976",
     },
@@ -134,7 +150,12 @@ BOOKS: list[dict] = [
         "title": "Book III: Supplementary Detailed Staff Reports on Intelligence "
         "Activities and the Rights of Americans",
         "govinfo_pkg": "CDOC-94sdoc757",
-        "ia_id": "churchcommitteebook3",
+        "ia_candidates": [
+            "churchcommitteebook3",
+            "nsia-ChurchCommittee",
+            "ChurchCommittee_FullReport",
+        ],
+        "ia_pdf_pattern": "Book-III",
         "desk_hint": "information-warfare-desk",
         "date": "1976",
     },
@@ -142,7 +163,12 @@ BOOKS: list[dict] = [
         "number": 4,
         "title": "Book IV: Supplementary Detailed Staff Reports on Foreign and Military Intelligence",
         "govinfo_pkg": "CDOC-94sdoc758",
-        "ia_id": "churchcommitteebook4",
+        "ia_candidates": [
+            "churchcommitteebook4",
+            "ChurchCommittee_FullReport",
+            "ChurchCommittee",
+        ],
+        "ia_pdf_pattern": "Book-IV",
         "desk_hint": "geopolitical-and-security-desk",
         "date": "1976",
     },
@@ -150,7 +176,12 @@ BOOKS: list[dict] = [
         "number": 5,
         "title": "Book V: The Investigation of the Assassination of President John F. Kennedy",
         "govinfo_pkg": "CDOC-94sdoc759",
-        "ia_id": "churchcommitteebook5",
+        "ia_candidates": [
+            "churchcommitteebook5",
+            "ChurchCommittee_FullReport",
+            "nsia-ChurchCommittee",
+        ],
+        "ia_pdf_pattern": "Book-V",
         "desk_hint": "human-intelligence-and-profiling-desk",
         "date": "1976",
     },
@@ -158,7 +189,13 @@ BOOKS: list[dict] = [
         "number": 6,
         "title": "Book VI: Supplementary Reports on Intelligence Activities",
         "govinfo_pkg": "CDOC-94sdoc760",
-        "ia_id": "churchcommitteebook6",
+        "ia_candidates": [
+            "churchcommitteebook6",
+            "ChurchCommittee_FullReport",
+            "ChurchCommittee",
+        ],
+        # Book VI maps to the Assassination Plots appendix in the FullReport archive
+        "ia_pdf_pattern": "Assassination-Plots",
         "desk_hint": "geopolitical-and-security-desk",
         "date": "1976",
     },
@@ -421,85 +458,201 @@ class ChurchCommitteeIngestor:
             await self._enqueue_book(book, stats)
 
     async def _fetch_book_text(self, book: dict) -> str:
-        """Try govinfo HTML → archive.org djvu text → archive.org full text."""
-        # 1. govinfo HTML
-        govinfo_url = f"https://www.govinfo.gov/content/pkg/{book['govinfo_pkg']}/html/{book['govinfo_pkg']}.htm"
-        html = await self._fetch_url(govinfo_url)
-        if html:
-            text = clean_html_text(html)
+        """Fetch full text for a Church Committee book.
+
+        Priority order:
+        1. govinfo.gov PDF (HTML endpoint is a broken SPA; PDF is directly downloadable)
+        2. archive.org djvu/full text for each candidate identifier
+        3. archive.org PDF for each candidate identifier → pypdf → Claude Haiku OCR
+        """
+        # 1. govinfo PDF
+        govinfo_pdf_url = f"https://www.govinfo.gov/content/pkg/{book['govinfo_pkg']}/pdf/{book['govinfo_pkg']}.pdf"
+        await asyncio.sleep(REQUEST_DELAY)
+        pdf_bytes = await self._download_bytes(govinfo_pdf_url)
+        if pdf_bytes:
+            text = await self._extract_pdf_text(pdf_bytes, book["title"])
             if len(text) > 1000:
-                logger.debug("Got govinfo HTML for %s.", book["title"])
+                logger.info("Got govinfo PDF for %s (%d chars).", book["title"], len(text))
                 return text
 
-        # 2. archive.org djvu text
-        await asyncio.sleep(REQUEST_DELAY)
-        ia_djvu_url = f"https://archive.org/download/{book['ia_id']}/{book['ia_id']}_djvu.txt"
-        raw = await self._fetch_url(ia_djvu_url)
-        if raw:
-            text = clean_djvu_text(raw)
-            if len(text) > 1000:
-                logger.debug("Got archive.org djvu text for %s.", book["title"])
-                return text
+        # 2 & 3. Try each archive.org candidate
+        seen_ids: set[str] = set()
+        for ia_id in book["ia_candidates"]:
+            if ia_id in seen_ids:
+                continue
+            seen_ids.add(ia_id)
 
-        # 3. archive.org full text
-        await asyncio.sleep(REQUEST_DELAY)
-        ia_full_url = f"https://archive.org/download/{book['ia_id']}/{book['ia_id']}_full.txt"
-        raw = await self._fetch_url(ia_full_url)
-        if raw:
-            text = clean_djvu_text(raw)
-            if len(text) > 1000:
-                logger.debug("Got archive.org full text for %s.", book["title"])
-                return text
-
-        # 4. Try archive.org search to find a matching identifier
-        logger.info("Trying archive.org search for '%s' …", book["title"])
-        await asyncio.sleep(REQUEST_DELAY)
-        alt_id = await self._search_archive_org(book["title"])
-        if alt_id and alt_id != book["ia_id"]:
+            # Text files first (fast, no cost)
             for suffix in ("_djvu.txt", "_full.txt"):
                 await asyncio.sleep(REQUEST_DELAY)
-                url = f"https://archive.org/download/{alt_id}/{alt_id}{suffix}"
-                raw = await self._fetch_url(url)
-                if raw:
-                    text = clean_djvu_text(raw)
-                    if len(text) > 1000:
-                        logger.info("Found via search — identifier: %s", alt_id)
-                        return text
+                url = f"https://archive.org/download/{ia_id}/{ia_id}{suffix}"
+                raw = await self._fetch_text_url(url)
+                if raw and len(raw) > 1000:
+                    logger.info("Got archive.org %s text for %s (%d chars).", suffix, book["title"], len(raw))
+                    return clean_djvu_text(raw)
 
+            # PDF from archive.org file list
+            await asyncio.sleep(REQUEST_DELAY)
+            pdf_bytes = await self._fetch_ia_pdf(ia_id, book.get("ia_pdf_pattern"))
+            if pdf_bytes:
+                text = await self._extract_pdf_text(pdf_bytes, book["title"])
+                if len(text) > 1000:
+                    logger.info("Got archive.org PDF (%s) for %s (%d chars).", ia_id, book["title"], len(text))
+                    return text
+
+        logger.warning("All sources exhausted for %s.", book["title"])
         return ""
 
-    async def _search_archive_org(self, query: str) -> str | None:
-        """Search archive.org for a text item matching the query, return first identifier."""
-        assert self._http is not None
-        search_url = "https://archive.org/advancedsearch.php"
-        params = {
-            "q": f'({query}) AND mediatype:texts AND subject:"government documents"',
-            "fl": "identifier,title",
-            "rows": "5",
-            "output": "json",
-        }
-        for attempt in range(3):
-            try:
-                resp = await self._http.get(search_url, params=params)
-                resp.raise_for_status()
-                docs = resp.json().get("response", {}).get("docs", [])
-                if docs:
-                    return docs[0]["identifier"]
-                return None
-            except Exception as exc:
-                wait = 10 * (attempt + 1)
-                logger.debug("archive.org search attempt %d failed: %s — retry in %ds", attempt + 1, exc, wait)
-                await asyncio.sleep(wait)
-        return None
+    async def _fetch_ia_pdf(self, ia_id: str, pattern: str | None = None) -> bytes:
+        """Download a PDF from an archive.org item's file list.
 
-    async def _fetch_url(self, url: str) -> str:
+        If `pattern` is given, prefers PDF filenames that contain that substring
+        (case-insensitive), so we can target the correct book within a multi-volume item.
+        Falls back to the first PDF found.
+        """
+        assert self._http is not None
+        try:
+            resp = await self._http.get(f"https://archive.org/metadata/{ia_id}/files")
+            if resp.status_code != 200:
+                return b""
+            files = resp.json().get("result", [])
+        except Exception as exc:
+            logger.debug("Could not fetch file list for %s: %s", ia_id, exc)
+            return b""
+
+        pdf_files = [f["name"] for f in files if str(f.get("name", "")).lower().endswith(".pdf")]
+        if not pdf_files:
+            return b""
+
+        # Prefer pattern match; fall back to alphabetical order
+        if pattern:
+            matched = [n for n in pdf_files if pattern.lower() in n.lower()]
+            pdf_files = matched if matched else pdf_files
+
+        url = f"https://archive.org/download/{ia_id}/{pdf_files[0]}"
+        await asyncio.sleep(REQUEST_DELAY)
+        logger.debug("Downloading PDF %s from %s", pdf_files[0], ia_id)
+        return await self._download_bytes(url)
+
+    async def _download_bytes(self, url: str) -> bytes:
+        """Download raw bytes; treats 4xx/503 as absent (no retry)."""
         assert self._http is not None
         for attempt in range(3):
             try:
                 resp = await self._http.get(url)
-                if resp.status_code == 404:
+                if resp.status_code in (403, 404, 503):
+                    return b""
+                resp.raise_for_status()
+                return resp.content
+            except Exception as exc:
+                if attempt < 2:
+                    await asyncio.sleep(10 * (attempt + 1))
+                else:
+                    logger.debug("Failed to download %s: %s", url, exc)
+        return b""
+
+    async def _extract_pdf_text(self, pdf_bytes: bytes, title: str = "") -> str:
+        """Extract text from PDF: try pypdf first, fall back to Claude Haiku OCR."""
+        if not pdf_bytes:
+            return ""
+        # Try pypdf — free, instant, works well on PDFs with embedded text layer
+        try:
+            import pypdf
+
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+            parts = [page.extract_text() or "" for page in reader.pages]
+            full_text = "\n\n".join(p for p in parts if p.strip())
+            if len(full_text.strip()) > 300:
+                logger.debug("pypdf extracted %d chars from '%s'.", len(full_text), title or "PDF")
+                return full_text
+        except Exception as exc:
+            logger.debug("pypdf failed for '%s': %s", title or "PDF", exc)
+
+        # Fall back to Claude Haiku for image-only scans
+        logger.info("pypdf insufficient for '%s' — sending to Claude Haiku for OCR.", title or "PDF")
+        return await self._extract_pdf_with_claude(pdf_bytes, title)
+
+    async def _extract_pdf_with_claude(self, pdf_bytes: bytes, title: str = "") -> str:
+        """OCR a PDF with Claude Haiku. Splits large docs into ≤80-page chunks."""
+        import anthropic
+
+        MAX_CHUNK_BYTES = 20 * 1024 * 1024  # 20 MB per request
+
+        async def call_claude(chunk: bytes) -> str:
+            client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY or None)
+            b64 = base64.standard_b64encode(chunk).decode()
+            for attempt in range(3):
+                try:
+                    msg = await client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=8192,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "document",
+                                        "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+                                    },
+                                    {
+                                        "type": "text",
+                                        "text": (
+                                            "Extract all text from this document verbatim. "
+                                            "Preserve paragraph structure. "
+                                            "Output only the extracted text, no commentary."
+                                        ),
+                                    },
+                                ],
+                            }
+                        ],
+                    )
+                    return msg.content[0].text if msg.content else ""
+                except Exception as exc:
+                    wait = 15 * (attempt + 1)
+                    logger.warning("Claude Haiku OCR attempt %d failed: %s — retry in %ds", attempt + 1, exc, wait)
+                    await asyncio.sleep(wait)
+            return ""
+
+        # If the PDF fits in one request, send it directly
+        if len(pdf_bytes) <= MAX_CHUNK_BYTES:
+            return await call_claude(pdf_bytes)
+
+        # Otherwise split into 80-page chunks using pypdf
+        try:
+            import pypdf
+
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+            total_pages = len(reader.pages)
+            PAGES_PER_CHUNK = 80
+            parts: list[str] = []
+            for start in range(0, total_pages, PAGES_PER_CHUNK):
+                end = min(start + PAGES_PER_CHUNK, total_pages)
+                writer = pypdf.PdfWriter()
+                for i in range(start, end):
+                    writer.add_page(reader.pages[i])
+                buf = io.BytesIO()
+                writer.write(buf)
+                logger.info("Sending pages %d–%d of '%s' to Claude Haiku…", start + 1, end, title or "PDF")
+                chunk_text = await call_claude(buf.getvalue())
+                if chunk_text:
+                    parts.append(chunk_text)
+            return "\n\n".join(parts)
+        except Exception as exc:
+            logger.warning("Could not split PDF '%s': %s", title or "PDF", exc)
+            return ""
+
+    async def _fetch_text_url(self, url: str) -> str:
+        """Fetch a text URL; skips govinfo SPA page-not-found responses."""
+        assert self._http is not None
+        for attempt in range(3):
+            try:
+                resp = await self._http.get(url)
+                if resp.status_code in (403, 404, 503):
                     return ""
                 resp.raise_for_status()
+                # govinfo serves a JS SPA with "Page Not Found" even on 200
+                if "Page Not Found" in resp.text[:500]:
+                    return ""
                 return resp.text
             except Exception as exc:
                 if attempt < 2:

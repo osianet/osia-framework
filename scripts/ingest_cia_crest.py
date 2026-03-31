@@ -57,7 +57,9 @@ Rate limiting / polite scraping:
 
 import argparse
 import asyncio
+import base64
 import hashlib
+import io
 import json
 import logging
 import os
@@ -86,6 +88,7 @@ logger = logging.getLogger("osia.cia_crest_ingest")
 # ---------------------------------------------------------------------------
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "") or None
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -95,7 +98,11 @@ EMBEDDING_DIM = 384
 SOURCE_LABEL = "CIA CREST — 25-Year Program Archive (via archive.org)"
 
 IA_SEARCH_URL = "https://archive.org/advancedsearch.php"
-IA_COLLECTION = "ciaindexed"
+# archive.org hosts two views of CIA CREST:
+#   collection:ciareadingroom  — 788 K metadata records, many without downloadable files
+#   identifier:CIA-RDP*        — 274 K items with confirmed downloadable files (_djvu.txt + PDF)
+# We use the latter so every search result is actually retrievable.
+IA_SEARCH_QUERY = "identifier:CIA-RDP*"
 
 CHECKPOINT_KEY = "osia:cia_crest:checkpoint"
 SEEN_ITEMS_KEY = "osia:cia_crest:seen_items"
@@ -354,10 +361,10 @@ class CiaCrestIngestor:
             await asyncio.sleep(PAGE_DELAY)
 
     async def _search_page(self, offset: int) -> list[dict]:
-        """Fetch one page of archive.org search results for the ciaindexed collection."""
+        """Fetch one page of CIA Reading Room items from archive.org."""
         assert self._http is not None
         params = {
-            "q": f"collection:{IA_COLLECTION}",
+            "q": IA_SEARCH_QUERY,
             "fl": "identifier,title,subject,description,date",
             "rows": str(self.search_rows),
             "start": str(offset),
@@ -373,6 +380,20 @@ class CiaCrestIngestor:
                 logger.warning("Search page attempt %d failed: %s — retry in %ds", attempt + 1, exc, wait)
                 await asyncio.sleep(wait)
         return []
+
+    @staticmethod
+    def _ia_download_id(identifier: str) -> str:
+        """Normalise an archive.org CIA identifier to the uppercase download form.
+
+        archive.org search returns lowercase prefixed identifiers like:
+          cia-readingroom-document-cia-rdp78-04718a000300090002-9
+        The actual files are stored under the uppercase CIA-RDP identifier:
+          CIA-RDP78-04718A000300090002-9
+        """
+        prefix = "cia-readingroom-document-"
+        if identifier.lower().startswith(prefix):
+            return identifier[len(prefix) :].upper()
+        return identifier.upper()
 
     # ------------------------------------------------------------------
     # Process individual item
@@ -454,23 +475,166 @@ class CiaCrestIngestor:
         return True
 
     async def _fetch_item_text(self, identifier: str) -> str:
-        """Try djvu text, then full text for an archive.org item."""
-        assert self._http is not None
+        """Fetch text for a CIA CREST item.
+
+        Tries djvu/full text files first (using the normalised uppercase
+        CIA-RDP identifier), then falls back to PDF download + extraction.
+        """
+        dl_id = self._ia_download_id(identifier)
+
+        # 1. Text files (fast, no cost) — use the normalised uppercase id
         for suffix in ("_djvu.txt", "_full.txt"):
-            url = f"https://archive.org/download/{identifier}/{identifier}{suffix}"
+            url = f"https://archive.org/download/{dl_id}/{dl_id}{suffix}"
+            raw = await self._fetch_text_url(url)
+            if raw and len(raw) > 100:
+                return raw
+
+        # 2. PDF → pypdf → Claude Haiku OCR
+        pdf_bytes = await self._fetch_ia_pdf(dl_id)
+        if pdf_bytes:
+            return await self._extract_pdf_text(pdf_bytes, identifier)
+
+        return ""
+
+    async def _fetch_text_url(self, url: str) -> str:
+        """Fetch a text file; treats 4xx/503 as absent."""
+        assert self._http is not None
+        for attempt in range(3):
+            try:
+                resp = await self._http.get(url)
+                if resp.status_code in (403, 404, 503):
+                    return ""
+                resp.raise_for_status()
+                return resp.text
+            except Exception as exc:
+                if attempt < 2:
+                    await asyncio.sleep(5 * (attempt + 1))
+                else:
+                    logger.debug("Failed to fetch %s: %s", url, exc)
+        return ""
+
+    async def _download_bytes(self, url: str) -> bytes:
+        """Download raw bytes; treats 4xx/503 as absent."""
+        assert self._http is not None
+        for attempt in range(3):
+            try:
+                resp = await self._http.get(url)
+                if resp.status_code in (403, 404, 503):
+                    return b""
+                resp.raise_for_status()
+                return resp.content
+            except Exception as exc:
+                if attempt < 2:
+                    await asyncio.sleep(10 * (attempt + 1))
+                else:
+                    logger.debug("Failed to download %s: %s", url, exc)
+        return b""
+
+    async def _fetch_ia_pdf(self, dl_id: str) -> bytes:
+        """Download the primary PDF from an archive.org item."""
+        assert self._http is not None
+        try:
+            resp = await self._http.get(f"https://archive.org/metadata/{dl_id}/files")
+            if resp.status_code != 200:
+                return b""
+            files = resp.json().get("result", [])
+        except Exception as exc:
+            logger.debug("Could not fetch file list for %s: %s", dl_id, exc)
+            return b""
+
+        # Prefer the original PDF over derivatives
+        pdf_files = [f["name"] for f in files if str(f.get("name", "")).lower().endswith(".pdf")]
+        if not pdf_files:
+            return b""
+
+        # Pick the smallest PDF (original scans are usually smallest; _text.pdf is a derivative)
+        pdf_files.sort(key=lambda n: int(next((f.get("size", 0) for f in files if f.get("name") == n), 0)))
+        url = f"https://archive.org/download/{dl_id}/{pdf_files[0]}"
+        await asyncio.sleep(ITEM_DELAY)
+        return await self._download_bytes(url)
+
+    async def _extract_pdf_text(self, pdf_bytes: bytes, label: str = "") -> str:
+        """Extract text from PDF: try pypdf first, fall back to Claude Haiku OCR."""
+        if not pdf_bytes:
+            return ""
+        try:
+            import pypdf
+
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+            parts = [page.extract_text() or "" for page in reader.pages]
+            full_text = "\n\n".join(p for p in parts if p.strip())
+            if len(full_text.strip()) > 100:
+                return full_text
+        except Exception as exc:
+            logger.debug("pypdf failed for %s: %s", label, exc)
+
+        logger.debug("pypdf insufficient for %s — trying Claude Haiku.", label)
+        return await self._extract_pdf_with_claude(pdf_bytes)
+
+    async def _extract_pdf_with_claude(self, pdf_bytes: bytes) -> str:
+        """OCR a PDF with Claude Haiku. Handles multi-page splitting for large docs."""
+        import anthropic
+
+        MAX_CHUNK_BYTES = 20 * 1024 * 1024
+
+        async def call_claude(chunk: bytes) -> str:
+            client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY or None)
+            b64 = base64.standard_b64encode(chunk).decode()
             for attempt in range(3):
                 try:
-                    resp = await self._http.get(url)
-                    if resp.status_code == 404:
-                        break
-                    resp.raise_for_status()
-                    return resp.text
+                    msg = await client.messages.create(
+                        model="claude-haiku-4-5-20251001",
+                        max_tokens=4096,
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "document",
+                                        "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
+                                    },
+                                    {
+                                        "type": "text",
+                                        "text": (
+                                            "Extract all text from this document verbatim. "
+                                            "Preserve paragraph structure. "
+                                            "Output only the extracted text, no commentary."
+                                        ),
+                                    },
+                                ],
+                            }
+                        ],
+                    )
+                    return msg.content[0].text if msg.content else ""
                 except Exception as exc:
-                    if attempt < 2:
-                        await asyncio.sleep(5 * (attempt + 1))
-                    else:
-                        logger.debug("Could not fetch text for %s%s: %s", identifier, suffix, exc)
-        return ""
+                    wait = 15 * (attempt + 1)
+                    logger.warning("Claude Haiku OCR attempt %d failed: %s — retry in %ds", attempt + 1, exc, wait)
+                    await asyncio.sleep(wait)
+            return ""
+
+        if len(pdf_bytes) <= MAX_CHUNK_BYTES:
+            return await call_claude(pdf_bytes)
+
+        # Split into 80-page chunks
+        try:
+            import pypdf
+
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+            PAGES_PER_CHUNK = 80
+            parts: list[str] = []
+            for start in range(0, len(reader.pages), PAGES_PER_CHUNK):
+                writer = pypdf.PdfWriter()
+                for i in range(start, min(start + PAGES_PER_CHUNK, len(reader.pages))):
+                    writer.add_page(reader.pages[i])
+                buf = io.BytesIO()
+                writer.write(buf)
+                chunk_text = await call_claude(buf.getvalue())
+                if chunk_text:
+                    parts.append(chunk_text)
+            return "\n\n".join(parts)
+        except Exception as exc:
+            logger.warning("Could not split PDF: %s", exc)
+            return ""
 
     # ------------------------------------------------------------------
     # Research queue
