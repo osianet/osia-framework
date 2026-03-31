@@ -44,6 +44,30 @@ html, body {
     background: linear-gradient(160deg, #0a0e0a 0%, #0c140c 40%, #081008 100%);
 }
 
+/* ── AI-generated background image ─────────────────────────────── */
+.slide-bg-image {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    z-index: 0;
+}
+
+/* Dark gradient overlay — ensures text legibility over the image */
+.slide-bg-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(
+        160deg,
+        rgba(10, 14, 10, 0.88) 0%,
+        rgba(12, 20, 12, 0.82) 30%,
+        rgba(8, 16, 8, 0.85) 70%,
+        rgba(10, 14, 10, 0.92) 100%
+    );
+    z-index: 0;
+}
+
 /* ── Scanline texture ──────────────────────────────────────────── */
 .slide::before {
     content: '';
@@ -337,10 +361,34 @@ html, body {
     {% endif %}
 }
 
+.title-slide .presenter-block {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 28px;
+}
+
+.title-slide .presenter-portrait {
+    {% if orientation == 'landscape' %}
+    width: 80px;
+    height: 80px;
+    {% else %}
+    width: 96px;
+    height: 96px;
+    {% endif %}
+    border-radius: 50%;
+    border: 2px solid rgba(255, 140, 0, 0.4);
+    box-shadow: 0 0 20px rgba(0, 180, 60, 0.15), 0 0 40px rgba(0, 0, 0, 0.5);
+    object-fit: cover;
+}
+
+.title-slide .presenter-info {
+    text-align: left;
+}
+
 .title-slide .presenter-name {
     font-size: 16px;
     color: #7ab87a;
-    margin-top: 24px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
 }
@@ -348,7 +396,7 @@ html, body {
 .title-slide .week-label {
     font-size: 14px;
     color: #3a6a3a;
-    margin-top: 8px;
+    margin-top: 4px;
     letter-spacing: 0.15em;
 }
 
@@ -368,6 +416,11 @@ html, body {
 <body>
 
 <div class="slide {% if slide_type == 'title' %}title-slide{% elif slide_type == 'closing' %}closing-slide{% endif %}">
+
+  {% if bg_image_data_uri %}
+  <div class="slide-bg-image" style="background-image: url('{{ bg_image_data_uri }}');"></div>
+  <div class="slide-bg-overlay"></div>
+  {% endif %}
 
   <!-- Top bar -->
   <div class="top-bar">
@@ -398,8 +451,15 @@ html, body {
   <div class="content">
     <div class="slide-title-main">Weekly Intelligence Briefing</div>
     <div class="slide-title-sub">{{ slide_title }}</div>
-    <div class="presenter-name">Presented by {{ persona_name }}</div>
-    <div class="week-label">{{ week_label }}</div>
+    <div class="presenter-block">
+      {% if portrait_data_uri %}
+      <img class="presenter-portrait" src="{{ portrait_data_uri }}" alt="{{ persona_name }}">
+      {% endif %}
+      <div class="presenter-info">
+        <div class="presenter-name">Presented by {{ persona_name }}</div>
+        <div class="week-label">{{ week_label }}</div>
+      </div>
+    </div>
   </div>
 
   {% elif slide_type == 'closing' %}

@@ -39,6 +39,15 @@ def _load_logo_b64() -> str | None:
     return None
 
 
+def _load_portrait_b64(desk_slug: str) -> str | None:
+    """Return the department head portrait as a base64 data URI, if it exists."""
+    portrait_path = _ASSETS_DIR / "portraits" / f"{desk_slug}.png"
+    if portrait_path.exists():
+        raw = portrait_path.read_bytes()
+        return "data:image/png;base64," + base64.b64encode(raw).decode()
+    return None
+
+
 def _md_to_html(text: str) -> str:
     """Convert markdown text to HTML, handling bullet points and emphasis."""
     return md.markdown(
@@ -70,6 +79,7 @@ class SlideRenderer:
         orientation: str,
         output_dir: Path,
         week_label: str,
+        bg_images: list[Path | None] | None = None,
     ) -> list[Path]:
         """Render all slides to PNG images.
 
@@ -81,6 +91,7 @@ class SlideRenderer:
             orientation: 'landscape' or 'portrait'.
             output_dir: Directory to write PNG files.
             week_label: e.g. '2026-W14'.
+            bg_images: Optional list of Paths to background images (one per slide, None entries OK).
 
         Returns:
             List of Paths to rendered PNG images.
@@ -98,11 +109,18 @@ class SlideRenderer:
         now = datetime.now(UTC)
         ref_prefix = desk_slug[:8].upper().replace("-", "")
         ref_number = f"OSIA-WB-{now.strftime('%Y%m%d')}-{ref_prefix}"
+        portrait_uri = _load_portrait_b64(desk_slug)
 
         image_paths: list[Path] = []
 
         for i, slide in enumerate(slides):
             body_html = _md_to_html(slide.get("body", ""))
+
+            # Encode background image as data URI if available
+            bg_image_data_uri = None
+            if bg_images and i < len(bg_images) and bg_images[i] and bg_images[i].exists():
+                raw = bg_images[i].read_bytes()
+                bg_image_data_uri = "data:image/png;base64," + base64.b64encode(raw).decode()
 
             html_content = template.render(
                 slide_title=slide.get("title", ""),
@@ -119,6 +137,8 @@ class SlideRenderer:
                 width=width,
                 height=height,
                 logo_data_uri=self._logo_uri,
+                bg_image_data_uri=bg_image_data_uri,
+                portrait_data_uri=portrait_uri if slide.get("slide_type") == "title" else None,
                 timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
             )
 
@@ -156,6 +176,7 @@ class SlideRenderer:
         orientation: str,
         output_path: Path,
         week_label: str,
+        bg_images: list[Path | None] | None = None,
     ) -> Path:
         """Render all slides into a single multi-page PDF.
 
@@ -167,6 +188,7 @@ class SlideRenderer:
             orientation: 'landscape' or 'portrait'.
             output_path: Path for the output PDF.
             week_label: e.g. '2026-W14'.
+            bg_images: Optional list of Paths to background images (one per slide, None entries OK).
 
         Returns:
             Path to the generated PDF.
@@ -183,11 +205,18 @@ class SlideRenderer:
         now = datetime.now(UTC)
         ref_prefix = desk_slug[:8].upper().replace("-", "")
         ref_number = f"OSIA-WB-{now.strftime('%Y%m%d')}-{ref_prefix}"
+        portrait_uri = _load_portrait_b64(desk_slug)
 
         # Render each slide as a separate HTML page, then combine
         all_pages = []
         for i, slide in enumerate(slides):
             body_html = _md_to_html(slide.get("body", ""))
+
+            # Encode background image as data URI if available
+            bg_image_data_uri = None
+            if bg_images and i < len(bg_images) and bg_images[i] and bg_images[i].exists():
+                raw = bg_images[i].read_bytes()
+                bg_image_data_uri = "data:image/png;base64," + base64.b64encode(raw).decode()
 
             html_content = template.render(
                 slide_title=slide.get("title", ""),
@@ -204,6 +233,8 @@ class SlideRenderer:
                 width=width,
                 height=height,
                 logo_data_uri=self._logo_uri,
+                bg_image_data_uri=bg_image_data_uri,
+                portrait_data_uri=portrait_uri if slide.get("slide_type") == "title" else None,
                 timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
             )
             all_pages.append(html_content)

@@ -81,6 +81,7 @@ class BriefingConfig:
 
     voice_id: str
     persona: str
+    portrait_prompt: str = ""
 
 
 @dataclass
@@ -196,6 +197,7 @@ def _parse_desk_yaml(path: Path, mandate_text: str, citation_protocol: str) -> D
         briefing_cfg = BriefingConfig(
             voice_id=briefing_block["voice_id"],
             persona=str(briefing_block.get("persona", "")),
+            portrait_prompt=str(briefing_block.get("portrait_prompt", "")),
         )
 
     return DeskConfig(

@@ -46,3 +46,10 @@ briefing:
     You build pictures of people and power from fragments — motivations,
     relationships, contradictions, and pressure points. Perceptive,
     patient, and rarely surprised.
+  portrait_prompt: >
+    Professional headshot portrait of Agent Sarah Chen, a Chinese-American woman in her
+    late 30s, chief of Human Intelligence. Calm, observant expression with dark perceptive
+    eyes that seem to read everything. Straight black hair at shoulder length, side-parted.
+    Wearing a dark grey blazer over a black turtleneck. No jewelry. Understated and composed.
+    Soft directional lighting against a dark muted green-black background. Photorealistic,
+    8k, intelligence agency ID photo aesthetic. No text, no words, no watermarks.
