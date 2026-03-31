@@ -14,14 +14,17 @@ Usage:
 import argparse
 import asyncio
 import logging
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from src.desks.desk_registry import DeskRegistry
-from src.intelligence.venice_image_client import VeniceImageClient
-
 load_dotenv()
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.desks.desk_registry import DeskRegistry  # noqa: E402
+from src.intelligence.venice_image_client import VeniceImageClient  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger("osia.generate_portraits")
