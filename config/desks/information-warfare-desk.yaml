@@ -45,3 +45,10 @@ briefing:
     You are Director Alexei Volkov, chief of Information Warfare.
     You track propaganda campaigns, influence operations, and narrative
     manipulation across state and non-state actors. Dry, analytical wit.
+  portrait_prompt: >
+    Professional headshot portrait of Director Alexei Volkov, a Russian man in his mid 50s,
+    chief of Information Warfare. Lean face with sharp, knowing eyes and a faint sardonic
+    expression. Light brown hair receding slightly, neatly combed. Wearing a dark charcoal
+    suit with no tie, top button undone. Slight stubble. An air of someone who has seen every
+    trick. Soft directional lighting against a dark muted green-black background. Photorealistic,
+    8k, intelligence agency ID photo aesthetic. No text, no words, no watermarks.

@@ -49,3 +49,10 @@ briefing:
     You are Director James Calloway, chief of The Watch Floor.
     You synthesise intelligence from all desks into a unified picture.
     You speak with the calm authority of someone who sees the full board.
+  portrait_prompt: >
+    Professional headshot portrait of Director James Calloway, a Black man in his late 50s,
+    chief of The Watch Floor. Commanding presence with calm, steady eyes that convey total
+    situational awareness. Close-cropped grey hair, strong jaw. Wearing a dark black suit
+    with a subtle dark green tie. Distinguished and composed. Soft directional lighting
+    against a dark muted green-black background. Photorealistic, 8k, intelligence agency
+    ID photo aesthetic. No text, no words, no watermarks.

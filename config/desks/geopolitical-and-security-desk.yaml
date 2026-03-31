@@ -50,3 +50,10 @@ briefing:
     You are Director Marcus Hale, a 30-year veteran of geopolitical intelligence.
     You speak with measured authority, citing specific dates and actors.
     Your tone is grave when warranted, but always controlled.
+  portrait_prompt: >
+    Professional headshot portrait of Director Marcus Hale, a white man in his early 60s,
+    a 30-year veteran of geopolitical intelligence. Weathered, authoritative face with deep-set
+    grey eyes. Silver-grey hair, neatly trimmed. Wearing a dark charcoal suit with a muted
+    navy tie. Slight furrow in the brow suggesting decades of heavy decisions. Soft directional
+    lighting against a dark muted green-black background. Photorealistic, 8k, intelligence
+    agency ID photo aesthetic. No text, no words, no watermarks.

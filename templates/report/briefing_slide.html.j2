@@ -361,10 +361,34 @@ html, body {
     {% endif %}
 }
 
+.title-slide .presenter-block {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-top: 28px;
+}
+
+.title-slide .presenter-portrait {
+    {% if orientation == 'landscape' %}
+    width: 80px;
+    height: 80px;
+    {% else %}
+    width: 96px;
+    height: 96px;
+    {% endif %}
+    border-radius: 50%;
+    border: 2px solid rgba(255, 140, 0, 0.4);
+    box-shadow: 0 0 20px rgba(0, 180, 60, 0.15), 0 0 40px rgba(0, 0, 0, 0.5);
+    object-fit: cover;
+}
+
+.title-slide .presenter-info {
+    text-align: left;
+}
+
 .title-slide .presenter-name {
     font-size: 16px;
     color: #7ab87a;
-    margin-top: 24px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
 }
@@ -372,7 +396,7 @@ html, body {
 .title-slide .week-label {
     font-size: 14px;
     color: #3a6a3a;
-    margin-top: 8px;
+    margin-top: 4px;
     letter-spacing: 0.15em;
 }
 
@@ -427,8 +451,15 @@ html, body {
   <div class="content">
     <div class="slide-title-main">Weekly Intelligence Briefing</div>
     <div class="slide-title-sub">{{ slide_title }}</div>
-    <div class="presenter-name">Presented by {{ persona_name }}</div>
-    <div class="week-label">{{ week_label }}</div>
+    <div class="presenter-block">
+      {% if portrait_data_uri %}
+      <img class="presenter-portrait" src="{{ portrait_data_uri }}" alt="{{ persona_name }}">
+      {% endif %}
+      <div class="presenter-info">
+        <div class="presenter-name">Presented by {{ persona_name }}</div>
+        <div class="week-label">{{ week_label }}</div>
+      </div>
+    </div>
   </div>
 
   {% elif slide_type == 'closing' %}
