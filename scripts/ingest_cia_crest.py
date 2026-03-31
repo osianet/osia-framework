@@ -57,7 +57,6 @@ Rate limiting / polite scraping:
 
 import argparse
 import asyncio
-import base64
 import hashlib
 import io
 import json
@@ -88,7 +87,7 @@ logger = logging.getLogger("osia.cia_crest_ingest")
 # ---------------------------------------------------------------------------
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "") or None
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -514,7 +513,7 @@ class CiaCrestIngestor:
         return ""
 
     async def _download_bytes(self, url: str) -> bytes:
-        """Download raw bytes; treats 4xx/503 as absent."""
+        """Download raw bytes; treats 4xx/503 and non-PDF responses as absent."""
         assert self._http is not None
         for attempt in range(3):
             try:
@@ -522,6 +521,10 @@ class CiaCrestIngestor:
                 if resp.status_code in (403, 404, 503):
                     return b""
                 resp.raise_for_status()
+                ct = resp.headers.get("content-type", "")
+                if "pdf" not in ct and resp.content[:4] != b"%PDF":
+                    logger.debug("Skipping non-PDF response from %s (content-type: %s)", url, ct)
+                    return b""
                 return resp.content
             except Exception as exc:
                 if attempt < 2:
@@ -568,52 +571,39 @@ class CiaCrestIngestor:
         except Exception as exc:
             logger.debug("pypdf failed for %s: %s", label, exc)
 
-        logger.debug("pypdf insufficient for %s — trying Claude Haiku.", label)
-        return await self._extract_pdf_with_claude(pdf_bytes)
+        logger.debug("pypdf insufficient for %s — trying Gemini Flash.", label)
+        return await self._extract_pdf_with_gemini(pdf_bytes)
 
-    async def _extract_pdf_with_claude(self, pdf_bytes: bytes) -> str:
-        """OCR a PDF with Claude Haiku. Handles multi-page splitting for large docs."""
-        import anthropic
+    async def _extract_pdf_with_gemini(self, pdf_bytes: bytes) -> str:
+        """OCR a PDF with Gemini Flash. Handles multi-page splitting for large docs."""
+        from google import genai
+        from google.genai import types
 
         MAX_CHUNK_BYTES = 20 * 1024 * 1024
 
-        async def call_claude(chunk: bytes) -> str:
-            client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY or None)
-            b64 = base64.standard_b64encode(chunk).decode()
+        async def call_gemini(chunk: bytes) -> str:
+            client = genai.Client(api_key=GEMINI_API_KEY)
             for attempt in range(3):
                 try:
-                    msg = await client.messages.create(
-                        model="claude-haiku-4-5-20251001",
-                        max_tokens=4096,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "document",
-                                        "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
-                                    },
-                                    {
-                                        "type": "text",
-                                        "text": (
-                                            "Extract all text from this document verbatim. "
-                                            "Preserve paragraph structure. "
-                                            "Output only the extracted text, no commentary."
-                                        ),
-                                    },
-                                ],
-                            }
-                        ],
+                    response = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: client.models.generate_content(
+                            model="gemini-2.0-flash",
+                            contents=[
+                                types.Part.from_bytes(data=chunk, mime_type="application/pdf"),
+                                "Extract all text from this document verbatim. Preserve paragraph structure. Output only the extracted text, no commentary.",
+                            ],
+                        ),
                     )
-                    return msg.content[0].text if msg.content else ""
+                    return response.text or ""
                 except Exception as exc:
                     wait = 15 * (attempt + 1)
-                    logger.warning("Claude Haiku OCR attempt %d failed: %s — retry in %ds", attempt + 1, exc, wait)
+                    logger.warning("Gemini Flash OCR attempt %d failed: %s — retry in %ds", attempt + 1, exc, wait)
                     await asyncio.sleep(wait)
             return ""
 
         if len(pdf_bytes) <= MAX_CHUNK_BYTES:
-            return await call_claude(pdf_bytes)
+            return await call_gemini(pdf_bytes)
 
         # Split into 80-page chunks
         try:
@@ -628,7 +618,7 @@ class CiaCrestIngestor:
                     writer.add_page(reader.pages[i])
                 buf = io.BytesIO()
                 writer.write(buf)
-                chunk_text = await call_claude(buf.getvalue())
+                chunk_text = await call_gemini(buf.getvalue())
                 if chunk_text:
                     parts.append(chunk_text)
             return "\n\n".join(parts)

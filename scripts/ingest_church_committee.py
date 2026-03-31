@@ -50,7 +50,6 @@ Rate limiting / polite scraping:
 
 import argparse
 import asyncio
-import base64
 import hashlib
 import io
 import json
@@ -81,7 +80,7 @@ logger = logging.getLogger("osia.church_committee_ingest")
 # ---------------------------------------------------------------------------
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "") or None
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -535,7 +534,7 @@ class ChurchCommitteeIngestor:
         return await self._download_bytes(url)
 
     async def _download_bytes(self, url: str) -> bytes:
-        """Download raw bytes; treats 4xx/503 as absent (no retry)."""
+        """Download raw bytes; treats 4xx/503 and non-PDF responses as absent."""
         assert self._http is not None
         for attempt in range(3):
             try:
@@ -543,6 +542,12 @@ class ChurchCommitteeIngestor:
                 if resp.status_code in (403, 404, 503):
                     return b""
                 resp.raise_for_status()
+                # govinfo redirects broken PDF URLs to an HTML error page;
+                # reject anything that isn't actually a PDF
+                ct = resp.headers.get("content-type", "")
+                if "pdf" not in ct and resp.content[:4] != b"%PDF":
+                    logger.debug("Skipping non-PDF response from %s (content-type: %s)", url, ct)
+                    return b""
                 return resp.content
             except Exception as exc:
                 if attempt < 2:
@@ -568,72 +573,59 @@ class ChurchCommitteeIngestor:
         except Exception as exc:
             logger.debug("pypdf failed for '%s': %s", title or "PDF", exc)
 
-        # Fall back to Claude Haiku for image-only scans
-        logger.info("pypdf insufficient for '%s' — sending to Claude Haiku for OCR.", title or "PDF")
-        return await self._extract_pdf_with_claude(pdf_bytes, title)
+        # Fall back to Gemini Flash for image-only scans
+        logger.info("pypdf insufficient for '%s' — sending to Gemini Flash for OCR.", title or "PDF")
+        return await self._extract_pdf_with_gemini(pdf_bytes, title)
 
-    async def _extract_pdf_with_claude(self, pdf_bytes: bytes, title: str = "") -> str:
-        """OCR a PDF with Claude Haiku. Splits large docs into ≤80-page chunks."""
-        import anthropic
+    async def _extract_pdf_with_gemini(self, pdf_bytes: bytes, title: str = "") -> str:
+        """OCR a PDF with Gemini Flash. Splits large docs into ≤80-page chunks."""
+        from google import genai
+        from google.genai import types
 
+        # Gemini Flash supports up to ~1000 pages but we chunk at 80 pages to stay well within limits
         MAX_CHUNK_BYTES = 20 * 1024 * 1024  # 20 MB per request
 
-        async def call_claude(chunk: bytes) -> str:
-            client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY or None)
-            b64 = base64.standard_b64encode(chunk).decode()
+        async def call_gemini(chunk: bytes) -> str:
+            client = genai.Client(api_key=GEMINI_API_KEY)
             for attempt in range(3):
                 try:
-                    msg = await client.messages.create(
-                        model="claude-haiku-4-5-20251001",
-                        max_tokens=8192,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "document",
-                                        "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
-                                    },
-                                    {
-                                        "type": "text",
-                                        "text": (
-                                            "Extract all text from this document verbatim. "
-                                            "Preserve paragraph structure. "
-                                            "Output only the extracted text, no commentary."
-                                        ),
-                                    },
-                                ],
-                            }
-                        ],
+                    response = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: client.models.generate_content(
+                            model="gemini-2.0-flash",
+                            contents=[
+                                types.Part.from_bytes(data=chunk, mime_type="application/pdf"),
+                                "Extract all text from this document verbatim. Preserve paragraph structure. Output only the extracted text, no commentary.",
+                            ],
+                        ),
                     )
-                    return msg.content[0].text if msg.content else ""
+                    return response.text or ""
                 except Exception as exc:
                     wait = 15 * (attempt + 1)
-                    logger.warning("Claude Haiku OCR attempt %d failed: %s — retry in %ds", attempt + 1, exc, wait)
+                    logger.warning("Gemini Flash OCR attempt %d failed: %s — retry in %ds", attempt + 1, exc, wait)
                     await asyncio.sleep(wait)
             return ""
 
-        # If the PDF fits in one request, send it directly
         if len(pdf_bytes) <= MAX_CHUNK_BYTES:
-            return await call_claude(pdf_bytes)
+            return await call_gemini(pdf_bytes)
 
-        # Otherwise split into 80-page chunks using pypdf
+        # Split into 80-page chunks using pypdf
         try:
             import pypdf
 
             reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
-            total_pages = len(reader.pages)
             PAGES_PER_CHUNK = 80
             parts: list[str] = []
-            for start in range(0, total_pages, PAGES_PER_CHUNK):
-                end = min(start + PAGES_PER_CHUNK, total_pages)
+            for start in range(0, len(reader.pages), PAGES_PER_CHUNK):
                 writer = pypdf.PdfWriter()
-                for i in range(start, end):
+                for i in range(start, min(start + PAGES_PER_CHUNK, len(reader.pages))):
                     writer.add_page(reader.pages[i])
                 buf = io.BytesIO()
                 writer.write(buf)
-                logger.info("Sending pages %d–%d of '%s' to Claude Haiku…", start + 1, end, title or "PDF")
-                chunk_text = await call_claude(buf.getvalue())
+                logger.info(
+                    "Sending pages %d–%d of '%s' to Gemini Flash…", start + 1, start + PAGES_PER_CHUNK, title or "PDF"
+                )
+                chunk_text = await call_gemini(buf.getvalue())
                 if chunk_text:
                     parts.append(chunk_text)
             return "\n\n".join(parts)
