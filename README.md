@@ -178,6 +178,64 @@ ADB device access between the orchestrator and persona daemon is coordinated via
 
 ---
 
+## Weekly Department Briefings
+
+Each intelligence desk produces a weekly video briefing — a narrated slide deck presented by a fictional department head character. The pipeline runs every Monday at 08:00 UTC and generates both landscape (16:9, YouTube) and portrait (9:16, Shorts/Reels) formats.
+
+### Pipeline
+
+1. **Intel retrieval** — queries Qdrant for the past 7 days of intelligence from each desk's collection
+2. **Slide generation** — the desk's LLM produces a structured JSON briefing (title slide, 3–5 content slides, closing slide) with full narration scripts
+3. **Background images** — Venice AI (`flux-2-pro`) generates a dark, cinematic background image per slide, composited behind content with a gradient overlay for text legibility
+4. **Narration** — ElevenLabs TTS renders each slide's narration script to audio, with per-desk voice IDs matching each department head character
+5. **Video assembly** — ffmpeg combines slide PNGs + audio into MP4 segments, then concatenates them
+6. **YouTube upload** — landscape videos upload to YouTube as background tasks (uploads run concurrently with subsequent desk generation)
+
+### Department Head Portraits
+
+Each desk has a `portrait_prompt` in its YAML config describing the department head's appearance. Portraits are generated once via Venice AI and reused across all future briefings, appearing on the title slide.
+
+```bash
+# Generate all portraits
+uv run python scripts/generate_portraits.py
+
+# Single desk
+uv run python scripts/generate_portraits.py --desk cyber-intelligence-and-warfare-desk
+
+# Regenerate existing portraits
+uv run python scripts/generate_portraits.py --force
+```
+
+Portraits are saved to `assets/portraits/<desk-slug>.png`.
+
+### YouTube Upload Setup
+
+Briefing videos can be automatically uploaded to YouTube. This requires a one-time OAuth 2.0 consent flow:
+
+1. Create OAuth 2.0 credentials in [Google Cloud Console](https://console.cloud.google.com/apis/credentials) (Desktop app type)
+2. Enable the YouTube Data API v3
+3. Download the client secret JSON → `config/youtube_client_secret.json`
+4. Run the auth flow:
+   ```bash
+   uv run python -m src.intelligence.youtube_uploader --auth
+   ```
+5. Set `youtube.enabled: true` in `config/weekly_briefing.yaml`
+
+Uploads default to `unlisted`. Both `youtube_client_secret.json` and `youtube_token.json` are git-ignored.
+
+### Configuration
+
+All briefing settings live in `config/weekly_briefing.yaml`:
+- Schedule, lookback window, slide timing
+- ElevenLabs TTS model and voice parameters
+- Venice image generation model and toggle
+- YouTube upload privacy, category, and tags
+- Video encoding (hardware-accelerated via Rockchip MPP on the Orange Pi)
+
+Per-desk voice, persona, and portrait prompt config lives in `config/desks/<desk-slug>.yaml` under the `briefing:` block.
+
+---
+
 ## Setup
 
 ```bash
@@ -586,4 +644,4 @@ uv run pyright                  # type check
 uv run pytest                   # tests
 ```
 
-Never commit `.env` or `config/youtube_cookies.txt`.
+Never commit `.env`, `config/youtube_client_secret.json`, or `config/youtube_token.json`.

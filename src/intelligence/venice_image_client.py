@@ -1,8 +1,9 @@
 """
 Venice AI image generation client for OSIA weekly briefing slides.
 
-Generates topic-relevant background images via Venice's native image API,
-returning raw PNG bytes suitable for embedding into slide templates.
+Uses the OpenAI-compatible /images/generations endpoint which works
+across all Venice image models (including third-party like flux-2-pro).
+Returns raw PNG bytes suitable for embedding into slide templates.
 """
 
 import asyncio
@@ -19,31 +20,35 @@ load_dotenv()
 logger = logging.getLogger("osia.venice_image")
 
 VENICE_API_KEY = os.getenv("VENICE_API_KEY", "")
-VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
+VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/images/generations"
 
-# Defaults — overridable via config/weekly_briefing.yaml → image_generation block
 DEFAULT_MODEL = "flux-2-pro"
-DEFAULT_STYLE_PRESET = "Digital Art"
-DEFAULT_STEPS = 20
-DEFAULT_CFG_SCALE = 7.5
+
+
+def _dimensions_to_size(width: int, height: int) -> str:
+    """Map pixel dimensions to the closest Venice-supported size string.
+
+    Venice's OpenAI-compat endpoint accepts size as 'WxH' strings.
+    We snap to the closest standard aspect ratio at 1024px scale.
+    """
+    ratio = width / height
+    if ratio > 1.5:  # landscape 16:9
+        return "1792x1024"
+    elif ratio > 1.1:  # landscape 4:3ish
+        return "1344x768"
+    elif ratio < 0.67:  # portrait 9:16
+        return "1024x1792"
+    elif ratio < 0.9:  # portrait 3:4ish
+        return "768x1344"
+    else:
+        return "1024x1024"
 
 
 class VeniceImageClient:
     """Generates slide background images via Venice AI."""
 
-    def __init__(
-        self,
-        model: str = DEFAULT_MODEL,
-        style_preset: str = DEFAULT_STYLE_PRESET,
-        steps: int = DEFAULT_STEPS,
-        cfg_scale: float = DEFAULT_CFG_SCALE,
-        negative_prompt: str = "",
-    ) -> None:
+    def __init__(self, model: str = DEFAULT_MODEL, **_kwargs) -> None:
         self.model = model
-        self.style_preset = style_preset
-        self.steps = steps
-        self.cfg_scale = cfg_scale
-        self.negative_prompt = negative_prompt
 
     async def generate(
         self,
@@ -56,8 +61,8 @@ class VeniceImageClient:
 
         Args:
             prompt: Text description of the desired image.
-            width: Image width in pixels.
-            height: Image height in pixels.
+            width: Image width in pixels (mapped to closest supported size).
+            height: Image height in pixels (mapped to closest supported size).
             output_path: If provided, also write the image to disk.
 
         Returns:
@@ -66,23 +71,19 @@ class VeniceImageClient:
         if not VENICE_API_KEY:
             raise RuntimeError("VENICE_API_KEY not set — cannot generate images")
 
+        size = _dimensions_to_size(width, height)
+
         payload: dict = {
             "model": self.model,
             "prompt": prompt,
-            "width": width,
-            "height": height,
-            "steps": self.steps,
-            "cfg_scale": self.cfg_scale,
-            "format": "png",
-            "return_binary": False,
-            "hide_watermark": True,
-            "safe_mode": False,
-            "variants": 1,
+            "n": 1,
+            "size": size,
+            "response_format": "b64_json",
+            "output_format": "png",
+            "output_compression": 100,
+            "quality": "auto",
+            "style": "natural",
         }
-        if self.style_preset:
-            payload["style_preset"] = self.style_preset
-        if self.negative_prompt:
-            payload["negative_prompt"] = self.negative_prompt
 
         for attempt in range(3):
             try:
@@ -100,24 +101,33 @@ class VeniceImageClient:
                         logger.warning("Venice image 429 — waiting %ds", wait)
                         await asyncio.sleep(wait)
                         continue
+                    if resp.status_code == 400:
+                        logger.error("Venice image 400: %s", resp.text[:500])
+                        raise httpx.HTTPStatusError(
+                            f"400 Bad Request: {resp.text[:200]}",
+                            request=resp.request,
+                            response=resp,
+                        )
                     resp.raise_for_status()
 
                 data = resp.json()
-                # Venice returns images as base64 in the response
-                images = data.get("images", [])
+                # OpenAI-compat returns {"data": [{"b64_json": "..."}]}
+                images = data.get("data", [])
                 if not images:
                     raise ValueError("Venice returned no images")
 
-                image_bytes = base64.b64decode(images[0])
+                image_bytes = base64.b64decode(images[0]["b64_json"])
 
                 if output_path:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     output_path.write_bytes(image_bytes)
-                    logger.debug("Saved image: %s", output_path)
+                    logger.debug("Saved image: %s (%s)", output_path, size)
 
                 return image_bytes
 
             except httpx.HTTPStatusError as e:
+                if e.response.status_code == 400:
+                    raise  # Don't retry 400s — the request itself is wrong
                 logger.warning("Venice image attempt %d failed: %s", attempt + 1, e)
                 await asyncio.sleep(5 * (attempt + 1))
             except Exception as e:
@@ -136,9 +146,6 @@ class VeniceImageClient:
         resume: bool = False,
     ) -> list[Path | None]:
         """Generate background images for each slide in a deck.
-
-        Builds a cinematic prompt from each slide's title and body, tuned
-        for dark-themed intelligence briefing aesthetics.
 
         Args:
             slides: List of slide dicts (title, body, slide_type).
