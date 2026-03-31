@@ -25,6 +25,9 @@ qdrant:
     - wikileaks-cables
     - epstein-files
     - iran-israel-war-2026
+    - frus-state-dept
+    - church-committee
+    - pentagon-papers
   boost_top_k: 3
 
 tools:

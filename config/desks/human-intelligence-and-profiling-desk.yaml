@@ -23,6 +23,9 @@ qdrant:
     - epstein-files
     - wikileaks-cables
     - iran-israel-war-2026
+    - church-committee
+    - cia-crest
+    - fbi-vault
   boost_top_k: 3
 
 tools:

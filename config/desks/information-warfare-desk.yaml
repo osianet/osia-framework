@@ -23,6 +23,9 @@ qdrant:
     - wikileaks-cables
     - epstein-files
     - collection-directorate
+    - church-committee
+    - pentagon-papers
+    - fbi-vault
   boost_top_k: 2
 
 tools:
