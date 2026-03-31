@@ -19,6 +19,8 @@ build/
 
 # Config & Sensitive Data
 config/feeds.txt
+config/youtube_client_secret.json
+config/youtube_token.json
 signal-data/
 storage/
 
