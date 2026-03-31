@@ -25,6 +25,10 @@ qdrant:
     - collection-directorate
     - iran-israel-war-2026
     - ofac-sanctions
+    - frus-state-dept
+    - church-committee
+    - pentagon-papers
+    - cia-crest
   boost_top_k: 3
 
 tools:
