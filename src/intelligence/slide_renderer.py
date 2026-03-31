@@ -15,6 +15,10 @@ from jinja2 import Environment, FileSystemLoader
 
 logger = logging.getLogger("osia.slide_renderer")
 
+# WeasyPrint's font subsetting via fontTools is extremely verbose at DEBUG/INFO.
+# Suppress it to WARNING so it doesn't drown out application logs.
+logging.getLogger("fontTools").setLevel(logging.WARNING)
+
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _TEMPLATES_DIR = _REPO_ROOT / "templates" / "report"
 _ASSETS_DIR = _REPO_ROOT / "assets"
@@ -120,14 +124,16 @@ class SlideRenderer:
 
             png_path = output_dir / f"slide_{i:02d}.png"
 
-            # Render HTML to PNG via WeasyPrint
-            html_doc = HTML(string=html_content, base_url=str(_TEMPLATES_DIR))
-            # Write to PDF first, then convert page to PNG
-            # WeasyPrint's write_png renders the first page
-            html_doc.write_png(
-                str(png_path),
-                resolution=150,  # DPI — good balance of quality and file size
-            )
+            # WeasyPrint removed write_png() in v53; render to PDF bytes then
+            # convert the first page to PNG via PyMuPDF at 150 DPI.
+            import fitz  # pymupdf
+
+            pdf_bytes = HTML(string=html_content, base_url=str(_TEMPLATES_DIR)).write_pdf()
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            mat = fitz.Matrix(150 / 72, 150 / 72)  # 150 DPI (PDF default is 72)
+            pix = doc[0].get_pixmap(matrix=mat)
+            pix.save(str(png_path))
+            doc.close()
 
             image_paths.append(png_path)
             logger.debug("Rendered slide %d/%d: %s", i + 1, len(slides), png_path.name)

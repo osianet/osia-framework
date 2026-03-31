@@ -102,78 +102,52 @@ class SourceTracker:
 
 
 def build_citation_protocol() -> str:
-    """Return the standardized citation instructions appended to every desk prompt."""
+    """Return citation guidance appended to every desk prompt."""
     return (
-        "\n\n--- CITATION PROTOCOL ---\n"
-        "You MUST follow this citation protocol in every report:\n"
-        "1. Tag each factual claim with a bracketed citation number, e.g. [1], [2].\n"
-        "2. At the end of your report, include a '## Sources' section listing every cited source.\n"
-        "3. For each source entry, include:\n"
-        "   - The citation number\n"
-        "   - The origin (tool name, URL, or RSS feed)\n"
-        "   - A reliability rating using this scale:\n"
-        "     A — Peer-reviewed / Official government source\n"
-        "     B — Established media / Institutional publication\n"
-        "     C — Web search / Blog / Unverified news outlet\n"
-        "     D — Social media / User-generated content\n"
-        "     E — Unverifiable / Single-source claim\n"
-        "   Format: [N] (Rating) Origin — Description\n"
-        "4. After the Sources section, add a one-line '## Source Confidence' assessment:\n"
-        "   HIGH (mostly A/B sources), MODERATE (mixed), or LOW (mostly C/D/E).\n"
-        "5. If a claim cannot be sourced, mark it as [UNSOURCED] inline.\n"
-        "6. Never fabricate citations. If you lack a source, say so.\n"
+        "\n\n--- CITATION GUIDANCE ---\n"
+        "Attribute sources where provenance meaningfully affects confidence in the assessment. "
+        "Use bracketed numbers [1], [2] for specific, traceable claims and list them in a '## Sources' "
+        "section when your report has enough distinct sources to warrant one. "
+        "Reliability scale: A — Peer-reviewed/Official | B — Established media | C — Web/Blog | "
+        "D — Social media | E — Unverifiable. Format: [N] (Rating) Origin — Description.\n"
+        "Add '## Source Confidence' (HIGH / MODERATE / LOW) only when the overall quality of your source "
+        "pool is meaningful to the reader. For shorter reports or when synthesising from provided "
+        "intelligence context, inline attribution is fine — do not force a formal citation block where "
+        "it adds no value. Mark genuinely unsourced claims as [UNSOURCED] where that gap matters. "
+        "Never fabricate citations.\n"
     )
 
 
 def audit_report(report_text: str | None, tracker: SourceTracker | None = None) -> str:
-    """Append a source audit summary to a finished report.
+    """Append a source summary to a finished report, only when meaningful.
 
-    Checks for citation markers in the report body and cross-references
-    against the research source manifest when available.
+    Only appends when research sources were actually gathered. Logs a debug
+    warning if citations appear absent despite sources being available.
     """
     if not report_text:
         return ""
-    # Count inline citations like [1], [2], etc.
+
+    # Only append anything if research was actually performed
+    if not tracker or not tracker.sources:
+        return ""
+
     citation_refs = set(re.findall(r"\[(\d+)\]", report_text))
-    has_sources_section = bool(re.search(r"##\s*Sources", report_text, re.IGNORECASE))
-    has_confidence = bool(re.search(r"##\s*Source Confidence", report_text, re.IGNORECASE))
-    unsourced_count = len(re.findall(r"\[UNSOURCED\]", report_text, re.IGNORECASE))
+    manifest_count = len(tracker.sources)
+    cited_count = len(citation_refs)
 
-    audit_lines = ["\n\n--- SOURCE AUDIT ---"]
+    # Log a debug note if sources were gathered but none cited — don't surface to output
+    if cited_count == 0:
+        logger.debug("audit_report: %d sources gathered but no citations in report", manifest_count)
 
-    if citation_refs:
-        audit_lines.append(f"Citations found: {len(citation_refs)} unique references")
-    else:
-        audit_lines.append("⚠️ NO CITATIONS DETECTED in report body")
+    tier_summary = (
+        f"Research pool: {tracker._count_tier('A')}×A, "
+        f"{tracker._count_tier('B')}×B, "
+        f"{tracker._count_tier('C')}×C, "
+        f"{tracker._count_tier('D')}×D"
+    )
+    lines = [f"\n\n*Source pool: {manifest_count} references ({tier_summary})*"]
 
-    if has_sources_section:
-        audit_lines.append("Sources section: PRESENT")
-    else:
-        audit_lines.append("⚠️ Sources section: MISSING")
+    if cited_count < manifest_count and cited_count > 0:
+        lines.append(f"*{manifest_count - cited_count} gathered sources not cited in report.*")
 
-    if has_confidence:
-        audit_lines.append("Source confidence rating: PRESENT")
-    else:
-        audit_lines.append("⚠️ Source confidence rating: MISSING")
-
-    if unsourced_count:
-        audit_lines.append(f"Unsourced claims flagged: {unsourced_count}")
-
-    # Cross-reference with research manifest if available
-    if tracker and tracker.sources:
-        manifest_count = len(tracker.sources)
-        cited_count = len(citation_refs)
-        if cited_count < manifest_count:
-            audit_lines.append(
-                f"Note: {manifest_count} sources were gathered during research, "
-                f"but only {cited_count} citations appear in the report."
-            )
-        tier_summary = (
-            f"Research pool: {tracker._count_tier('A')}×A, "
-            f"{tracker._count_tier('B')}×B, "
-            f"{tracker._count_tier('C')}×C, "
-            f"{tracker._count_tier('D')}×D"
-        )
-        audit_lines.append(tier_summary)
-
-    return "\n".join(audit_lines)
+    return "\n".join(lines)

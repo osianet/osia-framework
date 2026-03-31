@@ -30,9 +30,14 @@ tts:
   style: 0.4                    # Expressiveness
 
 # Video encoding (ffmpeg)
+# h264_rkmpp uses Rockchip MPP hardware encoder (RK3588 native, much faster).
+# hevc_rkmpp is also available for better compression at the same quality.
+# Fall back to libx264 if running on non-Rockchip hardware.
 video:
-  fps: 1           # Static slides, 1 fps is fine
-  codec: libx264
+  fps: 1              # Static slides, 1 fps is fine
+  codec: h264_rkmpp   # Rockchip MPP hardware H.264 encoder
   audio_codec: aac
-  crf: 23          # Quality (lower = better, 18-28 range)
+  bitrate: 2M         # rkmpp uses bitrate, not CRF
+  # crf and preset are used only when codec is libx264
+  crf: 23
   preset: medium
