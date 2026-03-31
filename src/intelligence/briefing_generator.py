@@ -291,14 +291,24 @@ async def _assemble_video(
         segment_path = concat_dir / f"segment_{i:02d}.mp4"
 
         cmd = [
-            "ffmpeg", "-y",
-            "-loop", "1", "-i", str(img),
-            "-i", str(audio),
-            "-c:v", codec,
-            "-c:a", audio_codec,
-            "-b:a", "192k",
-            "-pix_fmt", "yuv420p",
-            "-t", f"{dur:.2f}",
+            "ffmpeg",
+            "-y",
+            "-loop",
+            "1",
+            "-i",
+            str(img),
+            "-i",
+            str(audio),
+            "-c:v",
+            codec,
+            "-c:a",
+            audio_codec,
+            "-b:a",
+            "192k",
+            "-pix_fmt",
+            "yuv420p",
+            "-t",
+            f"{dur:.2f}",
             "-shortest",
         ]
         if use_rkmpp:
@@ -416,7 +426,7 @@ async def generate_desk_briefing(
                 "desk_name": desk_name,
                 "persona_name": persona_name,
                 "skipped": True,
-                **{f"video_{orientation}": str(p) for orientation, p in zip(formats, existing_videos)},
+                **{f"video_{orientation}": str(p) for orientation, p in zip(formats, existing_videos, strict=True)},
             }
 
     slides_cache = output_base / desk_slug / "slides.json"
