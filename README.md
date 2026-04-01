@@ -208,6 +208,23 @@ uv run python scripts/generate_portraits.py --force
 
 Portraits are saved to `assets/portraits/<desk-slug>.png`.
 
+### Running Briefings Manually
+
+The weekly briefing pipeline can be triggered from the CLI without waiting for the systemd timer:
+
+```bash
+# All desks
+uv run python -m src.cron.weekly_briefing
+
+# Specific desks only
+uv run python -m src.cron.weekly_briefing --desks cyber-intelligence-and-warfare-desk geopolitical-and-security-desk
+
+# Resume an interrupted run (skips desks with existing videos, reuses cached slides/audio)
+uv run python -m src.cron.weekly_briefing --resume
+```
+
+Output is written to `reports/weekly/<YYYY-Wnn>/<desk-slug>/` with landscape and portrait video, PDF slide decks, and a `manifest.json` summarising all results.
+
 ### YouTube Upload Setup
 
 Briefing videos can be automatically uploaded to YouTube. This requires a one-time OAuth 2.0 consent flow:
@@ -222,6 +239,25 @@ Briefing videos can be automatically uploaded to YouTube. This requires a one-ti
 5. Set `youtube.enabled: true` in `config/weekly_briefing.yaml`
 
 Uploads default to `unlisted`. Both `youtube_client_secret.json` and `youtube_token.json` are git-ignored.
+
+### Standalone YouTube Upload
+
+The uploader can also be called directly to test uploading any video file:
+
+```bash
+# Test upload (defaults to private)
+uv run python -m src.intelligence.youtube_uploader --upload /path/to/video.mp4
+
+# With custom metadata
+uv run python -m src.intelligence.youtube_uploader \
+  --upload /path/to/video.mp4 \
+  --title "Weekly Briefing Test" \
+  --description "Testing the upload pipeline" \
+  --privacy unlisted \
+  --tags osint briefing test
+```
+
+Privacy defaults to `private` so nothing is published accidentally. The `--auth` flow must have been completed first.
 
 ### Configuration
 
