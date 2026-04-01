@@ -147,6 +147,9 @@ class XIngress:
             logger.warning("Skipping @%s — could not resolve userId", username)
             return []
 
+        # Delay after resolve to avoid back-to-back API hits
+        await asyncio.sleep(ACCOUNT_POLL_DELAY)
+
         url = f"{TWITTERAPI_BASE}/twitter/user/tweet_timeline"
         headers = {"X-API-Key": self.api_key}
         params = {"userId": user_id}
@@ -176,7 +179,16 @@ class XIngress:
 
             tweets = data.get("tweets", [])
             if not tweets:
-                logger.info("@%s returned 0 tweets (API status: %s)", username, data.get("status"))
+                # Log the full response keys and values to debug empty results
+                debug_keys = {k: type(v).__name__ for k, v in data.items()}
+                logger.warning(
+                    "@%s (userId=%s) returned 0 tweets. Response keys: %s, has_next_page: %s, message: %s",
+                    username,
+                    user_id,
+                    debug_keys,
+                    data.get("has_next_page"),
+                    data.get("message", "none"),
+                )
             else:
                 logger.info("Fetched %d tweets for @%s", len(tweets), username)
             return tweets
