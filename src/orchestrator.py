@@ -736,7 +736,7 @@ class OsiaOrchestrator:
         logger.info("Triggering ADB capture for URL: %s", url)
 
         _FALLBACK_DURATION = 60
-        _MAX_DURATION = 180
+        _MAX_DURATION = 900
         _BUFFER_SECS = 3
 
         detected = await self._detect_video_duration(url)
