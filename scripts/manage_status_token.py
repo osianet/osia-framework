@@ -63,29 +63,30 @@ def main():
     if args.rotate:
         new_token = secrets.token_urlsafe(32)
         _write_key("STATUS_API_TOKEN", new_token)
-        print(f"New token written to {ENV_FILE}")
-        print(f"Token: {new_token}")
-        print()
-        print("Restart the status API service to pick up the new token:")
-        print("  sudo systemctl restart osia-status-api.service")
+        print(f"New token written to {ENV_FILE}")  # noqa: T201
+        print("Retrieve it with: grep STATUS_API_TOKEN .env")  # noqa: T201
+        print()  # noqa: T201
+        print("Restart the status API service to pick up the new token:")  # noqa: T201
+        print("  sudo systemctl restart osia-status-api.service")  # noqa: T201
         return
 
-    # Default: show current token
+    # Default: show token status (never log the actual token value — CWE-312)
     token = env.get("STATUS_API_TOKEN", "")
     if not token:
-        print("STATUS_API_TOKEN is not set in .env")
-        print("Run with --rotate to generate one.")
+        print("STATUS_API_TOKEN is not set in .env")  # noqa: T201
+        print("Run with --rotate to generate one.")  # noqa: T201
     else:
-        print(f"Current token: {token}")
+        token_len = len(token)
+        print(f"Current token: ({token_len} chars, set in .env)")  # noqa: T201
         sentinel = env.get("STATUS_API_UA_SENTINEL", "osia-monitor/1")
         port = env.get("STATUS_API_PORT", "8099")
-        print(f"UA sentinel:   {sentinel}")
-        print(f"Port:          {port}")
-        print()
-        print("Example curl:")
-        print(f'  curl -s -H "Authorization: Bearer {token}" \\')
-        print(f'       -H "User-Agent: {sentinel}" \\')
-        print(f"       http://localhost:{port}/status | python3 -m json.tool")
+        print(f"UA sentinel:   {sentinel}")  # noqa: T201
+        print(f"Port:          {port}")  # noqa: T201
+        print()  # noqa: T201
+        print("Example curl:")  # noqa: T201
+        print('  curl -s -H "Authorization: Bearer $STATUS_API_TOKEN" \\')  # noqa: T201
+        print(f'       -H "User-Agent: {sentinel}" \\')  # noqa: T201
+        print(f"       http://localhost:{port}/status | python3 -m json.tool")  # noqa: T201
 
 
 if __name__ == "__main__":

@@ -174,7 +174,7 @@ def _join_paragraphs(paragraphs_field: object) -> str:
         try:
             items = sorted(items, key=lambda x: int(x.get("paragraph_number", 0)))
         except (TypeError, ValueError):
-            pass
+            pass  # paragraph_number missing or non-numeric — use original order
         return "\n\n".join(
             _safe(item.get("paragraph") or item.get("content", "")) for item in items if isinstance(item, dict)
         )
@@ -202,7 +202,7 @@ def _join_transcript(transcripts_field: object) -> str:
         try:
             items = sorted(items, key=lambda x: int(x.get("paragraph_number", 0)))
         except (TypeError, ValueError):
-            pass
+            pass  # paragraph_number missing or non-numeric — use original order
         lines = []
         for item in items:
             if not isinstance(item, dict):

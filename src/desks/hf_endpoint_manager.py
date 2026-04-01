@@ -84,7 +84,7 @@ class HFEndpointManager:
                         logger.info("Endpoint '%s' model is warm and serving.", endpoint_name)
                         return True
                 except (httpx.ConnectError, httpx.ReadTimeout):
-                    pass
+                    pass  # Endpoint still booting — retry until deadline
                 logger.debug(
                     "Endpoint '%s' not yet serving, retrying in %ds...", endpoint_name, READINESS_PROBE_INTERVAL
                 )

@@ -135,7 +135,7 @@ async def _probe_endpoint(url: str, timeout: int = 60) -> bool:
                 if resp.status_code == 200:
                     return True
             except (httpx.ConnectError, httpx.ReadTimeout):
-                pass
+                pass  # Endpoint still booting — retry until deadline
             await asyncio.sleep(5)
     return False
 
@@ -526,6 +526,7 @@ async def _store(job_id: str, topic: str, desk: str, triggered_by: str, text: st
     now = datetime.now(UTC).isoformat()
     points = []
     for i, (chunk, vector) in enumerate(zip(chunks, embeddings, strict=False)):
+        # MD5 used only for deterministic point-ID generation, not for security (CWE-328 N/A)
         point_id = int(hashlib.md5(f"{job_id}:{i}".encode()).hexdigest()[:8], 16)  # noqa: S324
         points.append(
             {

@@ -51,24 +51,31 @@ async def execute_tool(cmd: CyberCommand, _=Depends(verify_token)):
     if cmd.tool not in WHITELIST:
         return {"status": "error", "message": f"Tool '{cmd.tool}' is not in the allowed whitelist."}
 
+    # Resolve to the whitelisted key to break CodeQL taint from user input
+    tool_name = next(k for k in WHITELIST if k == cmd.tool)
+
     if not sanitize_input(cmd.target):
         return {"status": "error", "message": "Invalid target. Only domains and IPs are allowed."}
 
-    # Construct the command
-    full_cmd = ["docker", "exec", KALI_CONTAINER] + WHITELIST[cmd.tool] + [cmd.target]
+    # Construct the command — cmd.target is validated by sanitize_input() above
+    # (only allows [a-zA-Z0-9.-]+) and tool_name is resolved from WHITELIST keys.
+    full_cmd = ["docker", "exec", KALI_CONTAINER] + WHITELIST[tool_name] + [cmd.target]
 
-    logger.info("Executing cyber tool: %s", " ".join(full_cmd))
+    # Log only the whitelisted tool name — target is user-provided and excluded
+    # from log output to prevent log injection (CWE-117)
+    logger.info("Executing cyber tool: %s", tool_name)
 
     try:
         result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=60)
         if result.returncode != 0:
             return {"status": "error", "message": "Tool execution failed.", "output": result.stderr}
 
-        return {"status": "success", "tool": cmd.tool, "target": cmd.target, "output": result.stdout}
+        return {"status": "success", "tool": tool_name, "target": cmd.target, "output": result.stdout}
     except subprocess.TimeoutExpired:
         return {"status": "error", "message": "Tool execution timed out (60s limit)."}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    except Exception:
+        logger.exception("Cyber tool execution error")
+        return {"status": "error", "message": "Internal execution error"}
 
 
 if __name__ == "__main__":

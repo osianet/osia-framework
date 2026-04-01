@@ -101,11 +101,11 @@ class MCPDispatcher:
             try:
                 await session_ctx.__aexit__(None, None, None)
             except Exception:
-                pass
+                pass  # Best-effort cleanup — session may already be broken
             try:
                 await transport_ctx.__aexit__(None, None, None)
             except Exception:
-                pass
+                pass  # Best-effort cleanup — transport may already be closed
 
     async def close_all(self):
         for name in list(self._sessions):

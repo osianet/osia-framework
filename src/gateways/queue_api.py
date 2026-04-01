@@ -180,7 +180,8 @@ async def push(request: Request, body: PushRequest, _=Depends(_check_auth)):
             return {"ok": True, "queue": body.queue, "depth": depth, "skipped": True}
         await r.sadd("osia:research:seen_topics", body.dedup_key)
     length = await r.rpush(body.queue, json.dumps(body.payload))
-    logger.info("Pushed job to %s (depth now %d)", body.queue, length)
+    # body.queue is validated against ALLOWED_QUEUES above; sanitise for log injection (CWE-117)
+    logger.info("Pushed job to %s (depth now %d)", body.queue.replace("\n", ""), length)
     return {"ok": True, "queue": body.queue, "depth": length, "skipped": False}
 
 
