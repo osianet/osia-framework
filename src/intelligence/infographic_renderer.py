@@ -42,9 +42,12 @@ You are an intelligence analyst preparing a visual brief.
 Read the following report and extract:
 1. A short, punchy headline (max 10 words) summarising the core finding.
 2. Between 4 and 6 key findings as concise bullet points (each max 25 words).
+3. A short image prompt (max 30 words) describing a dark, moody, cinematic \
+background scene that evokes the mood and theme of the report. No text, no \
+words, no letters in the image. Abstract and atmospheric.
 
 Return ONLY valid JSON in this exact format, no preamble or markdown fences:
-{{"headline": "...", "findings": ["...", "...", "..."]}}
+{{"headline": "...", "findings": ["...", "...", "..."], "image_prompt": "..."}}
 
 REPORT:
 {report_text}"""
@@ -73,7 +76,7 @@ async def extract_findings(gemini_client, model_id: str, report_text: str) -> di
         if not headline or len(findings) < 2:
             logger.warning("Infographic extraction returned insufficient data: %s", raw[:200])
             return None
-        return {"headline": headline, "findings": findings[:6]}
+        return {"headline": headline, "findings": findings[:6], "image_prompt": data.get("image_prompt", "")}
     except (json.JSONDecodeError, KeyError, TypeError) as e:
         logger.error("Failed to parse infographic findings JSON: %s", e)
     except Exception as e:
@@ -85,15 +88,17 @@ def render_infographic_png(
     headline: str,
     findings: list[str],
     desk_slug: str,
+    bg_image_bytes: bytes | None = None,
 ) -> bytes:
     """Render an infographic card to PNG bytes.
 
     Uses the same WeasyPrint → PDF → PyMuPDF pipeline as SlideRenderer.
 
     Args:
-        headline:  Short headline for the card.
-        findings:  List of key finding strings.
-        desk_slug: Desk identifier for metadata display.
+        headline:       Short headline for the card.
+        findings:       List of key finding strings.
+        desk_slug:      Desk identifier for metadata display.
+        bg_image_bytes: Optional raw PNG bytes for the background image.
 
     Returns:
         Raw PNG image bytes.
@@ -115,6 +120,10 @@ def render_infographic_png(
     ref_prefix = desk_slug[:8].upper().replace("-", "")
     ref_number = f"OSIA-IB-{now.strftime('%Y%m%d')}-{ref_prefix}"
 
+    bg_image_data_uri = None
+    if bg_image_bytes:
+        bg_image_data_uri = "data:image/png;base64," + base64.b64encode(bg_image_bytes).decode()
+
     html_content = template.render(
         headline=headline,
         findings=findings,
@@ -123,6 +132,7 @@ def render_infographic_png(
         ref_number=ref_number,
         timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
         logo_data_uri=_load_logo_b64(),
+        bg_image_data_uri=bg_image_data_uri,
     )
 
     pdf_bytes = HTML(string=html_content, base_url=str(_TEMPLATES_DIR)).write_pdf()
@@ -144,12 +154,33 @@ async def generate_infographic(
 ) -> str | None:
     """End-to-end: extract findings from a report and render an infographic card.
 
+    Optionally generates a Venice AI background image derived from the report
+    to give each card a unique mood. Falls back gracefully to a plain card
+    if Venice is unavailable or VENICE_API_KEY is not set.
+
     Returns a base64-encoded PNG string suitable for Signal attachment,
     or None if extraction or rendering fails.
     """
     data = await extract_findings(gemini_client, model_id, report_text)
     if not data:
         return None
+
+    # Generate a thematic background image via Venice (best-effort)
+    bg_image_bytes: bytes | None = None
+    image_prompt = data.get("image_prompt", "").strip()
+    if image_prompt:
+        try:
+            from src.intelligence.venice_image_client import VeniceImageClient
+
+            venice = VeniceImageClient()
+            bg_image_bytes = await venice.generate(
+                prompt=image_prompt,
+                width=1080,
+                height=1920,
+            )
+            logger.info("Venice background generated for infographic (%d bytes)", len(bg_image_bytes))
+        except Exception as e:
+            logger.warning("Venice background generation failed (non-fatal): %s", e)
 
     try:
         png_bytes = await asyncio.get_event_loop().run_in_executor(
@@ -158,6 +189,7 @@ async def generate_infographic(
             data["headline"],
             data["findings"],
             desk_slug,
+            bg_image_bytes,
         )
         return base64.b64encode(png_bytes).decode()
     except Exception as e:
