@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OSIA Intelligence Brief</title>
+<style>
+/* ================================================================
+   OSIA INTELLIGENCE BRIEF — INFOGRAPHIC CARD
+   Format: 9:16 portrait (1080×1920) for Signal / social media
+   Aesthetic: Matches briefing slide + INTSUM report style
+   ================================================================ */
+
+@page {
+    size: 1080px 1920px;
+    margin: 0;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    width: 1080px;
+    height: 1920px;
+    background-color: #0a0e0a;
+    color: #c8dcc0;
+    font-family: 'Helvetica Neue', 'Arial', sans-serif;
+    overflow: hidden;
+}
+
+.card {
+    width: 1080px;
+    height: 1920px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    padding: 72px 56px 56px 56px;
+    background: linear-gradient(160deg, #0a0e0a 0%, #0c140c 40%, #081008 100%);
+}
+
+/* ── Scanline texture ──────────────────────────────────────────── */
+.card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(0, 30, 0, 0.04) 3px,
+        rgba(0, 30, 0, 0.04) 4px
+    );
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* ── Corner accent border ──────────────────────────────────────── */
+.card::after {
+    content: '';
+    position: absolute;
+    top: 12px; left: 12px; right: 12px; bottom: 12px;
+    border: 1px solid rgba(0, 180, 60, 0.12);
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* ── Top bar ───────────────────────────────────────────────────── */
+.top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+    position: relative;
+    z-index: 2;
+}
+
+.top-bar-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.logo img {
+    height: 48px;
+    opacity: 0.85;
+}
+
+.logo-placeholder {
+    height: 48px;
+    width: 48px;
+    border: 1.5px solid #1a4a1a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    color: #1a4a1a;
+    letter-spacing: 0.1em;
+}
+
+.agency-label {
+    font-size: 13px;
+    color: #3a8a3a;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.top-bar-right {
+    text-align: right;
+}
+
+.ref-label {
+    font-size: 11px;
+    color: #ff8c00;
+    letter-spacing: 0.08em;
+    font-family: 'Courier New', monospace;
+}
+
+.date-label {
+    font-size: 10px;
+    color: #3a6a3a;
+    margin-top: 2px;
+    font-family: 'Courier New', monospace;
+}
+
+/* ── Classification strip ──────────────────────────────────────── */
+.classification-strip {
+    background-color: rgba(100, 0, 0, 0.6);
+    color: #ff4444;
+    text-align: center;
+    padding: 6px 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    font-family: 'Courier New', monospace;
+    margin: 0 -56px;
+    position: relative;
+    z-index: 2;
+}
+
+/* ── Desk badge ────────────────────────────────────────────────── */
+.desk-badge {
+    display: inline-block;
+    background: rgba(255, 140, 0, 0.12);
+    border: 1px solid rgba(255, 140, 0, 0.3);
+    color: #ffa040;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 8px 18px;
+    margin-top: 28px;
+    position: relative;
+    z-index: 2;
+}
+
+/* ── Headline ──────────────────────────────────────────────────── */
+.headline {
+    font-size: 40px;
+    font-weight: 700;
+    color: #00dd55;
+    line-height: 1.2;
+    margin-top: 36px;
+    margin-bottom: 36px;
+    letter-spacing: -0.01em;
+    position: relative;
+    z-index: 2;
+}
+
+/* ── Key findings ──────────────────────────────────────────────── */
+.findings {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    position: relative;
+    z-index: 2;
+}
+
+.finding-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 16px 20px;
+    background: rgba(0, 180, 60, 0.04);
+    border-left: 3px solid #ff8c00;
+    border-radius: 0 4px 4px 0;
+}
+
+.finding-marker {
+    color: #ff8c00;
+    font-size: 22px;
+    line-height: 1.4;
+    flex-shrink: 0;
+}
+
+.finding-text {
+    font-size: 20px;
+    line-height: 1.5;
+    color: #b8d4b0;
+}
+
+/* ── Spacer ────────────────────────────────────────────────────── */
+.spacer {
+    flex: 1;
+}
+
+/* ── Footer ────────────────────────────────────────────────────── */
+.card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 16px;
+    border-top: 1px solid rgba(0, 180, 60, 0.15);
+    position: relative;
+    z-index: 2;
+}
+
+.footer-left {
+    font-size: 11px;
+    color: #2a5a2a;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 0.05em;
+}
+
+.footer-right {
+    font-size: 11px;
+    color: #2a5a2a;
+    font-family: 'Courier New', monospace;
+}
+</style>
+</head>
+<body>
+
+<div class="card">
+
+  <!-- Top bar -->
+  <div class="top-bar">
+    <div class="top-bar-left">
+      <div class="logo">
+        {% if logo_data_uri %}
+          <img src="{{ logo_data_uri }}" alt="OSIA">
+        {% else %}
+          <div class="logo-placeholder">OSIA</div>
+        {% endif %}
+      </div>
+      <span class="agency-label">Open Source Intelligence Agency</span>
+    </div>
+    <div class="top-bar-right">
+      <div class="ref-label">{{ ref_number }}</div>
+      <div class="date-label">{{ timestamp }}</div>
+    </div>
+  </div>
+
+  <!-- Classification strip -->
+  <div class="classification-strip">
+    ⬛ OSIA INTELLIGENCE BRIEF ⬛
+  </div>
+
+  <!-- Desk badge -->
+  <div class="desk-badge">{{ desk_name }}</div>
+
+  <!-- Headline -->
+  <div class="headline">{{ headline }}</div>
+
+  <!-- Key findings -->
+  <div class="findings">
+    {% for finding in findings %}
+    <div class="finding-item">
+      <span class="finding-marker">▸</span>
+      <span class="finding-text">{{ finding }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Spacer pushes footer down -->
+  <div class="spacer"></div>
+
+  <!-- Footer -->
+  <div class="card-footer">
+    <div class="footer-left">{{ desk_slug }} · {{ timestamp }}</div>
+    <div class="footer-right">{{ ref_number }}</div>
+  </div>
+
+</div>
+
+</body>
+</html>

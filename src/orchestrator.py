@@ -21,6 +21,7 @@ from src.desks.hf_endpoint_manager import HFEndpointManager
 from src.gateways.adb_device import ADBDevice
 from src.gateways.mcp_dispatcher import MCPDispatcher
 from src.intelligence.entity_extractor import EntityExtractor
+from src.intelligence.infographic_renderer import generate_infographic
 from src.intelligence.qdrant_store import QdrantStore
 from src.intelligence.report_generator import generate_intsum_pdf
 from src.intelligence.source_tracker import (
@@ -335,75 +336,6 @@ class OsiaOrchestrator:
         }
         logger.info("Sending infographic to %s via Signal...", recipient)
         await self._signal_post(payload, label="image")
-
-    async def generate_infographic(self, report_text: str) -> str | None:
-        """
-        Uses Gemini image generation to create a social-media-ready infographic
-        summarising the key points from an intelligence report.
-
-        Returns the image as a base64-encoded PNG string, or None on failure.
-        """
-        brief_prompt = (
-            "You are a graphic designer briefing an AI image generator. "
-            "Read the following intelligence report and extract 4–6 key findings. "
-            "Write a concise image-generation prompt (max 300 words) that describes "
-            "a bold, dark-themed infographic card suitable for social media (9:16 portrait). "
-            "The card should display the key findings as short bullet points with a strong "
-            "headline, a dark background, and high-contrast accent colours (red/amber on dark). "
-            "Include the label 'OSIA INTELLIGENCE BRIEF' at the top. "
-            "Output ONLY the image prompt, no preamble.\n\n"
-            f"REPORT:\n{report_text[:6000]}"
-        )
-        try:
-            brief_res = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=self.model_id,
-                contents=brief_prompt,
-            )
-            image_prompt = (brief_res.text or "").strip()
-            logger.info("Infographic brief generated (%d chars).", len(image_prompt))
-        except Exception as e:
-            logger.error("Failed to generate infographic brief: %s", e)
-            return None
-
-        image_model = os.getenv("GEMINI_IMAGE_MODEL_ID", "gemini-2.5-flash-image")
-        try:
-            img_res = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=image_model,
-                contents=image_prompt,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"],
-                    image_config=types.ImageConfig(aspect_ratio="9:16"),
-                ),
-            )
-            for part in img_res.parts:
-                if part.thought:
-                    continue
-                if part.inline_data is not None:
-                    import base64
-
-                    return base64.b64encode(part.inline_data.data).decode()
-            logger.warning("Gemini image generation returned no image parts.")
-        except Exception as e:
-            _capacity_markers = ("high demand", "overloaded", "503", "resource_exhausted", "RESOURCE_EXHAUSTED")
-            if any(m.lower() in str(e).lower() for m in _capacity_markers):
-                logger.warning("Gemini image API over capacity (%s) — trying phone fallback.", e)
-                return await self._generate_infographic_via_phone(image_prompt)
-            logger.error("Infographic image generation failed: %s", e)
-        return None
-
-    async def _generate_infographic_via_phone(self, image_prompt: str) -> str | None:
-        """Drives the Gemini Android app via ADB to generate an infographic image."""
-        import base64
-
-        try:
-            png_bytes = await self.social_agent.generate_infographic_via_phone(image_prompt)
-            if png_bytes:
-                return base64.b64encode(png_bytes).decode()
-        except Exception as e:
-            logger.error("Phone infographic fallback failed: %s", e)
-        return None
 
     # ------------------------------------------------------------------
     # Main loop
@@ -1279,7 +1211,12 @@ class OsiaOrchestrator:
                 recipient = source[len("signal:") :]
                 await self.send_signal_message(recipient, analysis)
                 try:
-                    infographic_b64 = await self.generate_infographic(analysis)
+                    infographic_b64 = await generate_infographic(
+                        self.client,
+                        self.model_id,
+                        analysis,
+                        assigned_desk,
+                    )
                     if infographic_b64:
                         await self.send_signal_image(recipient, infographic_b64, caption="📊 OSIA Intelligence Brief")
                 except Exception as img_err:
