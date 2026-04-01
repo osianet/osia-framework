@@ -89,6 +89,20 @@ git push origin feat/<description>
 ```
 
 ### Step 5 — Open a pull request
+
+**Preferred: use the `git-mcp-server` tool** (platform: `gh-badrory`, project: `osianet/osia-framework`):
+
+Use the `create_merge_request` MCP tool with:
+- `platform`: `gh-badrory`
+- `project_id`: `osianet/osia-framework`
+- `source_branch`: the feature branch name
+- `target_branch`: `main`
+- `title`: conventional commit style title
+- `description`: PR body with Summary, Changes, and Testing sections
+
+This is authenticated as the `BadRory` collaborator account and avoids any `gh` CLI auth issues.
+
+**Fallback: `gh` CLI** (if MCP is unavailable):
 ```bash
 gh pr create \
   --repo osianet/osia-framework \
@@ -106,6 +120,21 @@ gh pr create \
 ```
 
 > **Note:** `gh` must be authenticated as `BadRory` — a collaborator account on the `osianet/osia-framework` repo. Check with `gh auth status`. If the active account is wrong, run `gh auth switch --user BadRory` first.
+
+---
+
+## GitHub MCP Integration
+
+The `git-mcp-server` is configured with a `gh-badrory` platform providing full GitHub API access as the `BadRory` collaborator. Use this for all GitHub operations:
+
+- **List PRs**: `list_merge_requests` (platform: `gh-badrory`, project_id: `osianet/osia-framework`)
+- **Create PRs**: `create_merge_request`
+- **View PR details/diffs**: `get_merge_request_details`, `get_merge_request_diff`
+- **Comment on PRs**: `create_mr_comment`
+- **List/create issues**: `list_issues`, `create_issue`
+- **PR templates**: `get_mr_templates` (check for repo templates before creating PRs)
+
+Always use `gh-badrory` as the platform name and `osianet/osia-framework` as the project ID.
 
 ### Step 6 — Report to the user
 After the PR is open, provide:

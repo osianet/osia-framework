@@ -41,6 +41,11 @@ DAILY_DIGEST_KEY = "osia:rss:daily_digest"  # shared with RSS — both feed the 
 
 TWITTERAPI_BASE = "https://api.twitterapi.io"
 
+# Rate-limit settings
+ACCOUNT_POLL_DELAY = 10.0  # seconds between each account poll — be kind to the API
+RETRY_ATTEMPTS = 3
+RETRY_BACKOFF_BASE = 10.0  # seconds — doubles each retry (10, 20, 40)
+
 qdrant_store = QdrantStore()
 entity_extractor = EntityExtractor()
 
@@ -96,21 +101,38 @@ class XIngress:
         return accounts
 
     async def _fetch_latest_tweets(self, username: str) -> list[dict]:
-        """Fetch the latest tweets for a user via TwitterAPI.io."""
+        """Fetch the latest tweets for a user via TwitterAPI.io with retry on 429."""
         url = f"{TWITTERAPI_BASE}/twitter/user/last_tweets"
         headers = {"X-API-Key": self.api_key}
         params = {"userName": username, "includeReplies": "false"}
 
-        async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.get(url, headers=headers, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+        for attempt in range(RETRY_ATTEMPTS):
+            async with httpx.AsyncClient(timeout=30) as http:
+                resp = await http.get(url, headers=headers, params=params)
 
-        if data.get("status") != "success":
-            logger.warning("TwitterAPI.io error for @%s: %s", username, data.get("message", "unknown"))
-            return []
+                if resp.status_code == 429:
+                    delay = RETRY_BACKOFF_BASE * (2**attempt)
+                    logger.warning(
+                        "Rate limited polling @%s (attempt %d/%d) — backing off %.0fs",
+                        username,
+                        attempt + 1,
+                        RETRY_ATTEMPTS,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
 
-        return data.get("tweets", [])
+                resp.raise_for_status()
+                data = resp.json()
+
+            if data.get("status") != "success":
+                logger.warning("TwitterAPI.io error for @%s: %s", username, data.get("message", "unknown"))
+                return []
+
+            return data.get("tweets", [])
+
+        logger.error("Rate limit exhausted for @%s after %d retries — skipping this cycle.", username, RETRY_ATTEMPTS)
+        return []
 
     async def _process_tweet(self, tweet: dict, account: XAccount) -> bool:
         """Process a single tweet — summarise, extract entities, ingest. Returns True if new."""
@@ -227,7 +249,11 @@ class XIngress:
 
         new_count = 0
 
-        for account in accounts:
+        for i, account in enumerate(accounts):
+            # Stagger requests to avoid rate limiting
+            if i > 0:
+                await asyncio.sleep(ACCOUNT_POLL_DELAY)
+
             try:
                 logger.info("Polling @%s (%s) → %s", account.username, account.label, account.desk)
                 tweets = await self._fetch_latest_tweets(account.username)

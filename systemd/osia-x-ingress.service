@@ -1,0 +1,13 @@
+[Unit]
+Description=Trigger OSIA X/Twitter Ingress
+After=network.target osia-orchestrator.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/home/ubuntu/osia-framework
+ExecStart=/home/ubuntu/osia-framework/.venv/bin/python -m src.gateways.x_ingress
+EnvironmentFile=/home/ubuntu/osia-framework/.env
+
+[Install]
+WantedBy=multi-user.target
