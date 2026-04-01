@@ -1,0 +1,88 @@
+# OSIA X/Twitter Account Monitor Configuration
+#
+# Each entry maps an X username to a target desk for routing.
+# The ingress polls each account via TwitterAPI.io and ingests
+# new posts into the Collection Directorate + stages for SITREP.
+#
+# Format:
+#   - username: <X handle without @>
+#     desk: <desk slug from config/desks/>
+#     label: <optional human-readable label>
+
+# --- Geopolitical & Security Desk ---
+- username: POTUS
+  desk: geopolitical-and-security-desk
+  label: "President of the United States"
+
+- username: SecDef
+  desk: geopolitical-and-security-desk
+  label: "US Secretary of Defense"
+
+- username: NATO
+  desk: geopolitical-and-security-desk
+  label: "NATO"
+
+- username: IsraeliPM
+  desk: geopolitical-and-security-desk
+  label: "Israeli Prime Minister"
+
+- username: KremlinRussia_E
+  desk: geopolitical-and-security-desk
+  label: "Kremlin (English)"
+
+- username: MFA_China
+  desk: geopolitical-and-security-desk
+  label: "China Ministry of Foreign Affairs"
+
+# --- Cyber Intelligence & Warfare Desk ---
+- username: CISAgov
+  desk: cyber-intelligence-and-warfare-desk
+  label: "CISA"
+
+- username: NSAGov
+  desk: cyber-intelligence-and-warfare-desk
+  label: "NSA"
+
+- username: MsftSecIntel
+  desk: cyber-intelligence-and-warfare-desk
+  label: "Microsoft Threat Intelligence"
+
+# --- Finance & Economics Directorate ---
+- username: federalreserve
+  desk: finance-and-economics-directorate
+  label: "US Federal Reserve"
+
+- username: ecb
+  desk: finance-and-economics-directorate
+  label: "European Central Bank"
+
+- username: IMFNews
+  desk: finance-and-economics-directorate
+  label: "IMF"
+
+# --- Science, Technology & Commercial Desk ---
+- username: NASA
+  desk: science-technology-and-commercial-desk
+  label: "NASA"
+
+- username: CERN
+  desk: science-technology-and-commercial-desk
+  label: "CERN"
+
+- username: NIH
+  desk: science-technology-and-commercial-desk
+  label: "NIH"
+
+# --- Environment & Ecology Desk ---
+- username: NOAA
+  desk: environment-and-ecology-desk
+  label: "NOAA"
+
+- username: UNEP
+  desk: environment-and-ecology-desk
+  label: "UN Environment Programme"
+
+# --- Information Warfare Desk ---
+- username: EUvsDisinfo
+  desk: information-warfare-desk
+  label: "EU vs Disinfo"
