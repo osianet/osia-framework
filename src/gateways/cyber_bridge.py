@@ -59,10 +59,9 @@ async def execute_tool(cmd: CyberCommand, _=Depends(verify_token)):
     # CodeQL flags this as command-line-injection but both inputs are sanitised.
     full_cmd = ["docker", "exec", KALI_CONTAINER] + WHITELIST[cmd.tool] + [cmd.target]
 
-    # Sanitise log output — cmd.target has passed regex validation above
-    # but strip newlines to prevent log injection (CWE-117)
-    safe_target = cmd.target.replace("\n", "").replace("\r", "")
-    logger.info("Executing cyber tool: %s -> %s", cmd.tool, safe_target)
+    # Log only the whitelisted tool name — target is user-provided and excluded
+    # from log output to prevent log injection (CWE-117)
+    logger.info("Executing cyber tool: %s", cmd.tool)
 
     try:
         result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=60)
