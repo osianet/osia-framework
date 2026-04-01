@@ -104,7 +104,7 @@ class XIngress:
         """Fetch the latest tweets for a user via TwitterAPI.io with retry on 429."""
         url = f"{TWITTERAPI_BASE}/twitter/user/last_tweets"
         headers = {"X-API-Key": self.api_key}
-        params = {"userName": username, "includeReplies": "false"}
+        params = {"userName": username}
 
         for attempt in range(RETRY_ATTEMPTS):
             async with httpx.AsyncClient(timeout=30) as http:
@@ -129,7 +129,12 @@ class XIngress:
                 logger.warning("TwitterAPI.io error for @%s: %s", username, data.get("message", "unknown"))
                 return []
 
-            return data.get("tweets", [])
+            tweets = data.get("tweets", [])
+            if not tweets:
+                logger.info("@%s returned 0 tweets (API status: %s)", username, data.get("status"))
+            else:
+                logger.info("Fetched %d tweets for @%s", len(tweets), username)
+            return tweets
 
         logger.error("Rate limit exhausted for @%s after %d retries — skipping this cycle.", username, RETRY_ATTEMPTS)
         return []
