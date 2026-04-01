@@ -46,6 +46,9 @@ ACCOUNT_POLL_DELAY = 10.0  # seconds between each account poll — be kind to th
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_BASE = 10.0  # seconds — doubles each retry (10, 20, 40)
 
+# Redis key for caching username → userId mappings (avoids repeated lookups)
+USER_ID_CACHE_KEY = "osia:x:user_ids"
+
 qdrant_store = QdrantStore()
 entity_extractor = EntityExtractor()
 
@@ -100,11 +103,53 @@ class XIngress:
         logger.info("Loaded %d X accounts to monitor.", len(accounts))
         return accounts
 
-    async def _fetch_latest_tweets(self, username: str) -> list[dict]:
-        """Fetch the latest tweets for a user via TwitterAPI.io with retry on 429."""
-        url = f"{TWITTERAPI_BASE}/twitter/user/last_tweets"
+    async def _resolve_user_id(self, username: str) -> str | None:
+        """Resolve an X username to a userId, using Redis cache first."""
+        # Check cache
+        cached = await self.redis.hget(USER_ID_CACHE_KEY, username.lower())
+        if cached:
+            return cached.decode() if isinstance(cached, bytes) else cached
+
+        # Fetch from API
+        url = f"{TWITTERAPI_BASE}/twitter/user/info"
         headers = {"X-API-Key": self.api_key}
         params = {"userName": username}
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as http:
+                resp = await http.get(url, headers=headers, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+
+            if data.get("status") != "success":
+                logger.warning("Failed to resolve @%s: %s", username, data.get("msg", "unknown"))
+                return None
+
+            user_data = data.get("data", {})
+            user_id = user_data.get("id")
+            if not user_id:
+                logger.warning("No userId returned for @%s", username)
+                return None
+
+            # Cache indefinitely — userIds don't change
+            await self.redis.hset(USER_ID_CACHE_KEY, username.lower(), user_id)
+            logger.info("Resolved @%s → userId %s", username, user_id)
+            return user_id
+
+        except Exception as e:
+            logger.error("Failed to resolve userId for @%s: %s", username, e)
+            return None
+
+    async def _fetch_latest_tweets(self, username: str) -> list[dict]:
+        """Fetch the latest tweets using the userId-based timeline endpoint with retry on 429."""
+        user_id = await self._resolve_user_id(username)
+        if not user_id:
+            logger.warning("Skipping @%s — could not resolve userId", username)
+            return []
+
+        url = f"{TWITTERAPI_BASE}/twitter/user/tweet_timeline"
+        headers = {"X-API-Key": self.api_key}
+        params = {"userId": user_id}
 
         for attempt in range(RETRY_ATTEMPTS):
             async with httpx.AsyncClient(timeout=30) as http:
