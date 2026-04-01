@@ -207,7 +207,7 @@ def _systemd_service_info(name: str) -> dict:
     try:
         mem_mb = round(int(props.get("MemoryCurrent", "")) / 1024 / 1024, 1)
     except (ValueError, TypeError):
-        pass
+        pass  # MemoryCurrent may be empty or "[not set]" — leave as None
 
     pid = props.get("MainPID", "0")
     return {
@@ -293,14 +293,14 @@ def _system_metrics() -> dict:
             h, rem = divmod(int(secs), 3600)
             metrics["uptime"] = f"{h}h {rem // 60}m"
     except Exception:
-        pass
+        pass  # /proc/uptime unavailable (e.g. macOS) — leave default
 
     try:
         with open("/proc/loadavg") as f:
             parts = f.read().split()
             metrics["load"] = [float(parts[0]), float(parts[1]), float(parts[2])]
     except Exception:
-        pass
+        pass  # /proc/loadavg unavailable — leave default
 
     try:
         rc, out, _ = _run(["free", "-m"])
@@ -315,7 +315,7 @@ def _system_metrics() -> dict:
                     "pct": round(used * 100 / total, 1) if total else 0,
                 }
     except Exception:
-        pass
+        pass  # free(1) unavailable or unexpected output — leave default
 
     try:
         rc, out, _ = _run(["df", "-m", str(BASE_DIR)])
@@ -330,14 +330,14 @@ def _system_metrics() -> dict:
                 "pct": round(used * 100 / total, 1) if total else 0,
             }
     except Exception:
-        pass
+        pass  # df unavailable or unexpected output — leave default
 
     try:
         temp_path = Path("/sys/class/thermal/thermal_zone0/temp")
         if temp_path.exists():
             metrics["cpu_temp_c"] = round(int(temp_path.read_text().strip()) / 1000, 1)
     except Exception:
-        pass
+        pass  # Thermal zone unavailable — leave default
 
     try:
         rc, out, _ = _run(
@@ -357,7 +357,7 @@ def _system_metrics() -> dict:
                 "vram_total_mb": int(parts[4]),
             }
     except Exception:
-        pass
+        pass  # nvidia-smi unavailable (no GPU) — leave default
 
     return metrics
 
@@ -377,7 +377,7 @@ def _qdrant_info() -> dict:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return json.loads(resp.read().decode())
         except Exception:
-            return None
+            return None  # Qdrant unreachable — caller handles None
 
     top = _get("/collections")
     if not top or top.get("status") != "ok":
@@ -429,13 +429,11 @@ def _redis_info() -> dict:
         rc3, peek, _ = _run(["docker", "exec", "osia-redis", "redis-cli", "LINDEX", "osia:task_queue", "0"])
         if peek:
             try:
-                import json
-
                 task = json.loads(peek)
                 # Only surface non-sensitive routing fields
                 task_meta = {k: task[k] for k in ("type", "source", "desk", "timestamp") if k in task}
             except Exception:
-                task_meta = {"type": "unparseable"}
+                task_meta = {"type": "unparseable"}  # Malformed JSON in queue — safe fallback
 
     return {
         "ok": True,

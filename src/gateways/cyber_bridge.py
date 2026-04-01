@@ -54,10 +54,15 @@ async def execute_tool(cmd: CyberCommand, _=Depends(verify_token)):
     if not sanitize_input(cmd.target):
         return {"status": "error", "message": "Invalid target. Only domains and IPs are allowed."}
 
-    # Construct the command
+    # Construct the command — cmd.target is validated by sanitize_input() above
+    # (only allows [a-zA-Z0-9.-]+) and cmd.tool is checked against WHITELIST.
+    # CodeQL flags this as command-line-injection but both inputs are sanitised.
     full_cmd = ["docker", "exec", KALI_CONTAINER] + WHITELIST[cmd.tool] + [cmd.target]
 
-    logger.info("Executing cyber tool: %s", " ".join(full_cmd))
+    # Sanitise log output — cmd.target has passed regex validation above
+    # but strip newlines to prevent log injection (CWE-117)
+    safe_target = cmd.target.replace("\n", "").replace("\r", "")
+    logger.info("Executing cyber tool: %s -> %s", cmd.tool, safe_target)
 
     try:
         result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=60)
@@ -67,8 +72,9 @@ async def execute_tool(cmd: CyberCommand, _=Depends(verify_token)):
         return {"status": "success", "tool": cmd.tool, "target": cmd.target, "output": result.stdout}
     except subprocess.TimeoutExpired:
         return {"status": "error", "message": "Tool execution timed out (60s limit)."}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    except Exception:
+        logger.exception("Cyber tool execution error")
+        return {"status": "error", "message": "Internal execution error"}
 
 
 if __name__ == "__main__":

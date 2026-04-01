@@ -751,12 +751,6 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
     ),
 }
 
-# ReAct pattern — parsed when native tool_calls are absent
-_REACT_PATTERN = re.compile(
-    r"(?:SEARCH_INTEL_KB|SEARCH_WEB|SEARCH_DUCKDUCKGO|SEARCH_WIKIPEDIA|SEARCH_ARXIV|SEARCH_SEMANTIC_SCHOLAR"
-    r"|SEARCH_OTX|SEARCH_ALEPH):\s*(.+)",
-    re.IGNORECASE,
-)
 _REACT_TOOL_MAP = {
     "search_intel_kb": "search_intel_kb",
     "search_web": "search_web",

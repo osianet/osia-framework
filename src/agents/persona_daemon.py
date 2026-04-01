@@ -1082,7 +1082,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 try:
                     Path(video_path).unlink(missing_ok=True)
                 except Exception:
-                    pass
+                    pass  # Best-effort temp file cleanup — non-critical
             else:
                 # Fallback: couldn't capture, just watch briefly and maybe like
                 watch_time = random.uniform(8, 20)
@@ -1097,7 +1097,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                                 liked = True
                                 break
                     except Exception:
-                        pass
+                        pass  # Like button not found via accessibility tree — fall through to vision agent
                     if not liked:
                         result = await self.agent.execute_custom(
                             "",
@@ -1269,7 +1269,7 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                     w, h = await self.adb.get_screen_size()
                     await self.adb.swipe(w // 2, h * 3 // 4, w // 2, h // 4)
                 except Exception:
-                    pass
+                    pass  # Recovery swipe failed — loop will continue or exit naturally
 
         # Press home to close
         await self.adb._run_checked(["shell", "input", "keyevent", "3"])

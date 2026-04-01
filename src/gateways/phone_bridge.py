@@ -71,8 +71,9 @@ async def execute_phone_action(cmd: Command, _=Depends(verify_token)):
             await adb.wake_and_unlock()
             await adb.take_screenshot(str(screenshot_path))
             return {"status": "success", "message": f"Screenshot saved to {screenshot_path}"}
-        except RuntimeError as e:
-            return {"status": "error", "message": f"screencap failed: {e}"}
+        except RuntimeError:
+            logger.exception("screencap failed")
+            return {"status": "error", "message": "screencap failed"}
 
     return {"status": "error", "message": "Unknown action"}
 
