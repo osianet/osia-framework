@@ -42,7 +42,7 @@ DAILY_DIGEST_KEY = "osia:rss:daily_digest"  # shared with RSS — both feed the 
 TWITTERAPI_BASE = "https://api.twitterapi.io"
 
 # Rate-limit settings
-ACCOUNT_POLL_DELAY = 3.0  # seconds between each account poll to avoid 429s
+ACCOUNT_POLL_DELAY = 10.0  # seconds between each account poll — be kind to the API
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_BASE = 10.0  # seconds — doubles each retry (10, 20, 40)
 

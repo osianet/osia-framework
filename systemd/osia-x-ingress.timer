@@ -1,0 +1,11 @@
+[Unit]
+Description=Timer for OSIA X/Twitter Ingress
+Requires=osia-x-ingress.service
+
+[Timer]
+Unit=osia-x-ingress.service
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target
