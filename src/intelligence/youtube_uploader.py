@@ -244,9 +244,41 @@ def _run_auth_flow() -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="YouTube uploader for OSIA briefings")
     parser.add_argument("--auth", action="store_true", help="Run the OAuth consent flow")
+    parser.add_argument("--upload", type=str, metavar="VIDEO_PATH", help="Upload a video file to YouTube")
+    parser.add_argument(
+        "--title", type=str, default="OSIA Test Upload", help="Video title (default: 'OSIA Test Upload')"
+    )
+    parser.add_argument("--description", type=str, default="Test upload from OSIA framework.", help="Video description")
+    parser.add_argument(
+        "--privacy",
+        type=str,
+        default="private",
+        choices=["public", "unlisted", "private"],
+        help="Privacy status (default: private)",
+    )
+    parser.add_argument("--tags", type=str, nargs="*", help="Optional tags for the video")
     args = parser.parse_args()
 
     if args.auth:
         _run_auth_flow()
+    elif args.upload:
+        import asyncio
+
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+        async def _test_upload() -> None:
+            uploader = YouTubeUploader()
+            result = await uploader.upload(
+                video_path=Path(args.upload),
+                title=args.title,
+                description=args.description,
+                tags=args.tags or [],
+                privacy_status=args.privacy,
+            )
+            print(f"\n✓ Upload complete: {result['url']}")  # noqa: T201
+            print(f"  Video ID: {result['video_id']}")  # noqa: T201
+            print(f"  Status:   {result['status']}")  # noqa: T201
+
+        asyncio.run(_test_upload())
     else:
-        print("Usage: uv run python -m src.intelligence.youtube_uploader --auth")
+        parser.print_help()

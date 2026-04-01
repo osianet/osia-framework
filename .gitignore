@@ -41,6 +41,7 @@ view.xml
 .vscode/
 *.swp
 *.swo
+.DS_Store
 
 # Claude Code tooling (local only)
 CLAUDE.md
