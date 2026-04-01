@@ -44,7 +44,7 @@ Read the following report and extract:
 2. Between 4 and 6 key findings as concise bullet points (each max 25 words).
 
 Return ONLY valid JSON in this exact format, no preamble or markdown fences:
-{"headline": "...", "findings": ["...", "...", "..."]}
+{{"headline": "...", "findings": ["...", "...", "..."]}}
 
 REPORT:
 {report_text}"""
