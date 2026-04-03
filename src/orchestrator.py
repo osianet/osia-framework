@@ -787,10 +787,17 @@ class OsiaOrchestrator:
             probe = await asyncio.to_thread(
                 subprocess.run,
                 [
-                    "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-                    "-of", "csv=p=0", local_path,
+                    "ffprobe",
+                    "-v",
+                    "quiet",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "csv=p=0",
+                    local_path,
                 ],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
             raw_duration = float(probe.stdout.strip() or "0")
         except Exception:
@@ -799,16 +806,26 @@ class OsiaOrchestrator:
         if raw_duration > _GEMINI_MAX_SECS:
             logger.info(
                 "Video is %.0fs — trimming to %ds and re-encoding before Gemini upload.",
-                raw_duration, _GEMINI_MAX_SECS,
+                raw_duration,
+                _GEMINI_MAX_SECS,
             )
             ff = await asyncio.to_thread(
                 subprocess.run,
                 [
-                    "ffmpeg", "-y", "-i", local_path,
-                    "-t", str(_GEMINI_MAX_SECS),
-                    "-vf", "scale='min(1280,iw)':-2",
-                    "-b:v", "1M", "-b:a", "128k",
-                    "-movflags", "+faststart",
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    local_path,
+                    "-t",
+                    str(_GEMINI_MAX_SECS),
+                    "-vf",
+                    "scale='min(1280,iw)':-2",
+                    "-b:v",
+                    "1M",
+                    "-b:a",
+                    "128k",
+                    "-movflags",
+                    "+faststart",
                     transcoded_path,
                 ],
                 capture_output=True,
@@ -840,8 +857,8 @@ class OsiaOrchestrator:
             for p in (local_path, transcoded_path):
                 try:
                     Path(p).unlink(missing_ok=True)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Could not remove temp file %s: %s", p, exc)
 
     # ------------------------------------------------------------------
     # Desk routing via Venice (uncensored — no query is refused or misrouted)
