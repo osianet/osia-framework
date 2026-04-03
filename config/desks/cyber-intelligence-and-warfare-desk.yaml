@@ -1,4 +1,5 @@
 slug: cyber-intelligence-and-warfare-desk
+code: PHANTOM
 name: "Cyber Intelligence & Warfare Desk"
 prompt_file: templates/prompts/cyber-intelligence-and-warfare-desk.txt
 

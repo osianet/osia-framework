@@ -1,4 +1,5 @@
 slug: geopolitical-and-security-desk
+code: ATLAS
 name: "Geopolitical & Security Desk"
 prompt_file: templates/prompts/geopolitical-and-security-desk.txt
 

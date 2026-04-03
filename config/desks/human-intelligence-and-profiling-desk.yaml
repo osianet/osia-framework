@@ -1,4 +1,5 @@
 slug: human-intelligence-and-profiling-desk
+code: SPECTER
 name: "Human Intelligence & Profiling Desk"
 prompt_file: templates/prompts/human-intelligence-and-profiling-desk.txt
 

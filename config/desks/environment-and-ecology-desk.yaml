@@ -1,4 +1,5 @@
 slug: environment-and-ecology-desk
+code: TERRA
 name: "Environment & Ecological Intelligence Desk"
 prompt_file: templates/prompts/environment-and-ecology-desk.txt
 

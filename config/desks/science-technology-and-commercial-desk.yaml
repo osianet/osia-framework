@@ -1,4 +1,5 @@
 slug: science-technology-and-commercial-desk
+code: FORGE
 name: "Science, Technology & Commercial Desk"
 prompt_file: templates/prompts/science-technology-and-commercial-desk.txt
 
