@@ -3,7 +3,9 @@ import base64
 import json
 import logging
 import os
+import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import httpx
@@ -25,6 +27,9 @@ SIGNAL_WS_URL = f"{_signal_ws_base}/v1/receive/{SIGNAL_NUMBER}"
 SIGNAL_API_URL = os.getenv("SIGNAL_API_URL", _signal_ws_base.replace("wss://", "https://").replace("ws://", "http://"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 TASK_QUEUE = os.getenv("OSIA_TASK_QUEUE", "osia:task_queue")
+SIGNAL_CONTAINER_NAME = os.getenv("SIGNAL_CONTAINER_NAME", "osia-signal")
+# Restart the signal-cli container if the WebSocket has been down for this long
+_WS_RESTART_THRESHOLD_SECS = 120
 
 # Temp directory for Signal attachment downloads (cleaned up after task is queued)
 _ATTACH_DIR = Path(tempfile.gettempdir()) / "osia_signal_attachments"
@@ -69,16 +74,38 @@ async def _download_attachment(http: httpx.AsyncClient, attachment: dict) -> dic
     return {"path": str(dest), "content_type": content_type}
 
 
+def _restart_signal_container() -> None:
+    """Restart the signal-cli Docker container to recover from a broken internal state."""
+    logger.warning(
+        "WebSocket has been down for >%ds — restarting container %s",
+        _WS_RESTART_THRESHOLD_SECS,
+        SIGNAL_CONTAINER_NAME,
+    )
+    try:
+        subprocess.run(
+            ["docker", "restart", SIGNAL_CONTAINER_NAME],
+            timeout=30,
+            check=True,
+            capture_output=True,
+        )
+        logger.warning("Container %s restarted successfully.", SIGNAL_CONTAINER_NAME)
+    except Exception as exc:
+        logger.error("Failed to restart container %s: %s", SIGNAL_CONTAINER_NAME, exc)
+
+
 async def listen_to_signal():
     """Connects to the Signal REST API WebSocket and listens for incoming messages."""
     redis_client = redis.from_url(REDIS_URL)
 
     logger.info("Signal Gateway starting... Listening on %s", SIGNAL_WS_URL)
 
+    failure_since: float | None = None
+
     while True:
         try:
             async with websockets.connect(SIGNAL_WS_URL) as websocket:
                 logger.info("Connected to Signal WebSocket!")
+                failure_since = None
                 async with httpx.AsyncClient() as http:
                     while True:
                         message_str = await websocket.recv()
@@ -145,8 +172,21 @@ async def listen_to_signal():
                         logger.info("Task pushed to %s", TASK_QUEUE)
 
         except Exception as e:
-            logger.warning("WebSocket connection dropped: %s. Reconnecting in 5 seconds...", e)
-            await asyncio.sleep(5)
+            now = time.monotonic()
+            if failure_since is None:
+                failure_since = now
+            elapsed = now - failure_since
+            logger.warning(
+                "WebSocket connection dropped: %s. Reconnecting in 5 seconds... (down %.0fs)",
+                e,
+                elapsed,
+            )
+            if elapsed >= _WS_RESTART_THRESHOLD_SECS:
+                await asyncio.get_event_loop().run_in_executor(None, _restart_signal_container)
+                failure_since = None
+                await asyncio.sleep(15)
+            else:
+                await asyncio.sleep(5)
 
 
 if __name__ == "__main__":

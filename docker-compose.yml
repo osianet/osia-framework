@@ -28,6 +28,25 @@ services:
     volumes:
       - ./signal-data:/home/.local/share/signal-cli
     restart: always
+    labels:
+      - "autoheal=true"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/accounts | grep -q '\\+' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: osia-autoheal
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=10
+      - AUTOHEAL_START_PERIOD=30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
   kali-sandbox:
     image: kalilinux/kali-rolling

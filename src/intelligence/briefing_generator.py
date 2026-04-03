@@ -256,6 +256,11 @@ async def _assemble_video(
     if len(image_paths) != len(audio_paths):
         raise ValueError(f"Mismatch: {len(image_paths)} images vs {len(audio_paths)} audio files")
 
+    # Transition/fade config
+    transition_secs = slide_cfg.get("transition_secs", 0.5)
+    fade_secs = video_cfg.get("fade_duration", 0.3)
+    pause_ms = int(transition_secs * 1000)
+
     # Get audio durations using ffprobe
     durations: list[float] = []
     for audio_path in audio_paths:
@@ -291,6 +296,22 @@ async def _assemble_video(
     for i, (img, audio, dur) in enumerate(zip(image_paths, audio_paths, durations, strict=True)):
         segment_path = concat_dir / f"segment_{i:02d}.mp4"
 
+        # Total segment duration includes the silence pad so the fade tail has room
+        total_dur = dur + transition_secs
+        fade_out_start = total_dur - fade_secs
+
+        # Audio: silence pad before narration, then fade in/out
+        audio_filter = (
+            f"adelay={pause_ms}|{pause_ms},"
+            f"afade=t=in:st=0:d={fade_secs:.3f},"
+            f"afade=t=out:st={fade_out_start:.3f}:d={fade_secs:.3f}"
+        )
+        # Video: fade in from black, fade out to black
+        video_filter = (
+            f"fade=t=in:st=0:d={fade_secs:.3f},"
+            f"fade=t=out:st={fade_out_start:.3f}:d={fade_secs:.3f}"
+        )
+
         cmd = [
             "ffmpeg",
             "-y",
@@ -300,6 +321,10 @@ async def _assemble_video(
             str(img),
             "-i",
             str(audio),
+            "-vf",
+            video_filter,
+            "-af",
+            audio_filter,
             "-c:v",
             codec,
             "-c:a",
@@ -309,8 +334,7 @@ async def _assemble_video(
             "-pix_fmt",
             "yuv420p",
             "-t",
-            f"{dur:.2f}",
-            "-shortest",
+            f"{total_dur:.3f}",
         ]
         if use_rkmpp:
             cmd += ["-b:v", bitrate]
