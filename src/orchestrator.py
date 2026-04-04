@@ -801,7 +801,7 @@ class OsiaOrchestrator:
             )
             raw_duration = float(probe.stdout.strip() or "0")
         except Exception:
-            raw_duration = 0.0
+            raw_duration = 0.0  # ffprobe unavailable or failed; skip trimming
 
         if raw_duration > _GEMINI_MAX_SECS:
             logger.info(
