@@ -1,4 +1,5 @@
 slug: cultural-and-theological-intelligence-desk
+code: ORACLE
 name: "Cultural & Theological Intelligence Desk"
 prompt_file: templates/prompts/cultural-and-theological-intelligence-desk.txt
 

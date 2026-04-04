@@ -778,23 +778,87 @@ class OsiaOrchestrator:
         finally:
             await self.redis.delete("osia:adb:lock")
 
-        logger.info("Uploading captured video to Gemini...")
-        video_file = self.client.files.upload(file=local_path)
-        while video_file.state.name == "PROCESSING":
-            await asyncio.sleep(2)
-            video_file = self.client.files.get(name=video_file.name)
+        # Pre-process: trim to 3 minutes max and re-encode to keep Gemini uploads
+        # small and reliable. Raw ADB captures can be hundreds of MB / many minutes.
+        _GEMINI_MAX_SECS = 180
+        upload_path = local_path
+        transcoded_path = local_path.replace(".mp4", "_tc.mp4")
+        try:
+            probe = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "ffprobe",
+                    "-v",
+                    "quiet",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "csv=p=0",
+                    local_path,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            raw_duration = float(probe.stdout.strip() or "0")
+        except Exception:
+            raw_duration = 0.0  # ffprobe unavailable or failed; skip trimming
 
-        prompt = (
-            "Watch this intercepted short-form video. Transcribe any spoken audio, "
-            "describe the visual context, identify any text on screen, and summarize "
-            "the core message or propaganda narrative."
-        )
-        response = self.client.models.generate_content(model=self.model_id, contents=[video_file, prompt])
+        if raw_duration > _GEMINI_MAX_SECS:
+            logger.info(
+                "Video is %.0fs — trimming to %ds and re-encoding before Gemini upload.",
+                raw_duration,
+                _GEMINI_MAX_SECS,
+            )
+            ff = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    local_path,
+                    "-t",
+                    str(_GEMINI_MAX_SECS),
+                    "-vf",
+                    "scale='min(1280,iw)':-2",
+                    "-b:v",
+                    "1M",
+                    "-b:a",
+                    "128k",
+                    "-movflags",
+                    "+faststart",
+                    transcoded_path,
+                ],
+                capture_output=True,
+            )
+            if ff.returncode == 0:
+                upload_path = transcoded_path
+            else:
+                logger.warning("ffmpeg transcode failed (rc=%d) — uploading original.", ff.returncode)
 
-        capture_path = Path(local_path)
-        if capture_path.exists():
-            capture_path.unlink()
-        return response.text, engagement_counts
+        try:
+            logger.info("Uploading captured video to Gemini (%s)...", upload_path)
+            video_file = await asyncio.to_thread(self.client.files.upload, file=upload_path)
+            while video_file.state.name == "PROCESSING":
+                await asyncio.sleep(2)
+                video_file = await asyncio.to_thread(self.client.files.get, name=video_file.name)
+
+            prompt = (
+                "Watch this intercepted short-form video. Transcribe any spoken audio, "
+                "describe the visual context, identify any text on screen, and summarize "
+                "the core message or propaganda narrative."
+            )
+            response = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=self.model_id,
+                contents=[video_file, prompt],
+            )
+            return response.text, engagement_counts
+        finally:
+            for p in (local_path, transcoded_path):
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except Exception as exc:
+                    logger.debug("Could not remove temp file %s: %s", p, exc)
 
     # ------------------------------------------------------------------
     # Desk routing via Venice (uncensored — no query is refused or misrouted)

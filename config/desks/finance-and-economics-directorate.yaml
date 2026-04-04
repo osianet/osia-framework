@@ -1,4 +1,5 @@
 slug: finance-and-economics-directorate
+code: LEDGER
 name: "Finance & Economics Directorate"
 prompt_file: templates/prompts/finance-and-economics-directorate.txt
 

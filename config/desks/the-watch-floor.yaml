@@ -1,4 +1,5 @@
 slug: the-watch-floor
+code: SENTINEL
 name: "The Watch Floor"
 prompt_file: templates/prompts/the-watch-floor.txt
 
