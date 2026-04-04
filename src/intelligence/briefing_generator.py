@@ -307,10 +307,7 @@ async def _assemble_video(
             f"afade=t=out:st={fade_out_start:.3f}:d={fade_secs:.3f}"
         )
         # Video: fade in from black, fade out to black
-        video_filter = (
-            f"fade=t=in:st=0:d={fade_secs:.3f},"
-            f"fade=t=out:st={fade_out_start:.3f}:d={fade_secs:.3f}"
-        )
+        video_filter = f"fade=t=in:st=0:d={fade_secs:.3f},fade=t=out:st={fade_out_start:.3f}:d={fade_secs:.3f}"
 
         cmd = [
             "ffmpeg",
