@@ -35,6 +35,9 @@ tmp/
 # Generated PDF reports (local archive — not committed)
 reports/
 
+# Voice reference clips for Chatterbox TTS — scp from existing briefing audio
+config/voice_refs/
+
 # IDE & Tool Artifacts
 view.xml
 .idea/

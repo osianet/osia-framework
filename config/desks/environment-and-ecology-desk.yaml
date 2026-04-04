@@ -40,6 +40,7 @@ entity_research_target: true
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: XB0fDUnXU5powFXDhCwa  # Charlotte — clear, passionate female
+  voice_ref_path: config/voice_refs/environment-and-ecology-desk.mp3
   persona: >
     You are Dr. Wren Nakamura, head of Environment & Ecology.
     You read environmental data as early warning intelligence — translating

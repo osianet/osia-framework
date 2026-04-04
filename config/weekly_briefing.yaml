@@ -21,13 +21,27 @@ slides:
   transition_secs: 0.5    # Black frame between slides
   title_slide_secs: 5     # Duration of the opening title slide
 
-# ElevenLabs TTS configuration
+# TTS backend selector: "elevenlabs" (default, requires API key) or "chatterbox"
+# (local GPU inference, no quota — run on a machine with a CUDA GPU).
+# Voice identity is backend-specific:
+#   elevenlabs → uses voice_id from each desk's briefing: block
+#   chatterbox → uses voice_ref_path from each desk's briefing: block
 tts:
+  backend: elevenlabs
+
+  # ElevenLabs settings (used when backend: elevenlabs)
   model_id: eleven_v3           # Best quality, dramatic delivery
   output_format: mp3_44100_128  # High quality MP3
   stability: 0.5                # Lower = more expressive
   similarity_boost: 0.75        # Voice consistency
   style: 0.4                    # Expressiveness
+
+# Chatterbox TTS settings (used when tts.backend: chatterbox)
+# Standard 500M model — better gravitas than Turbo for intelligence briefings.
+# exaggeration: 0.5–0.7 for authoritative delivery; cfg_weight: 0.3–0.5 for pacing.
+chatterbox:
+  exaggeration: 0.6
+  cfg_weight: 0.4
 
 # AI-generated slide background images (Venice API)
 image_generation:
@@ -35,12 +49,11 @@ image_generation:
   model: flux-2-pro             # $0.04/image — good quality/cost balance
 
 # Video encoding (ffmpeg)
-# h264_rkmpp uses Rockchip MPP hardware encoder (RK3588 native, much faster).
-# hevc_rkmpp is also available for better compression at the same quality.
-# Fall back to libx264 if running on non-Rockchip hardware.
+# On the Orange Pi (RK3588): use h264_rkmpp for hardware-accelerated encoding.
+# On a workstation (x86 + NVIDIA): change codec to libx264.
 video:
   fps: 1              # Static slides, 1 fps is fine
-  codec: h264_rkmpp   # Rockchip MPP hardware H.264 encoder
+  codec: h264_rkmpp   # Rockchip MPP hardware H.264; use libx264 on workstation
   audio_codec: aac
   bitrate: 2M         # rkmpp uses bitrate, not CRF
   # crf and preset are used only when codec is libx264

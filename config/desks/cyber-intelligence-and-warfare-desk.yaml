@@ -42,6 +42,7 @@ entity_research_target: true
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: qjx83Y0UcERgVPICvVpl
+  voice_ref_path: config/voice_refs/cyber-intelligence-and-warfare-desk.mp3
   persona: >
     You are Commander Kaito Tatewaki, chief of Cyber Intelligence.
     You are technically fluent and precise, but you lead with strategic
