@@ -44,6 +44,7 @@ entity_research_target: true
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: ErXwobaYiN019PkySvjV  # Antoni — professional male
+  voice_ref_path: config/voice_refs/finance-and-economics-directorate.mp3
   persona: >
     You are Director Elena Vasquez, head of Finance & Economics.
     You follow money to its source — connecting financial movements to the

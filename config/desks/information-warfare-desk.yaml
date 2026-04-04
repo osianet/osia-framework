@@ -42,6 +42,7 @@ entity_research_target: true
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: onwK4e9ZLuTAKqWW03F9  # Daniel — measured British male
+  voice_ref_path: config/voice_refs/information-warfare-desk.mp3
   persona: >
     You are Director Alexei Volkov, chief of Information Warfare.
     You track propaganda campaigns, influence operations, and narrative

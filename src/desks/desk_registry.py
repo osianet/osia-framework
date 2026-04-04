@@ -77,11 +77,12 @@ class QdrantConfig:
 
 @dataclass
 class BriefingConfig:
-    """ElevenLabs voice and persona for weekly department briefings."""
+    """Voice and persona config for weekly department briefings."""
 
     voice_id: str
     persona: str
     portrait_prompt: str = ""
+    voice_ref_path: str = ""  # Path to reference audio for Chatterbox voice cloning
 
 
 @dataclass
@@ -198,6 +199,7 @@ def _parse_desk_yaml(path: Path, mandate_text: str, citation_protocol: str) -> D
             voice_id=briefing_block["voice_id"],
             persona=str(briefing_block.get("persona", "")),
             portrait_prompt=str(briefing_block.get("portrait_prompt", "")),
+            voice_ref_path=str(briefing_block.get("voice_ref_path", "")),
         )
 
     return DeskConfig(

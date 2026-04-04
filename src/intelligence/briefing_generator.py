@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 
 from src.intelligence.qdrant_store import QdrantStore
 from src.intelligence.slide_renderer import SlideRenderer
-from src.intelligence.tts_client import QuotaExceededError, TTSClient
+from src.intelligence.tts_client import QuotaExceededError
 from src.intelligence.venice_image_client import VeniceImageClient
 
 load_dotenv()
@@ -500,10 +500,26 @@ async def generate_desk_briefing(
 
     # 4. Render slides + generate audio + assemble video for each orientation
     tts_cfg = global_config.get("tts", {})
-    tts = TTSClient(
-        model_id=tts_cfg.get("model_id", "eleven_v3"),
-        output_format=tts_cfg.get("output_format", "mp3_44100_128"),
-    )
+    backend = tts_cfg.get("backend", "elevenlabs")
+
+    if backend == "chatterbox":
+        from src.intelligence.chatterbox_tts_client import ChatterboxTTSClient
+
+        chatterbox_cfg = global_config.get("chatterbox", {})
+        tts = ChatterboxTTSClient(
+            exaggeration=chatterbox_cfg.get("exaggeration", 0.6),
+            cfg_weight=chatterbox_cfg.get("cfg_weight", 0.4),
+        )
+        tts_voice: str | None = desk_cfg.briefing.voice_ref_path or None
+    else:
+        from src.intelligence.tts_client import TTSClient
+
+        tts = TTSClient(
+            model_id=tts_cfg.get("model_id", "eleven_v3"),
+            output_format=tts_cfg.get("output_format", "mp3_44100_128"),
+        )
+        tts_voice = voice_id
+
     renderer = SlideRenderer()
 
     # Generate AI background images via Venice (shared between orientations)
@@ -544,7 +560,7 @@ async def generate_desk_briefing(
     audio_dir = output_base / desk_slug / "audio"
     audio_paths = await tts.generate_slide_narrations(
         slides,
-        voice_id,
+        tts_voice,
         audio_dir,
         stability=tts_cfg.get("stability", 0.5),
         similarity_boost=tts_cfg.get("similarity_boost", 0.75),

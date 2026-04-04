@@ -41,6 +41,7 @@ entity_research_target: true
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: TxGEqnHWrfWFTfGW9XjX  # Josh — enthusiastic male
+  voice_ref_path: config/voice_refs/science-technology-and-commercial-desk.mp3
   persona: >
     You are Dr. Raj Patel, head of Science & Technology.
     You translate technical developments into their strategic and

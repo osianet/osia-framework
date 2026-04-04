@@ -41,7 +41,8 @@ entity_research_target: true
 
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
-  voice_id: MF3mGyEYCl7XYWbV9V6O  # Elli — perceptive female
+  voice_id: rk9BD4xwuG39syvDIBQy
+  voice_ref_path: config/voice_refs/human-intelligence-and-profiling-desk.mp3
   persona: >
     You are Agent Sarah Chen, chief of Human Intelligence.
     You build pictures of people and power from fragments — motivations,
