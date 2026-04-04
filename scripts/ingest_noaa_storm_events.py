@@ -227,7 +227,7 @@ def build_document(row: dict) -> tuple[str, int | None]:
             dt = datetime(year, month, min(day, 28), tzinfo=UTC)
             event_unix = int(dt.timestamp())
         except (ValueError, OverflowError):
-            pass
+            event_unix = None  # malformed date fields — leave timestamp unset
 
     if not event_type and not event_narrative:
         return "", event_unix
@@ -248,7 +248,7 @@ def build_document(row: dict) -> tuple[str, int | None]:
             if begin_day:
                 date_str += f"-{int(begin_day):02d}"
         except ValueError:
-            date_str = begin_ym
+            date_str = begin_ym  # fall back to raw YYYYMM string
 
     lines: list[str] = []
     lines.append(f"Event Type: {event_type}")
@@ -263,7 +263,7 @@ def build_document(row: dict) -> tuple[str, int | None]:
             if end_str != date_str:
                 lines.append(f"End Date: {end_str}")
         except ValueError:
-            pass
+            pass  # end date fields malformed — omit end date from document
 
     if magnitude and magnitude_type:
         lines.append(f"Magnitude: {magnitude} {magnitude_type}")

@@ -127,15 +127,12 @@ NOTABLE_RELEASE_THRESHOLD_LBS = 1_000_000  # 1 million lbs
 _COL_YEAR = "YEAR"
 _COL_FACILITY = "FACILITY NAME"
 _COL_PARENT = "PARENT CO NAME"
-_COL_STREET = "STREET ADDRESS"
 _COL_CITY = "CITY"
 _COL_STATE = "ST"
-_COL_ZIP = "ZIP"
 _COL_COUNTY = "COUNTY"
 _COL_LATITUDE = "LATITUDE"
 _COL_LONGITUDE = "LONGITUDE"
 _COL_INDUSTRY_SECTOR = "INDUSTRY SECTOR"
-_COL_SIC = "PRIMARY SIC"
 _COL_CHEMICAL = "CHEMICAL"
 _COL_CAS = "CAS #"
 _COL_CLASSIFICATION = "CLASSIFICATION"
@@ -206,7 +203,7 @@ def build_document(row: dict) -> tuple[str, int | None]:
         try:
             report_unix = int(datetime(int(year_str), 1, 1, tzinfo=UTC).timestamp())
         except ValueError:
-            pass
+            report_unix = None  # malformed year field — leave timestamp unset
 
     lines: list[str] = []
     lines.append(f"Facility: {facility}")
