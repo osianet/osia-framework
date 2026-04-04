@@ -21,9 +21,12 @@ qdrant:
   cross_desk_search: true
   cross_desk_top_k: 3
   boost_collections:
+    - reliefweb-disasters
+    - noaa-storm-events
+    - epa-toxic-releases
     - wikileaks-cables
     - collection-directorate
-  boost_top_k: 2
+  boost_top_k: 3
 
 tools:
   - search_web
