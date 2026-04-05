@@ -213,7 +213,7 @@ async def _assemble_video(
             # Generate silent audio for slides without narration.
             pad_cmd = [
                 "ffmpeg", "-y",
-                "-f", "lavfi", "-i", f"anullsrc=r=44100:cl=stereo",
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
                 "-t", str(total_dur),
                 str(padded_audio),
             ]

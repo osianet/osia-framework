@@ -215,9 +215,6 @@ class SlideRenderer:
         now = datetime.now(UTC)
         ref_prefix = desk_slug[:8].upper().replace("-", "")
         ref_number = f"OSIA-WB-{now.strftime('%Y%m%d')}-{ref_prefix}"
-        portrait_uri = load_portrait_b64(desk_slug)
-        desk_accent = desk_accent_colour(desk_slug)
-        desk_badge_uri = load_desk_badge_b64(desk_slug)
 
         # Deck-level defaults.
         deck_portrait_uri = load_portrait_b64(desk_slug)
