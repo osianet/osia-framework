@@ -27,7 +27,7 @@ slides:
 #   elevenlabs → uses voice_id from each desk's briefing: block
 #   chatterbox → uses voice_ref_path from each desk's briefing: block
 tts:
-  backend: elevenlabs
+  backend: chatterbox 
 
   # ElevenLabs settings (used when backend: elevenlabs)
   model_id: eleven_v3           # Best quality, dramatic delivery
@@ -53,7 +53,7 @@ image_generation:
 # On a workstation (x86 + NVIDIA): change codec to libx264.
 video:
   fps: 1              # Static slides, 1 fps is fine
-  codec: h264_rkmpp   # Rockchip MPP hardware H.264; use libx264 on workstation
+  codec: libx264   # Rockchip MPP hardware H.264; use libx264 on workstation
   audio_codec: aac
   bitrate: 2M         # rkmpp uses bitrate, not CRF
   # crf and preset are used only when codec is libx264

@@ -353,51 +353,45 @@ html, body {
     text-align: center;
 }
 
-.title-slide .slide-title-main {
+.title-content-centered {
+    justify-content: center !important;
+    align-items: center !important;
+    text-align: center !important;
+    gap: 24px;
+    flex-direction: column !important;
+}
+
+.title-main-logo {
     {% if orientation == 'landscape' %}
-    font-size: 48px;
+    width: 320px;
+    height: 320px;
     {% else %}
-    font-size: 42px;
+    width: 280px;
+    height: 280px;
     {% endif %}
+    object-fit: contain;
+    filter: drop-shadow(0 0 40px rgba(0, 200, 80, 0.3));
+    margin-bottom: 8px;
 }
 
-.title-slide .presenter-block {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-top: 28px;
-}
-
-.title-slide .presenter-portrait {
+.title-agency-name {
     {% if orientation == 'landscape' %}
-    width: 80px;
-    height: 80px;
+    font-size: 36px;
     {% else %}
-    width: 96px;
-    height: 96px;
+    font-size: 30px;
     {% endif %}
-    border-radius: 50%;
-    border: 2px solid rgba(255, 140, 0, 0.4);
-    box-shadow: 0 0 20px rgba(0, 180, 60, 0.15), 0 0 40px rgba(0, 0, 0, 0.5);
-    object-fit: cover;
-}
-
-.title-slide .presenter-info {
-    text-align: left;
-}
-
-.title-slide .presenter-name {
-    font-size: 16px;
-    color: #7ab87a;
-    letter-spacing: 0.1em;
+    font-weight: 700;
+    color: #00dd55;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
 }
 
-.title-slide .week-label {
-    font-size: 14px;
-    color: #3a6a3a;
-    margin-top: 4px;
-    letter-spacing: 0.15em;
+.title-tagline {
+    font-size: 16px;
+    color: #5a9a5a;
+    letter-spacing: 0.12em;
+    font-style: italic;
+    margin-top: 8px;
 }
 
 /* ── Closing slide ─────────────────────────────────────────────── */
@@ -410,6 +404,49 @@ html, body {
 .closing-slide .slide-title-main {
     font-size: 32px;
     color: #3a8a3a;
+}
+
+/* ── Desk intro: portrait + content side-by-side ───────────────── */
+.content-with-portrait {
+    flex-direction: row !important;
+    align-items: center;
+    gap: 40px;
+}
+
+.portrait-panel {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.dept-portrait {
+    {% if orientation == 'landscape' %}
+    width: 260px;
+    height: 260px;
+    {% else %}
+    width: 200px;
+    height: 200px;
+    {% endif %}
+    border-radius: 8px;
+    border: 2px solid color-mix(in srgb, var(--desk-accent) 40%, transparent);
+    box-shadow: 0 0 32px rgba(0,0,0,0.6), 0 0 16px color-mix(in srgb, var(--desk-accent) 15%, transparent);
+    object-fit: cover;
+}
+
+.dept-portrait-name {
+    font-size: 12px;
+    color: var(--desk-accent);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    font-family: 'Courier New', monospace;
+    text-align: center;
+}
+
+.portrait-content {
+    flex: 1;
+    min-width: 0;
 }
 </style>
 <style>
@@ -456,23 +493,12 @@ html, body {
 
   {% if slide_type == 'title' %}
   <!-- ═══ TITLE SLIDE ═══ -->
-  <div class="desk-badge">{{ desk_name }}</div>
-  <div class="content">
-    <div class="slide-title-main">Weekly Intelligence Briefing</div>
-    <div class="slide-title-sub">{{ slide_title }}</div>
-    <div class="presenter-block">
-      {% if portrait_data_uri %}
-      <img class="presenter-portrait" src="{{ portrait_data_uri }}" alt="{{ persona_name }}">
-      {% endif %}
-      <div class="presenter-info">
-        <div class="presenter-name">Presented by {{ persona_name }}</div>
-        <div class="week-label">{{ week_label }}</div>
-      </div>
-      {% if desk_badge_uri %}
-      <img src="{{ desk_badge_uri }}" alt="{{ desk_name }}"
-           style="{% if orientation == 'landscape' %}width:72px;height:72px{% else %}width:88px;height:88px{% endif %};opacity:0.9;margin-left:auto;">
-      {% endif %}
-    </div>
+  <div class="content title-content-centered">
+    {% if logo_data_uri %}
+    <img class="title-main-logo" src="{{ logo_data_uri }}" alt="OSIA">
+    {% endif %}
+    <div class="title-agency-name">Open Source Intelligence Agency</div>
+    <div class="title-tagline">Intelligence for the people, the land, and the future.</div>
   </div>
 
   {% elif slide_type == 'closing' %}
@@ -485,10 +511,24 @@ html, body {
   {% else %}
   <!-- ═══ CONTENT SLIDE ═══ -->
   <div class="desk-badge">{{ desk_name }}</div>
+  {% if portrait_data_uri %}
+  <!-- Portrait + content side-by-side layout for desk intro slides -->
+  <div class="content content-with-portrait">
+    <div class="portrait-panel">
+      <img class="dept-portrait" src="{{ portrait_data_uri }}" alt="{{ persona_name }}">
+      <div class="dept-portrait-name">{{ persona_name }}</div>
+    </div>
+    <div class="portrait-content">
+      <div class="slide-heading">{{ slide_title }}</div>
+      <div class="slide-body">{{ slide_body | safe }}</div>
+    </div>
+  </div>
+  {% else %}
   <div class="content">
     <div class="slide-heading">{{ slide_title }}</div>
     <div class="slide-body">{{ slide_body | safe }}</div>
   </div>
+  {% endif %}
   {% endif %}
 
   <!-- Footer -->

@@ -58,3 +58,38 @@ def load_desk_badge_b64(desk_slug: str) -> str | None:
         if path.exists():
             return _load_image_b64(path)
     return None
+
+
+# Maps each desk to the background category that best fits its aesthetic motif.
+_DESK_BG_CATEGORY: dict[str, str] = {
+    "geopolitical-and-security-desk":          "terrain",
+    "cultural-and-theological-intelligence-desk": "archive",
+    "science-technology-and-commercial-desk":  "data_overlay",
+    "human-intelligence-and-profiling-desk":   "hero",
+    "finance-and-economics-directorate":       "archive",
+    "cyber-intelligence-and-warfare-desk":     "data_overlay",
+    "information-warfare-desk":                "hero",
+    "environment-and-ecology-desk":            "ecological",
+    "the-watch-floor":                         "hero",
+}
+
+
+def desk_bg_category(desk_slug: str) -> str:
+    """Return the background image category for a desk (hero/terrain/archive/data_overlay/ecological)."""
+    return _DESK_BG_CATEGORY.get(desk_slug, "hero")
+
+
+def load_desk_bg_b64(desk_slug: str, orientation: str = "landscape") -> str | None:
+    """Load the background image for a desk as a data URI.
+
+    Args:
+        desk_slug: Desk identifier, or an explicit category name (hero, terrain, etc.).
+        orientation: 'landscape' → desktop size, 'portrait' → portrait size.
+    """
+    size_key = "desktop" if orientation == "landscape" else "portrait"
+    category = _DESK_BG_CATEGORY.get(desk_slug, desk_slug)  # allow passing category directly
+    path = _ASSETS_DIR / "aesthetic" / f"bg_{category}_{size_key}.png"
+    if path.exists():
+        raw = path.read_bytes()
+        return "data:image/png;base64," + base64.b64encode(raw).decode()
+    return None

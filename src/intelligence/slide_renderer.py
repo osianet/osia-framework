@@ -13,7 +13,13 @@ from pathlib import Path
 import markdown as md
 from jinja2 import Environment, FileSystemLoader
 
-from src.intelligence.aesthetic import desk_accent_colour, load_desk_badge_b64, load_logo_b64, load_portrait_b64
+from src.intelligence.aesthetic import (
+    desk_accent_colour,
+    load_desk_badge_b64,
+    load_desk_bg_b64,
+    load_logo_b64,
+    load_portrait_b64,
+)
 
 logger = logging.getLogger("osia.slide_renderer")
 
@@ -85,20 +91,44 @@ class SlideRenderer:
         now = datetime.now(UTC)
         ref_prefix = desk_slug[:8].upper().replace("-", "")
         ref_number = f"OSIA-WB-{now.strftime('%Y%m%d')}-{ref_prefix}"
-        portrait_uri = load_portrait_b64(desk_slug)
-        desk_accent = desk_accent_colour(desk_slug)
-        desk_badge_uri = load_desk_badge_b64(desk_slug)
+
+        # Deck-level defaults (used for slides that don't specify their own desk_slug).
+        deck_portrait_uri = load_portrait_b64(desk_slug)
+        deck_accent = desk_accent_colour(desk_slug)
+        deck_badge_uri = load_desk_badge_b64(desk_slug)
 
         image_paths: list[Path] = []
 
         for i, slide in enumerate(slides):
             body_html = _md_to_html(slide.get("body", ""))
 
-            # Encode background image as data URI if available
+            # Per-slide aesthetic: use slide's desk_slug if present, else deck defaults.
+            slide_desk_slug = slide.get("desk_slug") or desk_slug
+            slide_desk_name = slide.get("desk_name") or desk_name
+            slide_persona = slide.get("persona_name") or persona_name
+
+            if slide.get("desk_slug"):
+                slide_portrait_uri = load_portrait_b64(slide_desk_slug)
+                slide_accent = desk_accent_colour(slide_desk_slug)
+                slide_badge_uri = load_desk_badge_b64(slide_desk_slug)
+            else:
+                slide_portrait_uri = deck_portrait_uri
+                slide_accent = deck_accent
+                slide_badge_uri = deck_badge_uri
+
+            # Background: explicit bg_images list > slide bg_category > desk default.
             bg_image_data_uri = None
             if bg_images and i < len(bg_images) and bg_images[i] and bg_images[i].exists():
                 raw = bg_images[i].read_bytes()
                 bg_image_data_uri = "data:image/png;base64," + base64.b64encode(raw).decode()
+            else:
+                bg_category = slide.get("bg_category")
+                bg_image_data_uri = load_desk_bg_b64(
+                    bg_category or slide_desk_slug, orientation
+                )
+
+            # Show portrait on desk intro slides and title slides.
+            show_portrait = slide.get("slide_type") in ("title",) or bool(slide.get("desk_slug"))
 
             html_content = template.render(
                 slide_title=slide.get("title", ""),
@@ -106,9 +136,9 @@ class SlideRenderer:
                 slide_type=slide.get("slide_type", "content"),
                 slide_number=i + 1,
                 total_slides=len(slides),
-                desk_name=desk_name,
-                desk_slug=desk_slug,
-                persona_name=persona_name,
+                desk_name=slide_desk_name,
+                desk_slug=slide_desk_slug,
+                persona_name=slide_persona,
                 week_label=week_label,
                 ref_number=ref_number,
                 orientation=orientation,
@@ -116,10 +146,10 @@ class SlideRenderer:
                 height=height,
                 logo_data_uri=self._logo_uri,
                 bg_image_data_uri=bg_image_data_uri,
-                portrait_data_uri=portrait_uri if slide.get("slide_type") == "title" else None,
+                portrait_data_uri=slide_portrait_uri if show_portrait else None,
                 timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
-                desk_accent=desk_accent,
-                desk_badge_uri=desk_badge_uri,
+                desk_accent=slide_accent,
+                desk_badge_uri=slide_badge_uri,
             )
 
             png_path = output_dir / f"slide_{i:02d}.png"
@@ -189,16 +219,40 @@ class SlideRenderer:
         desk_accent = desk_accent_colour(desk_slug)
         desk_badge_uri = load_desk_badge_b64(desk_slug)
 
+        # Deck-level defaults.
+        deck_portrait_uri = load_portrait_b64(desk_slug)
+        deck_accent = desk_accent_colour(desk_slug)
+        deck_badge_uri = load_desk_badge_b64(desk_slug)
+
         # Render each slide as a separate HTML page, then combine
         all_pages = []
         for i, slide in enumerate(slides):
             body_html = _md_to_html(slide.get("body", ""))
 
-            # Encode background image as data URI if available
+            slide_desk_slug = slide.get("desk_slug") or desk_slug
+            slide_desk_name = slide.get("desk_name") or desk_name
+            slide_persona = slide.get("persona_name") or persona_name
+
+            if slide.get("desk_slug"):
+                slide_portrait_uri = load_portrait_b64(slide_desk_slug)
+                slide_accent = desk_accent_colour(slide_desk_slug)
+                slide_badge_uri = load_desk_badge_b64(slide_desk_slug)
+            else:
+                slide_portrait_uri = deck_portrait_uri
+                slide_accent = deck_accent
+                slide_badge_uri = deck_badge_uri
+
             bg_image_data_uri = None
             if bg_images and i < len(bg_images) and bg_images[i] and bg_images[i].exists():
                 raw = bg_images[i].read_bytes()
                 bg_image_data_uri = "data:image/png;base64," + base64.b64encode(raw).decode()
+            else:
+                bg_category = slide.get("bg_category")
+                bg_image_data_uri = load_desk_bg_b64(
+                    bg_category or slide_desk_slug, orientation
+                )
+
+            show_portrait = slide.get("slide_type") in ("title",) or bool(slide.get("desk_slug"))
 
             html_content = template.render(
                 slide_title=slide.get("title", ""),
@@ -206,9 +260,9 @@ class SlideRenderer:
                 slide_type=slide.get("slide_type", "content"),
                 slide_number=i + 1,
                 total_slides=len(slides),
-                desk_name=desk_name,
-                desk_slug=desk_slug,
-                persona_name=persona_name,
+                desk_name=slide_desk_name,
+                desk_slug=slide_desk_slug,
+                persona_name=slide_persona,
                 week_label=week_label,
                 ref_number=ref_number,
                 orientation=orientation,
@@ -216,10 +270,10 @@ class SlideRenderer:
                 height=height,
                 logo_data_uri=self._logo_uri,
                 bg_image_data_uri=bg_image_data_uri,
-                portrait_data_uri=portrait_uri if slide.get("slide_type") == "title" else None,
+                portrait_data_uri=slide_portrait_uri if show_portrait else None,
                 timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
-                desk_accent=desk_accent,
-                desk_badge_uri=desk_badge_uri,
+                desk_accent=slide_accent,
+                desk_badge_uri=slide_badge_uri,
             )
             all_pages.append(html_content)
 

@@ -69,6 +69,161 @@ def _desk_focus(slug: str) -> str:
     return focuses.get(slug, "intelligence analysis")
 
 
+def _desk_narration(slug: str, name: str, desk_name: str) -> str:
+    """Return a persona-voiced narration for each desk head's introduction."""
+    narrations = {
+        "geopolitical-and-security-desk": f"""
+{name}. Geopolitical and Security Desk.
+
+Thirty years tracking how states behave when they think no one is watching. The declarations
+matter less than the deployments. The communiqués matter less than the troop movements.
+
+My desk covers state-on-state conflict, alliance realignment, military doctrine, and the
+spaces where formal diplomacy breaks down and covert pressure begins. When an actor's public
+position and their actual behaviour diverge — that's where we work.
+
+Open sources tell you more than most people expect, if you know how to read them.
+""",
+        "cyber-intelligence-and-warfare-desk": f"""
+Commander {name.split()[-1]}, Cyber Intelligence and Warfare.
+
+I don't lead with the malware. I lead with who ran it, why, and what it tells us about
+their next move. The technical detail matters — but only as evidence of intent.
+
+We track nation-state actors, their tooling, their infrastructure, and the strategic
+objectives behind their operations. A zero-day is just a weapon. The question is who
+bought it, and what they're pointing it at.
+
+If there's a significant cyber incident anywhere in the world, we'll have an assessment
+on the Watch Floor within hours.
+""",
+        "human-intelligence-and-profiling-desk": f"""
+{name}. Human Intelligence and Profiling.
+
+People are never as opaque as they think they are. Power structures leave traces —
+in relationships, in contradictions, in the gaps between what someone says publicly
+and what they do under pressure.
+
+My desk builds profiles: who holds real influence, who's being leveraged, who's about
+to flip. We map networks, track behavioral shifts, and identify the pressure points
+that matter before an event, not after.
+
+The most useful intelligence is rarely the dramatic kind. It's the quiet pattern you
+noticed six months before anyone else was paying attention.
+""",
+        "finance-and-economics-directorate": f"""
+{name}, Finance and Economics Directorate.
+
+Follow the money. That's the entire methodology.
+
+Shell companies, correspondent banking relationships, sanctions evasion routes,
+dark money flows into political campaigns — the financial system is more transparent
+than most actors believe, if you're willing to do the work.
+
+My desk connects capital movements to the political interests they serve. Economic
+policy is foreign policy. Debt is leverage. We track who controls what, who owes
+what to whom, and where the pressure will land when it's applied.
+
+The surface explanation is rarely the right one. We keep going.
+""",
+        "environment-and-ecology-desk": f"""
+{name}, Environment and Ecological Intelligence.
+
+The environment is an early warning system. By the time something becomes a
+humanitarian crisis, the ecological signals were there months or years before.
+
+Aquifer depletion, crop failures, deforestation rates, coastal erosion — I read
+these as intelligence, not just data. They predict displacement, resource conflict,
+infrastructure failure, and political instability with more lead time than most
+traditional indicators.
+
+My desk translates what the planet is telling us into strategic assessments. The
+ecological crisis is already a security crisis. We're mapping what that looks like
+on the ground, now and over the next decade.
+""",
+        "cultural-and-theological-intelligence-desk": f"""
+{name}, Cultural and Theological Intelligence.
+
+Culture and religion are treated as background noise in most intelligence frameworks.
+That's a significant error.
+
+Movements don't emerge from nowhere. They have deep historical roots, theological
+frameworks, and cultural logic that shapes how they organise, how they recruit, and
+how they justify action. If you don't understand that logic on its own terms, you
+will consistently misread what you're seeing.
+
+I bring both academic rigour and field experience to this desk. We contextualise
+what's happening within its actual history and spiritual frameworks — not the
+simplified version that fits a preexisting narrative.
+
+The ideological dimension of any conflict is as operationally relevant as the military one.
+""",
+        "science-technology-and-commercial-desk": f"""
+{name}, Science, Technology and Commercial Desk.
+
+The most consequential shifts in the global balance of power right now are technical.
+AI, synthetic biology, quantum computing, satellite infrastructure — these aren't
+peripheral concerns. They're the terrain.
+
+My job is translation. I take what's happening in laboratories, patent filings,
+academic preprints, and commercial deals, and I tell you what it means strategically.
+Who controls this technology? Who does it empower? Who does it leave behind, or
+actively threaten?
+
+Dual-use technology is the grey zone we live in. Understanding it requires staying
+genuinely current — and being willing to follow the implications wherever they lead.
+""",
+        "information-warfare-desk": f"""
+{name}. Information and Psychological Warfare.
+
+The information environment is a battlefield. Most of the casualties don't know
+they've been hit.
+
+My desk tracks propaganda campaigns, coordinated inauthentic behaviour, narrative
+laundering, and influence operations — from state broadcasters to anonymous Telegram
+channels. We map the infrastructure: who's running the accounts, who's funding
+the outlets, and whose interests the messaging serves.
+
+There's a certain irony in doing this work with open sources. Everything I need
+to understand an influence operation is usually visible if you know what patterns
+to look for. The operators count on the noise to provide cover.
+
+We cut through the noise.
+""",
+        "the-watch-floor": f"""
+{name}. The Watch Floor.
+
+I see everything.
+
+Every desk report, every entity flag, every corroboration verdict from Hermes —
+it all comes through here. My job is synthesis: taking nine different pictures
+of a complex event and producing one coherent assessment that tells decision-makers
+what is actually happening and what matters.
+
+No single desk has the full picture. Geopolitical context without the financial
+layer misses the leverage. Cyber attribution without the human network misses the
+command structure. The Watch Floor holds all of it simultaneously.
+
+When the agency delivers a finished intelligence product, this is where it was
+assembled. I speak last, because I speak for all of them.
+""",
+    }
+    return narrations.get(
+        slug,
+        f"""
+{name}, {desk_name}.
+
+My desk covers {_desk_focus(slug)}. We work across open sources, monitoring for
+developments that matter to the agency's intelligence picture.
+
+Every finding we produce goes through corroboration before it reaches the Watch Floor.
+""",
+    )
+
+
+_HOST_VOICE_REF = str(ROOT / "config" / "voice_refs" / "intro-host.mp3")
+
+
 def build_slides() -> list[dict]:
     """Build slide deck for intro video."""
     desks = load_desk_configs()
@@ -80,6 +235,8 @@ def build_slides() -> list[dict]:
             "slide_type": "title",
             "title": "Open Source Intelligence Agency",
             "body": "An Autonomous Intelligence Framework",
+            "bg_category": "hero",
+            "voice_ref_path": _HOST_VOICE_REF,
             "narration": """
 Welcome to the Open Source Intelligence Agency — OSIA.
 
@@ -97,6 +254,8 @@ Let me walk you through how we work.
         {
             "slide_type": "content",
             "title": "The Intelligence Lifecycle",
+            "bg_category": "data_overlay",
+            "voice_ref_path": _HOST_VOICE_REF,
             "body": """
 - **Ingress**: Signal, RSS feeds, or API
 - **Research**: Multi-turn loops via MCP tools
@@ -155,15 +314,10 @@ Now let me introduce you to the team.
                 "slide_type": "content",
                 "title": desk["name"],
                 "body": f"**{name}**\n\n{_desk_focus(slug)}",
-                "narration": f"""
-I'm {name}, head of {desk["name"]}.
-
-My desk focuses on {_desk_focus(slug)}. We work with open sources, classified documents,
-and real-time feeds to build a comprehensive picture of threats and opportunities in our domain.
-
-We validate intelligence across multiple sources and provide strategic analysis to the agency.
-""",
-                "desk_slug": slug,  # For loading portrait
+                "narration": _desk_narration(slug, name, desk["name"]),
+                "desk_slug": slug,
+                "desk_name": desk["name"],
+                "persona_name": name,
             }
         )
 
@@ -171,6 +325,8 @@ We validate intelligence across multiple sources and provide strategic analysis 
     slides.append(
         {
             "slide_type": "content",
+            "bg_category": "archive",
+            "voice_ref_path": _HOST_VOICE_REF,
             "title": "How We Validate Intelligence",
             "body": """
 - **Phase 1**: Search internal KB + external sources
@@ -199,6 +355,8 @@ This continuous validation ensures our intelligence picture stays accurate and c
     slides.append(
         {
             "slide_type": "content",
+            "bg_category": "archive",
+            "voice_ref_path": _HOST_VOICE_REF,
             "title": "Our Knowledge Bases",
             "body": """
 - WikiLeaks cables (124K diplomatic records)
@@ -227,6 +385,8 @@ in evidence.
     slides.append(
         {
             "slide_type": "closing",
+            "bg_category": "ecological",
+            "voice_ref_path": _HOST_VOICE_REF,
             "title": "The Future of OSIA",
             "body": """
 Continuously expanding. Continuously learning. Continuously improving.
@@ -277,7 +437,10 @@ def main() -> None:
             print("\n" + "=" * 80)
     elif args.generate:
         import asyncio
+        import sys
+        from pathlib import Path
 
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from src.intelligence.intro_video_generator import generate_intro_video
 
         video_path = asyncio.run(generate_intro_video(slides, orientation=args.orientation, resume=args.resume))
