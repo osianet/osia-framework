@@ -18,19 +18,12 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
+from src.intelligence.aesthetic import load_logo_b64
+
 logger = logging.getLogger("osia.infographic")
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _TEMPLATES_DIR = _REPO_ROOT / "templates" / "report"
-_ASSETS_DIR = _REPO_ROOT / "assets"
-
-
-def _load_logo_b64() -> str | None:
-    logo_path = _ASSETS_DIR / "osia_logo_sm.png"
-    if logo_path.exists():
-        raw = logo_path.read_bytes()
-        return "data:image/png;base64," + base64.b64encode(raw).decode()
-    return None
 
 
 def _desk_display_name(slug: str) -> str:
@@ -131,7 +124,7 @@ def render_infographic_png(
         desk_slug=desk_slug,
         ref_number=ref_number,
         timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
-        logo_data_uri=_load_logo_b64(),
+        logo_data_uri=load_logo_b64(),
         bg_image_data_uri=bg_image_data_uri,
     )
 

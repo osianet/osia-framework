@@ -136,6 +136,40 @@ class VeniceImageClient:
 
         raise RuntimeError(f"Venice image generation failed after 3 attempts for prompt: {prompt[:80]}")
 
+    async def remove_background(
+        self,
+        image_bytes: bytes,
+        output_path: Path | None = None,
+    ) -> bytes:
+        """Remove the background from an image via Venice AI.
+
+        Args:
+            image_bytes: Raw PNG/JPEG bytes of the source image.
+            output_path: If provided, write the result PNG to disk.
+
+        Returns:
+            Raw PNG bytes with transparent background.
+        """
+        if not VENICE_API_KEY:
+            raise RuntimeError("VENICE_API_KEY not set")
+
+        b64 = base64.b64encode(image_bytes).decode()
+
+        async with httpx.AsyncClient(timeout=60.0) as http:
+            resp = await http.post(
+                "https://api.venice.ai/api/v1/image/background-remove",
+                headers={"Authorization": f"Bearer {VENICE_API_KEY}"},
+                json={"image": b64},
+            )
+            resp.raise_for_status()
+
+        result = resp.content
+        if output_path:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(result)
+            logger.debug("Saved bg-removed image: %s", output_path)
+        return result
+
     async def generate_slide_images(
         self,
         slides: list[dict],

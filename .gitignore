@@ -35,6 +35,10 @@ tmp/
 # Generated PDF reports (local archive — not committed)
 reports/
 
+# Generated aesthetic assets (large AI-generated images — not committed)
+# Logos are committed; the bulk aesthetic pack is not
+assets/aesthetic/
+
 # Voice reference clips for Chatterbox TTS — scp from existing briefing audio
 config/voice_refs/
 

@@ -4,7 +4,6 @@ Converts markdown INTSUM text into a styled PDF document using WeasyPrint,
 with an intelligence agency + cyber aesthetic template.
 """
 
-import base64
 import logging
 import os
 import re
@@ -14,21 +13,13 @@ from pathlib import Path
 import markdown as md
 from jinja2 import Environment, FileSystemLoader
 
+from src.intelligence.aesthetic import desk_accent_colour, load_desk_badge_b64, load_logo_b64
+
 logger = logging.getLogger("osia.report_generator")
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _TEMPLATES_DIR = _REPO_ROOT / "templates" / "report"
-_ASSETS_DIR = _REPO_ROOT / "assets"
 _REPORTS_DIR = _REPO_ROOT / "reports"
-
-
-def _load_logo_b64() -> str | None:
-    """Return the OSIA logo as a base64 data URI, or None if the file is absent."""
-    logo_path = _ASSETS_DIR / "osia_logo_sm.png"
-    if logo_path.exists():
-        raw = logo_path.read_bytes()
-        return "data:image/png;base64," + base64.b64encode(raw).decode()
-    return None
 
 
 def _desk_display_name(slug: str) -> str:
@@ -119,7 +110,9 @@ def generate_intsum_pdf(
         desk_slug=desk_slug,
         ref_number=ref_number,
         source=source,
-        logo_data_uri=_load_logo_b64(),
+        logo_data_uri=load_logo_b64(),
+        desk_accent=desk_accent_colour(desk_slug),
+        desk_badge_uri=load_desk_badge_b64(desk_slug),
     )
 
     HTML(string=html_content, base_url=str(_TEMPLATES_DIR)).write_pdf(str(output_path))

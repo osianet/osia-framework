@@ -396,6 +396,15 @@ p strong:first-child {
     page-break-inside: avoid;
 }
 </style>
+<style>
+  /* Per-desk accent colour injection */
+  :root { --desk-accent: {{ desk_accent | default('#C8860A') }}; }
+  .doc-type, .ref-number, h1, .doc-type { color: var(--desk-accent) !important; }
+  h2 { color: var(--desk-accent) !important; border-left-color: var(--desk-accent) !important; }
+  ul li::marker, ol li::marker { color: var(--desk-accent); }
+  .meta-item strong { color: var(--desk-accent) !important; }
+  .doc-header { border-bottom-color: color-mix(in srgb, var(--desk-accent) 30%, transparent) !important; }
+</style>
 </head>
 <body data-ref="{{ ref_number }}">
 
@@ -422,6 +431,9 @@ p strong:first-child {
       <div class="header-meta">
         <div class="ref-number">REF: {{ ref_number }}</div>
         <div class="header-timestamp">{{ timestamp }}</div>
+        {% if desk_badge_uri %}
+          <img src="{{ desk_badge_uri }}" alt="{{ desk_name }}" style="height:40pt;width:40pt;margin-top:6pt;opacity:0.85;">
+        {% endif %}
       </div>
     </div>
   </div>

@@ -1,0 +1,173 @@
+# OSIA Aesthetic Framework
+# Derived from DIRECTIVES.md and the agency's decolonial/socialist mandate.
+# All AI generation prompts reference this document for consistency.
+
+identity:
+  name: "Open Source Intelligence Agency"
+  tagline: "Intelligence for the people, the land, and the future."
+  codename: OSIA
+
+# ── Colour Palette ────────────────────────────────────────────────────────────
+# Rooted in the tension between surveillance-state darkness and liberation green.
+palette:
+  primary:
+    void_black:    "#0A0C0B"   # deep background — the unseen
+    signal_green:  "#1A3A2A"   # dark forest green — land, life, resistance
+    amber_alert:   "#C8860A"   # warm amber — intelligence light cutting through dark
+  accent:
+    liberation_red: "#8B1A1A"  # deep red — solidarity, struggle
+    data_teal:      "#0D4A4A"  # encrypted teal — digital sovereignty
+    earth_ochre:    "#6B4C1E"  # ochre — land, soil, Indigenous roots
+  neutral:
+    fog:            "#1C1F1D"  # near-black surface
+    smoke:          "#2E3330"  # mid-tone surface
+    ash:            "#4A5248"  # muted text / secondary elements
+    ghost:          "#8A9688"  # tertiary text
+    paper:          "#D4CFC4"  # light text on dark — aged document feel
+
+# ── Typography Aesthetic ──────────────────────────────────────────────────────
+typography:
+  style: "classified document meets radical press"
+  characteristics:
+    - monospace elements for data/codes (typewriter, redacted-document feel)
+    - serif for authority and gravitas in headers
+    - tight tracking, uppercase for classification labels
+    - deliberate use of redaction bars as design elements
+
+# ── Visual Language ───────────────────────────────────────────────────────────
+visual_language:
+  core_metaphors:
+    - "the eye that watches power, not the people"
+    - "roots beneath concrete — Indigenous land under colonial infrastructure"
+    - "signal through noise — clarity from chaos"
+    - "the archive as weapon — declassified truth"
+  motifs:
+    - topographic contour lines (land, terrain, sovereignty)
+    - circuit/network nodes (digital infrastructure, surveillance)
+    - redacted document textures (classified → declassified)
+    - compass rose / celestial navigation (orientation, direction)
+    - mycelium networks (non-human agency, ecological intelligence)
+    - radio wave interference patterns (signal, communication)
+    - ancient cartography overlaid with digital grids
+  forbidden:
+    - American eagle / Western imperial iconography
+    - corporate clean minimalism (Apple/Google aesthetic)
+    - military-industrial blue-grey palette
+    - triumphalist imagery
+
+# ── Mood & Atmosphere ─────────────────────────────────────────────────────────
+mood:
+  primary: "vigilant, grounded, purposeful"
+  secondary: "subversive, archival, ecological"
+  lighting: "low-key directional — single source cutting through shadow"
+  texture: "grain, noise, aged paper, concrete, bark, soil"
+
+# ── Asset Specifications ──────────────────────────────────────────────────────
+asset_specs:
+  logo:
+    sizes: [512, 1024, 2048]
+    variants:
+      - id: logo_on_dark
+        bg: void_black
+        format: png
+      - id: logo_transparent
+        bg: transparent
+        format: png
+      - id: logo_on_green
+        bg: signal_green
+        format: png
+
+  backgrounds:
+    sizes:
+      desktop: [1920, 1080]
+      portrait: [1080, 1920]
+      square: [1080, 1080]
+      banner: [2560, 1440]
+    categories:
+      - id: hero
+        desc: "Primary brand background — dark, atmospheric, land/signal motifs"
+      - id: data_overlay
+        desc: "Abstract network/circuit patterns for UI overlays"
+      - id: terrain
+        desc: "Topographic / satellite-style land imagery"
+      - id: archive
+        desc: "Aged document / redacted file textures"
+      - id: ecological
+        desc: "Forest, mycelium, watershed — non-human agency"
+
+  overlays:
+    format: png
+    bg: transparent
+    categories:
+      - id: scan_lines
+        desc: "Subtle CRT scan-line texture for video/screen overlays"
+      - id: noise_grain
+        desc: "Film grain / noise layer"
+      - id: vignette
+        desc: "Dark edge vignette"
+      - id: grid
+        desc: "Subtle intelligence-map grid lines"
+      - id: redaction_bars
+        desc: "Horizontal redaction bar elements"
+
+  desk_badges:
+    size: [512, 512]
+    format: png
+    bg: transparent
+    desks:
+      - geopolitical-and-security-desk
+      - cultural-and-theological-intelligence-desk
+      - science-technology-and-commercial-desk
+      - human-intelligence-and-profiling-desk
+      - finance-and-economics-directorate
+      - cyber-intelligence-and-warfare-desk
+      - information-warfare-desk
+      - environment-and-ecology-desk
+      - the-watch-floor
+
+# ── Per-Desk Aesthetic Overrides ──────────────────────────────────────────────
+desk_aesthetics:
+  geopolitical-and-security-desk:
+    accent: amber_alert
+    motif: "ancient cartography, borders dissolving, contested territories"
+    mood: "grave, authoritative, geographically vast"
+
+  cultural-and-theological-intelligence-desk:
+    accent: earth_ochre
+    motif: "sacred geometry, manuscript illumination, oral tradition patterns"
+    mood: "contemplative, layered, spiritually grounded"
+
+  science-technology-and-commercial-desk:
+    accent: data_teal
+    motif: "molecular structures, circuit traces, dual-use technology shadows"
+    mood: "precise, analytical, ethically questioning"
+
+  human-intelligence-and-profiling-desk:
+    accent: liberation_red
+    motif: "network graphs, shadow profiles, redacted faces"
+    mood: "intimate, unsettling, humanising"
+
+  finance-and-economics-directorate:
+    accent: amber_alert
+    motif: "flow diagrams, hidden ledgers, supply chain maps"
+    mood: "forensic, cold, exposing"
+
+  cyber-intelligence-and-warfare-desk:
+    accent: data_teal
+    motif: "binary rain, exploit code fragments, dark web topology"
+    mood: "technical, urgent, adversarial"
+
+  information-warfare-desk:
+    accent: liberation_red
+    motif: "fractured mirrors, propaganda poster aesthetics, signal jamming"
+    mood: "disorienting, critical, counter-narrative"
+
+  environment-and-ecology-desk:
+    accent: signal_green
+    motif: "watershed maps, deforestation overlays, mycelium networks"
+    mood: "urgent, reverent, ecological grief"
+
+  the-watch-floor:
+    accent: amber_alert
+    motif: "all-seeing synthesis, convergence point, the final report"
+    mood: "composed, comprehensive, decisive"
