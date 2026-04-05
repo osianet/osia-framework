@@ -39,6 +39,12 @@ reports/
 # Logos are committed; the bulk aesthetic pack is not
 assets/aesthetic/
 
+# Video transition assets and generated video output
+assets/video/
+
+# Logo variants regenerated locally — only committed intentionally
+assets/osia_logo_sm.png
+
 # Voice reference clips for Chatterbox TTS — scp from existing briefing audio
 config/voice_refs/
 
