@@ -72,7 +72,7 @@ async def generate_intro_video(
     try:
         png_paths = renderer.render_deck(
             slides=slides,
-            desk_slug="hero",          # fallback bg for non-desk slides
+            desk_slug="hero",  # fallback bg for non-desk slides
             desk_name="OSIA",
             persona_name="OSIA",
             orientation=orientation,
@@ -107,10 +107,7 @@ async def generate_intro_video(
 
         # Priority: explicit voice_ref_path on slide > desk voice map > None (default).
         desk_slug = slide.get("desk_slug")
-        voice_ref = (
-            slide.get("voice_ref_path")
-            or (voice_ref_map.get(desk_slug) if desk_slug else None)
-        )
+        voice_ref = slide.get("voice_ref_path") or (voice_ref_map.get(desk_slug) if desk_slug else None)
         if desk_slug and not voice_ref:
             logger.warning("No voice ref found for desk %s — using default voice", desk_slug)
 
@@ -140,9 +137,12 @@ def _get_audio_duration(audio_path: Path) -> float:
     result = subprocess.run(
         [
             "ffprobe",
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             str(audio_path),
         ],
         capture_output=True,
@@ -152,8 +152,8 @@ def _get_audio_duration(audio_path: Path) -> float:
     return float(result.stdout.strip())
 
 
-_PAUSE_SECS = 0.8    # silence gap appended after each slide's audio
-_FADE_SECS  = 0.4    # cross-fade duration between clips
+_PAUSE_SECS = 0.8  # silence gap appended after each slide's audio
+_FADE_SECS = 0.4  # cross-fade duration between clips
 
 
 async def _assemble_video(
@@ -197,10 +197,14 @@ async def _assemble_video(
             # Pad with silence: adelay puts the speech first, apad extends to total duration.
             total_dur = speech_dur + _PAUSE_SECS
             pad_cmd = [
-                "ffmpeg", "-y",
-                "-i", str(audio_path),
-                "-af", f"apad=pad_dur={_PAUSE_SECS}",
-                "-t", str(total_dur),
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(audio_path),
+                "-af",
+                f"apad=pad_dur={_PAUSE_SECS}",
+                "-t",
+                str(total_dur),
                 str(padded_audio),
             ]
             result = subprocess.run(pad_cmd, capture_output=True, text=True, timeout=30)
@@ -212,9 +216,14 @@ async def _assemble_video(
             total_dur = speech_dur + _PAUSE_SECS
             # Generate silent audio for slides without narration.
             pad_cmd = [
-                "ffmpeg", "-y",
-                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-                "-t", str(total_dur),
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=stereo",
+                "-t",
+                str(total_dur),
                 str(padded_audio),
             ]
             subprocess.run(pad_cmd, capture_output=True, text=True, timeout=10)
@@ -224,24 +233,56 @@ async def _assemble_video(
         use_audio = padded_audio if padded_audio.exists() else None
         if use_audio:
             cmd = [
-                "ffmpeg", "-y",
-                "-loop", "1", "-i", str(png_path),
-                "-i", str(use_audio),
-                "-c:v", "libx264", "-crf", "23", "-preset", "medium",
-                "-c:a", "aac", "-b:a", "128k",
-                "-t", str(total_dur),
-                "-pix_fmt", "yuv420p",
+                "ffmpeg",
+                "-y",
+                "-loop",
+                "1",
+                "-i",
+                str(png_path),
+                "-i",
+                str(use_audio),
+                "-c:v",
+                "libx264",
+                "-crf",
+                "23",
+                "-preset",
+                "medium",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-t",
+                str(total_dur),
+                "-pix_fmt",
+                "yuv420p",
                 str(clip_path),
             ]
         else:
             cmd = [
-                "ffmpeg", "-y",
-                "-loop", "1", "-i", str(png_path),
-                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-                "-c:v", "libx264", "-crf", "23", "-preset", "medium",
-                "-c:a", "aac", "-b:a", "128k",
-                "-t", str(total_dur),
-                "-pix_fmt", "yuv420p",
+                "ffmpeg",
+                "-y",
+                "-loop",
+                "1",
+                "-i",
+                str(png_path),
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=stereo",
+                "-c:v",
+                "libx264",
+                "-crf",
+                "23",
+                "-preset",
+                "medium",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "128k",
+                "-t",
+                str(total_dur),
+                "-pix_fmt",
+                "yuv420p",
                 str(clip_path),
             ]
 
@@ -292,13 +333,27 @@ async def _assemble_video(
     filter_complex = ";".join(vf_parts + af_parts)
 
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg",
+        "-y",
         *inputs,
-        "-filter_complex", filter_complex,
-        "-map", "[vout]", "-map", "[aout]",
-        "-c:v", "libx264", "-crf", "23", "-preset", "medium",
-        "-c:a", "aac", "-b:a", "128k",
-        "-pix_fmt", "yuv420p",
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[vout]",
+        "-map",
+        "[aout]",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "23",
+        "-preset",
+        "medium",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-pix_fmt",
+        "yuv420p",
         str(output_path),
     ]
 

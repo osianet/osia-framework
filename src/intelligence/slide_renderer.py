@@ -123,9 +123,7 @@ class SlideRenderer:
                 bg_image_data_uri = "data:image/png;base64," + base64.b64encode(raw).decode()
             else:
                 bg_category = slide.get("bg_category")
-                bg_image_data_uri = load_desk_bg_b64(
-                    bg_category or slide_desk_slug, orientation
-                )
+                bg_image_data_uri = load_desk_bg_b64(bg_category or slide_desk_slug, orientation)
 
             # Show portrait on desk intro slides and title slides.
             show_portrait = slide.get("slide_type") in ("title",) or bool(slide.get("desk_slug"))
@@ -245,9 +243,7 @@ class SlideRenderer:
                 bg_image_data_uri = "data:image/png;base64," + base64.b64encode(raw).decode()
             else:
                 bg_category = slide.get("bg_category")
-                bg_image_data_uri = load_desk_bg_b64(
-                    bg_category or slide_desk_slug, orientation
-                )
+                bg_image_data_uri = load_desk_bg_b64(bg_category or slide_desk_slug, orientation)
 
             show_portrait = slide.get("slide_type") in ("title",) or bool(slide.get("desk_slug"))
 

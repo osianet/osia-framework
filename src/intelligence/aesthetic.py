@@ -62,15 +62,15 @@ def load_desk_badge_b64(desk_slug: str) -> str | None:
 
 # Maps each desk to the background category that best fits its aesthetic motif.
 _DESK_BG_CATEGORY: dict[str, str] = {
-    "geopolitical-and-security-desk":          "terrain",
+    "geopolitical-and-security-desk": "terrain",
     "cultural-and-theological-intelligence-desk": "archive",
-    "science-technology-and-commercial-desk":  "data_overlay",
-    "human-intelligence-and-profiling-desk":   "hero",
-    "finance-and-economics-directorate":       "archive",
-    "cyber-intelligence-and-warfare-desk":     "data_overlay",
-    "information-warfare-desk":                "hero",
-    "environment-and-ecology-desk":            "ecological",
-    "the-watch-floor":                         "hero",
+    "science-technology-and-commercial-desk": "data_overlay",
+    "human-intelligence-and-profiling-desk": "hero",
+    "finance-and-economics-directorate": "archive",
+    "cyber-intelligence-and-warfare-desk": "data_overlay",
+    "information-warfare-desk": "hero",
+    "environment-and-ecology-desk": "ecological",
+    "the-watch-floor": "hero",
 }
 
 

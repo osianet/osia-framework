@@ -134,9 +134,7 @@ class ChatterboxTTSClient:
                 cfg_weight=self._cfg_weight,
             )
         else:
-            logger.info(
-                "Long narration split into %d chunks (voice=%s)", len(chunks), ref_label
-            )
+            logger.info("Long narration split into %d chunks (voice=%s)", len(chunks), ref_label)
             wavs = []
             for idx, chunk in enumerate(chunks):
                 w = await asyncio.to_thread(
