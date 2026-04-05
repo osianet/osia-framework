@@ -341,7 +341,7 @@ def _parse_hermes_tool_calls(content: str) -> list[tuple[str, str]]:
             query = args.get("query", "") if isinstance(args, dict) else ""
             _add(name, query)
         except (json.JSONDecodeError, AttributeError):
-            pass
+            pass  # malformed JSON in <tool_call> tag — skip this match, try next
 
     # 2. JSON array: [{"name": "...", "arguments": {"query": "..."}}]
     # Strip <tools>...</tools> wrapper if present before trying JSON parse
@@ -356,7 +356,7 @@ def _parse_hermes_tool_calls(content: str) -> list[tuple[str, str]]:
                     query = args.get("query", "") if isinstance(args, dict) else ""
                     _add(name, query)
         except (json.JSONDecodeError, TypeError):
-            pass
+            pass  # regex matched something that looks like a JSON array but isn't — skip
 
     # 3a. XML attribute style: <search_intel_kb query="..."/>
     for match in re.finditer(
@@ -385,7 +385,7 @@ def _parse_hermes_tool_calls(content: str) -> list[tuple[str, str]]:
             query = args.get("query", "") if isinstance(args, dict) else ""
             _add(match.group(1).lower(), query)
         except (json.JSONDecodeError, AttributeError):
-            pass
+            pass  # <arguments> block matched but contained invalid JSON — skip this match
 
     # 4. Python function call: search_intel_kb(query="...") or search_intel_kb("...")
     for match in re.finditer(
@@ -965,7 +965,7 @@ async def process_desk(desk: DeskMeta, limit: int, dry_run: bool) -> tuple[int, 
                 if age < COOLDOWN_SECONDS:
                     continue
             except (ValueError, OSError):
-                pass
+                pass  # malformed ISO timestamp in corroboration_checked_at — treat as unchecked
         targets.append((point_id, payload))
         if len(targets) >= limit:
             break
