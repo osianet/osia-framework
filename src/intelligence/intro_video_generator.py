@@ -90,7 +90,7 @@ async def generate_intro_video(
             continue
 
         try:
-            await tts.generate_speech(narration, output_path=audio_path)
+            await tts.generate_speech(narration, "default", output_path=audio_path)
             audio_paths.append(audio_path)
             logger.info("Generated audio %d/%d", i + 1, len(slides))
         except Exception as e:
