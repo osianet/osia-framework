@@ -117,10 +117,6 @@ async def _assemble_video(
     orientation: str,
 ) -> None:
     """Assemble PNG slides + audio into MP4 via ffmpeg."""
-    from src.intelligence.slide_renderer import DIMENSIONS
-
-    width, height = DIMENSIONS[orientation]
-
     # Build ffmpeg concat demuxer file
     concat_file = output_path.parent / "concat.txt"
     with open(concat_file, "w") as f:
