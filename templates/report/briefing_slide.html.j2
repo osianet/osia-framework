@@ -412,6 +412,15 @@ html, body {
     color: #3a8a3a;
 }
 </style>
+<style>
+  /* Per-desk accent colour */
+  :root { --desk-accent: {{ desk_accent | default('#C8860A') }}; }
+  .slide-heading { color: var(--desk-accent) !important; border-bottom-color: color-mix(in srgb, var(--desk-accent) 25%, transparent) !important; }
+  .desk-badge { color: var(--desk-accent) !important; border-color: color-mix(in srgb, var(--desk-accent) 30%, transparent) !important; background: color-mix(in srgb, var(--desk-accent) 12%, transparent) !important; }
+  .ref-label { color: var(--desk-accent) !important; }
+  .slide-body ul li::marker { color: var(--desk-accent); }
+  .title-slide .presenter-portrait { border-color: color-mix(in srgb, var(--desk-accent) 40%, transparent) !important; }
+</style>
 </head>
 <body>
 
@@ -459,6 +468,10 @@ html, body {
         <div class="presenter-name">Presented by {{ persona_name }}</div>
         <div class="week-label">{{ week_label }}</div>
       </div>
+      {% if desk_badge_uri %}
+      <img src="{{ desk_badge_uri }}" alt="{{ desk_name }}"
+           style="{% if orientation == 'landscape' %}width:72px;height:72px{% else %}width:88px;height:88px{% endif %};opacity:0.9;margin-left:auto;">
+      {% endif %}
     </div>
   </div>
 

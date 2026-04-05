@@ -13,47 +13,23 @@ from pathlib import Path
 import markdown as md
 from jinja2 import Environment, FileSystemLoader
 
+from src.intelligence.aesthetic import desk_accent_colour, load_desk_badge_b64, load_logo_b64, load_portrait_b64
+
 logger = logging.getLogger("osia.slide_renderer")
 
-# WeasyPrint's font subsetting via fontTools is extremely verbose at DEBUG/INFO.
-# Suppress it to WARNING so it doesn't drown out application logs.
 logging.getLogger("fontTools").setLevel(logging.WARNING)
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _TEMPLATES_DIR = _REPO_ROOT / "templates" / "report"
-_ASSETS_DIR = _REPO_ROOT / "assets"
 
-# Slide dimensions in pixels (rendered at 2x for crisp output)
 DIMENSIONS = {
     "landscape": (1920, 1080),
     "portrait": (1080, 1920),
 }
 
 
-def _load_logo_b64() -> str | None:
-    """Return the OSIA logo as a base64 data URI."""
-    logo_path = _ASSETS_DIR / "osia_logo_sm.png"
-    if logo_path.exists():
-        raw = logo_path.read_bytes()
-        return "data:image/png;base64," + base64.b64encode(raw).decode()
-    return None
-
-
-def _load_portrait_b64(desk_slug: str) -> str | None:
-    """Return the department head portrait as a base64 data URI, if it exists."""
-    portrait_path = _ASSETS_DIR / "portraits" / f"{desk_slug}.png"
-    if portrait_path.exists():
-        raw = portrait_path.read_bytes()
-        return "data:image/png;base64," + base64.b64encode(raw).decode()
-    return None
-
-
 def _md_to_html(text: str) -> str:
-    """Convert markdown text to HTML, handling bullet points and emphasis."""
-    return md.markdown(
-        text,
-        extensions=["tables", "fenced_code", "nl2br", "sane_lists"],
-    )
+    return md.markdown(text, extensions=["tables", "fenced_code", "nl2br", "sane_lists"])
 
 
 def _desk_display_name(slug: str) -> str:
@@ -68,7 +44,7 @@ class SlideRenderer:
             loader=FileSystemLoader(str(_TEMPLATES_DIR)),
             autoescape=True,
         )
-        self._logo_uri = _load_logo_b64()
+        self._logo_uri = load_logo_b64()
 
     def render_deck(
         self,
@@ -109,7 +85,9 @@ class SlideRenderer:
         now = datetime.now(UTC)
         ref_prefix = desk_slug[:8].upper().replace("-", "")
         ref_number = f"OSIA-WB-{now.strftime('%Y%m%d')}-{ref_prefix}"
-        portrait_uri = _load_portrait_b64(desk_slug)
+        portrait_uri = load_portrait_b64(desk_slug)
+        desk_accent = desk_accent_colour(desk_slug)
+        desk_badge_uri = load_desk_badge_b64(desk_slug)
 
         image_paths: list[Path] = []
 
@@ -140,6 +118,8 @@ class SlideRenderer:
                 bg_image_data_uri=bg_image_data_uri,
                 portrait_data_uri=portrait_uri if slide.get("slide_type") == "title" else None,
                 timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
+                desk_accent=desk_accent,
+                desk_badge_uri=desk_badge_uri,
             )
 
             png_path = output_dir / f"slide_{i:02d}.png"
@@ -205,7 +185,9 @@ class SlideRenderer:
         now = datetime.now(UTC)
         ref_prefix = desk_slug[:8].upper().replace("-", "")
         ref_number = f"OSIA-WB-{now.strftime('%Y%m%d')}-{ref_prefix}"
-        portrait_uri = _load_portrait_b64(desk_slug)
+        portrait_uri = load_portrait_b64(desk_slug)
+        desk_accent = desk_accent_colour(desk_slug)
+        desk_badge_uri = load_desk_badge_b64(desk_slug)
 
         # Render each slide as a separate HTML page, then combine
         all_pages = []
@@ -236,6 +218,8 @@ class SlideRenderer:
                 bg_image_data_uri=bg_image_data_uri,
                 portrait_data_uri=portrait_uri if slide.get("slide_type") == "title" else None,
                 timestamp=now.strftime("%Y-%m-%d %H:%M UTC"),
+                desk_accent=desk_accent,
+                desk_badge_uri=desk_badge_uri,
             )
             all_pages.append(html_content)
 
