@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("osia.signal_ingress")
 
 SIGNAL_NUMBER = os.getenv("SIGNAL_SENDER_NUMBER")

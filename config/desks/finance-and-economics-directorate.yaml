@@ -33,6 +33,7 @@ tools:
   - search_web
   - search_wikipedia
   - search_arxiv
+  - search_aleph
 
 mcp_servers:
   - tavily

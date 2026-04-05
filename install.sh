@@ -114,6 +114,12 @@ if ! command -v adb &>/dev/null; then
     warn "adb not found — ADB services will fail. Install android-tools-adb."
 fi
 
+if ! groups "$INSTALL_USER" | grep -qw plugdev; then
+    info "Adding $INSTALL_USER to plugdev group (required for ADB USB access)..."
+    usermod -aG plugdev "$INSTALL_USER"
+    warn "plugdev group added — $INSTALL_USER must log out and back in for it to take full effect."
+fi
+
 if [[ ! -d "$INSTALL_DIR/.venv" ]]; then
     warn ".venv not found — run 'uv sync' in $INSTALL_DIR before starting services."
 fi

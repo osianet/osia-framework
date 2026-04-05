@@ -777,6 +777,25 @@ def _parse_react(text: str) -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Message sanitisation
+# ---------------------------------------------------------------------------
+
+
+def _sanitize_assistant_message(msg: dict) -> dict:
+    """Strip the assistant message to only fields Venice accepts.
+
+    Venice's own API response includes extra fields (e.g. 'refusal': null) that its
+    Pydantic validator then rejects when the message is sent back in a subsequent round,
+    producing a cascade of union-type validation errors. Whitelist only the three
+    fields that are always valid in an assistant turn.
+    """
+    cleaned: dict = {"role": "assistant", "content": msg.get("content") or ""}
+    if msg.get("tool_calls"):
+        cleaned["tool_calls"] = msg["tool_calls"]
+    return cleaned
+
+
+# ---------------------------------------------------------------------------
 # OpenAI-compat research loop (Venice primary, OpenRouter fallback)
 # ---------------------------------------------------------------------------
 
@@ -873,7 +892,7 @@ async def run_research_loop_openai_compat(
         data = resp.json()
         choice = data["choices"][0]
         message = choice["message"]
-        messages.append(message)
+        messages.append(_sanitize_assistant_message(message))
 
         tool_calls = message.get("tool_calls") or []
         content = message.get("content", "") or ""
@@ -1127,6 +1146,7 @@ async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, q
                     "collected_at": now,
                     "ingested_at_unix": now_unix,
                     "source": "research_worker",
+                    "reliability_tier": "B",
                     "entity_tags": entity_tags,
                 },
             }
