@@ -32,6 +32,7 @@ qdrant:
 tools:
   - search_web
   - search_arxiv
+  - search_otx
 
 mcp_servers:
   - tavily

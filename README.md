@@ -27,8 +27,17 @@ The **Chief of Staff** (Venice `venice-uncensored`) reads the incoming task and 
 
 **Media Interception (PHINT):** If a social media link is received, a physical Moto g06 Android device connected via ADB records the screen for the duration of the video. Gemini Vision analyses the recording. Post metadata and comments are extracted first via `yt-dlp` (no phone required); ADB is only used as a fallback.
 
-### 3. Background Research Worker
-A local oneshot service (`osia-research-worker.timer`, every 2 hours) drains a separate `osia:research_queue` from Redis. It runs a multi-turn Venice AI research loop per topic, then chunks and embeds the results **directly into the originating desk's Qdrant collection** (falling back to `osia_research_cache` if no desk is specified). Every chunk payload carries `entity_tags` (the researched topic plus significant tokens) and `ingested_at_unix` (unix timestamp) for temporal decay scoring. Topic deduplication is enforced via TTL-keyed Redis entries (default 72h cooldown).
+### 3. Background Workers
+
+**Research Worker** (`osia-research-worker.timer`, every 2 hours) drains `osia:research_queue` from Redis. It runs a multi-turn Venice AI research loop per topic, then chunks and embeds the results **directly into the originating desk's Qdrant collection** (falling back to `osia_research_cache` if no desk is specified). Every chunk payload carries `entity_tags`, `reliability_tier: "B"`, and `ingested_at_unix` for temporal decay scoring. Topic deduplication is enforced via TTL-keyed Redis entries (default 72h cooldown).
+
+**Hermes Worker** (`osia-hermes-worker.timer`, daily at 03:30 UTC) — named after the messenger of the gods, Hermes traverses sources and carries evidence back to validate existing intelligence. It scrolls each desk's Qdrant collection for points where `reliability_tier` is not `"A"` and runs a two-phase corroboration loop using [Hermes 4](https://huggingface.co/NousResearch/Hermes-4-70B) (NousResearch, SOTA on RefusalBench) via OpenRouter. Phase 1 searches the internal KB plus desk-specific external sources (Tavily, OTX, ArXiv, Aleph, etc.). Phase 2 injects a structured verdict request after 3 search rounds. Verdicts patch Qdrant payloads in-place — no re-embedding required:
+
+| Verdict | Tier transition | Notes |
+|---------|----------------|-------|
+| `CORROBORATED` | `?/C → C/B/A` (upgrade) | Independent sources confirm core facts |
+| `CONTRADICTED` | `A/B/C → B/C/C` (downgrade) | Sets `contradiction_flag: true` |
+| `UNVERIFIED` | No change | Stamps `corroboration_checked_at`; re-checked after 14-day cooldown |
 
 ### 4. Desk Routing & RAG
 After the research loop completes, the Chief of Staff selects the most appropriate desk. Each desk query is enriched with three tiers of Qdrant context, all scored with a **70-day half-life temporal decay** so recent intelligence ranks above stale entries:
@@ -60,9 +69,11 @@ Desks are invoked directly via `DeskRegistry` — no middleware layer. Each desk
 | Cultural & Theological | Venice | `venice-uncensored` | Sociological & religious drivers (uncensored) |
 | Science & Technology | OpenRouter | `anthropic/claude-sonnet-4-6` | Technical validation, R&D analysis |
 | Human Intelligence | Venice | `venice-uncensored` | Behavioural profiling, network mapping (uncensored) |
-| Finance & Economics | OpenRouter | `openai/gpt-4o-mini` | Markets, sanctions, internal cost auditing |
+| Finance & Economics | OpenRouter | `anthropic/claude-sonnet-4-6` | Markets, sanctions, financial flows, internal cost auditing |
 | Cyber Intelligence & Warfare | Venice | `mistral-31-24b` | Nation-state cyber ops, digital threats |
-| The Watch Floor | OpenRouter | `anthropic/claude-sonnet-4-6` | INTSUM synthesis & Signal dispatch |
+| Information & Psychological Warfare | Venice | `venice-uncensored` | Influence operations, narrative warfare (uncensored) |
+| Environment & Ecological Intelligence | OpenRouter | `anthropic/claude-sonnet-4-6` | Environmental/climate intelligence |
+| The Watch Floor | OpenRouter | `google/gemini-2.5-pro` | INTSUM synthesis & Signal dispatch |
 
 **Chief of Staff routing** uses Venice `venice-uncensored` — an uncensored model is used deliberately so that no query about a sensitive subject is misrouted due to guardrails.
 
@@ -125,7 +136,14 @@ DeskRegistry ◀──────── INTELLIGENCE CONTEXT injected ───
 Background:
 osia-research-worker.timer (every 2h)
      └── Venice AI research loop → Qdrant desk collection
-           (entity_tags + ingested_at_unix stamped on every chunk)
+           (entity_tags + reliability_tier: "B" + ingested_at_unix on every chunk)
+
+osia-hermes-worker.timer (03:30 UTC daily)
+     └── Hermes 4 corroboration loop — scrolls reliability_tier != "A" points
+           ├── Phase 1: search_intel_kb + desk tools (Tavily/OTX/ArXiv/Aleph)
+           └── Phase 2: structured verdict → set_payload (no re-embedding)
+                 CORROBORATED → tier upgrade | CONTRADICTED → tier downgrade + flag
+                 UNVERIFIED → corroboration_checked_at stamped, retry after 14 days
 
 osia-daily-sitrep.timer (07:00 UTC)
      ├── Drain Redis osia:rss:daily_digest
@@ -172,6 +190,7 @@ Qdrant Collections (RAG namespaces):
 | `osia-status-api` | Service health, metrics, and log access |
 | `osia-persona-daemon` | Ghost persona — social media activity on the ADB device |
 | `osia-research-worker.timer` | Background research batch worker (every 2h) |
+| `osia-hermes-worker.timer` | Corroboration worker — validates low-confidence intel (03:30 UTC daily) |
 | `osia-daily-sitrep.timer` | Scheduled daily SITREP (07:00 UTC) |
 
 ADB device access between the orchestrator and persona daemon is coordinated via a Redis lock (`osia:adb:lock`). The orchestrator holds priority; the persona yields on every ADB action while the lock is held.
@@ -310,6 +329,8 @@ SIGNAL_GROUP_ID=
 ADB_DEVICE_MEDIA_INTERCEPT=
 REDIS_URL=redis://localhost:6379
 QDRANT_URL=http://localhost:6333
+OTX_API_KEY=          # AlienVault OTX — used by Cyber desk and Hermes Worker
+TAVILY_API_KEY=       # Live web search (falls back to DuckDuckGo if unset/exhausted)
 ```
 
 ---
