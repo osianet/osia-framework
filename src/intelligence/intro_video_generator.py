@@ -19,6 +19,7 @@ import yaml
 
 from src.intelligence.chatterbox_tts_client import ChatterboxTTSClient
 from src.intelligence.slide_renderer import SlideRenderer
+from src.intelligence.thumbnail_generator import generate_intro_thumbnail
 
 logger = logging.getLogger("osia.intro_video_generator")
 
@@ -126,10 +127,18 @@ async def generate_intro_video(
     try:
         await _assemble_video(png_paths, audio_paths, video_path, orientation)
         logger.info("✓ Video saved: %s", video_path)
-        return video_path
     except Exception as e:
         logger.error("Video assembly failed: %s", e)
         return None
+
+    # Generate YouTube thumbnail alongside the video
+    try:
+        thumb_path = generate_intro_thumbnail(_OUT_DIR)
+        logger.info("✓ Thumbnail saved: %s", thumb_path)
+    except Exception as e:
+        logger.warning("Thumbnail generation failed (non-fatal): %s", e)
+
+    return video_path
 
 
 def _get_audio_duration(audio_path: Path) -> float:

@@ -415,6 +415,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate OSIA intro webcast")
     parser.add_argument("--dry-run", action="store_true", help="Print slides without generating video")
     parser.add_argument("--generate", action="store_true", help="Generate full video with TTS + ffmpeg")
+    parser.add_argument("--thumbnail", action="store_true", help="Generate YouTube thumbnail only (no video)")
     parser.add_argument("--orientation", choices=["landscape", "portrait"], default="landscape")
     parser.add_argument("--resume", action="store_true", help="Skip existing files")
     args = parser.parse_args()
@@ -428,7 +429,15 @@ def main() -> None:
         json.dump(slides, f, indent=2)
     logger.info("Slides saved: %s", slides_path)
 
-    if args.dry_run:
+    if args.thumbnail:
+        import sys
+
+        sys.path.insert(0, str(ROOT))
+        from src.intelligence.thumbnail_generator import generate_intro_thumbnail
+
+        thumb_path = generate_intro_thumbnail(OUT_DIR)
+        print(f"\n✓ Thumbnail generated: {thumb_path}")
+    elif args.dry_run:
         print("\n=== OSIA INTRO WEBCAST SLIDES ===\n")
         for i, slide in enumerate(slides, 1):
             print(f"\n[SLIDE {i}] {slide['title']}")

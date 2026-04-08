@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ title }}</title>
+<style>
+/* ================================================================
+   OSIA YOUTUBE THUMBNAIL — 1280 × 720
+   Fonts:  OsiaTitle  = Ubuntu-B (guaranteed bold)
+           OsiaMono   = UbuntuMono (labels / classification)
+           OsiaBody   = UbuntuSans variable (subtitle / body)
+   Aesthetic: Intelligence Agency / Classified Document
+   ================================================================ */
+
+@font-face {
+    font-family: 'OsiaTitle';
+    src: url('/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf') format('truetype');
+    font-weight: bold;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: 'OsiaMono';
+    src: url('/usr/share/fonts/truetype/ubuntu/UbuntuMono-B.ttf') format('truetype');
+    font-weight: bold;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: 'OsiaMono';
+    src: url('/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+}
+
+@font-face {
+    font-family: 'OsiaBody';
+    src: url('/usr/share/fonts/truetype/ubuntu/UbuntuSans[wdth,wght].ttf') format('truetype');
+    font-weight: 100 900;
+    font-style: normal;
+}
+
+@page {
+    size: 1280px 720px;
+    margin: 0;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    width: 1280px;
+    height: 720px;
+    background-color: #0A0C0B;
+    overflow: hidden;
+}
+
+.thumbnail {
+    width: 1280px;
+    height: 720px;
+    position: relative;
+    background: #0A0C0B;
+    color: #D4CFC4;
+}
+
+/* ── Background image ─────────────────────────────────────────── */
+.bg-image {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    {% if bg_image_data_uri %}
+    background-image: url('{{ bg_image_data_uri }}');
+    {% endif %}
+    background-size: cover;
+    background-position: center;
+    z-index: 0;
+}
+
+/* ── Gradient overlay ─────────────────────────────────────────── */
+.bg-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    {% if show_portrait %}
+    /* Portrait layout: heavy left fade, open right */
+    background: linear-gradient(
+        105deg,
+        rgba(10, 12, 11, 0.95) 0%,
+        rgba(10, 12, 11, 0.88) 38%,
+        rgba(10, 12, 11, 0.55) 60%,
+        rgba(10, 12, 11, 0.20) 100%
+    );
+    {% else %}
+    /* Full-width layout: balanced, slightly darker at edges */
+    background:
+        linear-gradient(to bottom, rgba(10,12,11,0.70) 0%, transparent 25%, transparent 75%, rgba(10,12,11,0.70) 100%),
+        linear-gradient(to right,  rgba(10,12,11,0.72) 0%, rgba(10,12,11,0.42) 50%, rgba(10,12,11,0.72) 100%);
+    {% endif %}
+    z-index: 1;
+}
+
+/* ── Scanline texture ─────────────────────────────────────────── */
+.scan-lines {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(0, 20, 0, 0.032) 3px,
+        rgba(0, 20, 0, 0.032) 4px
+    );
+    z-index: 1;
+    pointer-events: none;
+}
+
+/* ── Portrait (right side) ────────────────────────────────────── */
+{% if show_portrait %}
+.portrait-area {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 460px;
+    z-index: 2;
+    overflow: hidden;
+}
+
+.portrait-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+}
+
+.portrait-fade {
+    position: absolute;
+    top: 0; left: 0; bottom: 0; right: 0;
+    background: linear-gradient(
+        to right,
+        rgba(10, 12, 11, 1.0) 0%,
+        rgba(10, 12, 11, 0.65) 28%,
+        rgba(10, 12, 11, 0.12) 65%,
+        transparent 100%
+    );
+}
+{% endif %}
+
+/* ── Accent bars ──────────────────────────────────────────────── */
+.accent-bar-top {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: {{ desk_accent }};
+    z-index: 10;
+}
+
+.accent-bar-bottom {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 3px;
+    background: {{ desk_accent }};
+    z-index: 10;
+}
+
+.accent-stripe-left {
+    position: absolute;
+    top: 4px; left: 0; bottom: 3px;
+    width: 4px;
+    background: linear-gradient(
+        to bottom,
+        {{ desk_accent }} 0%,
+        rgba(200, 134, 10, 0.30) 70%,
+        transparent 100%
+    );
+    z-index: 10;
+}
+
+/* ── Content layer ────────────────────────────────────────────── */
+.content {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    padding: 28px 52px 28px 56px;
+    {% if show_portrait %}
+    max-width: 840px;
+    {% endif %}
+}
+
+/* ── Header row — single compact line ─────────────────────────── */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+}
+
+.logo-group {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.logo {
+    height: 36px;
+    width: auto;
+    opacity: 0.92;
+}
+
+/* Single-line wordmark: OSIA · Open Source Intelligence Agency */
+.agency-wordmark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-left: 2px solid {{ desk_accent }};
+    padding-left: 13px;
+}
+
+.agency-code {
+    font-family: 'OsiaMono', 'Ubuntu Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: {{ desk_accent }};
+    font-weight: bold;
+    line-height: 1;
+}
+
+.agency-sep {
+    color: #2E3330;
+    font-size: 13px;
+    line-height: 1;
+    font-family: 'OsiaMono', monospace;
+}
+
+.agency-full {
+    font-family: 'OsiaBody', 'Ubuntu Sans', sans-serif;
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    color: #4A5248;
+    font-weight: 300;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+{% if show_badge %}
+.badge {
+    height: 50px;
+    width: auto;
+    opacity: 0.78;
+}
+{% endif %}
+
+/* ── Title area ── optical-center bias via asymmetric padding ─── */
+.title-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    /* Extra padding-bottom pulls the content ~8% above true center,
+       landing close to the optical center (~43% from top) */
+    padding: 8px 0 68px 0;
+}
+
+.category-label {
+    font-family: 'OsiaMono', 'Ubuntu Mono', monospace;
+    font-size: 12px;
+    letter-spacing: 0.30em;
+    text-transform: uppercase;
+    color: {{ desk_accent }};
+    font-weight: bold;
+    margin-bottom: 18px;
+    border-left: 3px solid {{ desk_accent }};
+    padding-left: 11px;
+    line-height: 1;
+}
+
+.title {
+    font-family: 'OsiaTitle', 'Ubuntu', sans-serif;
+    font-size: {{ title_font_size }}px;
+    font-weight: bold;
+    line-height: 1.06;
+    color: #EDE8DD;
+    letter-spacing: -0.01em;
+    margin-bottom: 22px;
+    overflow: hidden;
+}
+
+.subtitle {
+    font-family: 'OsiaBody', 'Ubuntu Sans', sans-serif;
+    font-size: 22px;
+    font-weight: 300;
+    color: #6E7D6C;
+    line-height: 1.5;
+    letter-spacing: 0.04em;
+}
+
+/* ── Footer bar ───────────────────────────────────────────────── */
+.footer-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    border-top: 1px solid rgba(200, 134, 10, 0.18);
+    padding-top: 13px;
+}
+
+.classification-badge {
+    font-family: 'OsiaMono', 'Ubuntu Mono', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: {{ desk_accent }};
+    font-weight: bold;
+    border: 1px solid {{ desk_accent }};
+    padding: 4px 10px;
+    line-height: 1.3;
+}
+
+.footer-sep {
+    width: 1px;
+    height: 11px;
+    background: #2E3330;
+}
+
+.footer-desk {
+    font-family: 'OsiaMono', 'Ubuntu Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #3D4A3B;
+}
+
+.footer-date {
+    font-family: 'OsiaMono', 'Ubuntu Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.10em;
+    color: #3D4A3B;
+    margin-left: auto;
+}
+</style>
+</head>
+<body>
+<div class="thumbnail">
+    <div class="bg-image"></div>
+    <div class="bg-overlay"></div>
+    <div class="scan-lines"></div>
+
+    <div class="accent-bar-top"></div>
+    <div class="accent-bar-bottom"></div>
+    <div class="accent-stripe-left"></div>
+
+    {% if show_portrait and portrait_data_uri %}
+    <div class="portrait-area">
+        <img class="portrait-img" src="{{ portrait_data_uri }}" alt="" />
+        <div class="portrait-fade"></div>
+    </div>
+    {% endif %}
+
+    <div class="content">
+        <!-- Compact single-line header -->
+        <div class="header">
+            <div class="logo-group">
+                {% if logo_data_uri %}
+                <img class="logo" src="{{ logo_data_uri }}" alt="OSIA" />
+                {% endif %}
+                <div class="agency-wordmark">
+                    <span class="agency-code">OSIA</span>
+                    <span class="agency-sep">·</span>
+                    <span class="agency-full">Open Source Intelligence Agency</span>
+                </div>
+            </div>
+            {% if show_badge and badge_data_uri %}
+            <img class="badge" src="{{ badge_data_uri }}" alt="" />
+            {% endif %}
+        </div>
+
+        <!-- Title group — optically centred -->
+        <div class="title-area">
+            {% if category_label %}
+            <div class="category-label">{{ category_label }}</div>
+            {% endif %}
+            <div class="title">{{ title }}</div>
+            {% if subtitle %}
+            <div class="subtitle">{{ subtitle }}</div>
+            {% endif %}
+        </div>
+
+        <!-- Footer -->
+        <div class="footer-bar">
+            <span class="classification-badge">OSIA Analysis</span>
+            {% if desk_name %}
+            <span class="footer-sep"></span>
+            <span class="footer-desk">{{ desk_name }}</span>
+            {% endif %}
+            {% if date_label %}
+            <span class="footer-date">{{ date_label }}</span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -14,6 +14,7 @@ import markdown as md
 from jinja2 import Environment, FileSystemLoader
 
 from src.intelligence.aesthetic import desk_accent_colour, load_desk_badge_b64, load_logo_b64
+from src.intelligence.thumbnail_generator import generate_report_thumbnail
 
 logger = logging.getLogger("osia.report_generator")
 
@@ -117,4 +118,11 @@ def generate_intsum_pdf(
 
     HTML(string=html_content, base_url=str(_TEMPLATES_DIR)).write_pdf(str(output_path))
     logger.info("PDF archived: %s", output_path)
+
+    # Generate YouTube thumbnail alongside the PDF
+    try:
+        generate_report_thumbnail(analysis, desk_slug, output_path)
+    except Exception as e:
+        logger.warning("Thumbnail generation failed (non-fatal): %s", e)
+
     return output_path
