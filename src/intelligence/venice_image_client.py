@@ -1,8 +1,8 @@
 """
 Venice AI image generation client for OSIA weekly briefing slides.
 
-Uses the OpenAI-compatible /images/generations endpoint which works
-across all Venice image models (including third-party like flux-2-pro).
+Uses the native /image/generate endpoint which accepts width/height directly
+and supports the full Venice feature set (negative prompts, safe_mode, etc.).
 Returns raw PNG bytes suitable for embedding into slide templates.
 """
 
@@ -20,28 +20,22 @@ load_dotenv()
 logger = logging.getLogger("osia.venice_image")
 
 VENICE_API_KEY = os.getenv("VENICE_API_KEY", "")
-VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/images/generations"
+VENICE_IMAGE_URL = "https://api.venice.ai/api/v1/image/generate"
 
 DEFAULT_MODEL = "flux-2-pro"
 
 
-def _dimensions_to_size(width: int, height: int) -> str:
-    """Map pixel dimensions to the closest Venice-supported size string.
+def _clamp_dimensions(width: int, height: int) -> tuple[int, int]:
+    """Scale dimensions down so neither side exceeds Venice's 1280px limit.
 
-    Venice's OpenAI-compat endpoint accepts size as 'WxH' strings.
-    We snap to the closest standard aspect ratio at 1024px scale.
+    Preserves aspect ratio.  If both sides are already within bounds the
+    original values are returned unchanged.
     """
-    ratio = width / height
-    if ratio > 1.5:  # landscape 16:9
-        return "1792x1024"
-    elif ratio > 1.1:  # landscape 4:3ish
-        return "1344x768"
-    elif ratio < 0.67:  # portrait 9:16
-        return "1024x1792"
-    elif ratio < 0.9:  # portrait 3:4ish
-        return "768x1344"
-    else:
-        return "1024x1024"
+    max_side = 1280
+    if width <= max_side and height <= max_side:
+        return width, height
+    scale = min(max_side / width, max_side / height)
+    return int(width * scale), int(height * scale)
 
 
 class VeniceImageClient:
@@ -61,8 +55,8 @@ class VeniceImageClient:
 
         Args:
             prompt: Text description of the desired image.
-            width: Image width in pixels (mapped to closest supported size).
-            height: Image height in pixels (mapped to closest supported size).
+            width: Image width in pixels (clamped to Venice's 1280px max).
+            height: Image height in pixels (clamped to Venice's 1280px max).
             output_path: If provided, also write the image to disk.
 
         Returns:
@@ -71,18 +65,17 @@ class VeniceImageClient:
         if not VENICE_API_KEY:
             raise RuntimeError("VENICE_API_KEY not set — cannot generate images")
 
-        size = _dimensions_to_size(width, height)
+        clamped_w, clamped_h = _clamp_dimensions(width, height)
 
         payload: dict = {
             "model": self.model,
             "prompt": prompt,
-            "n": 1,
-            "size": size,
-            "response_format": "b64_json",
-            "output_format": "png",
-            "output_compression": 100,
-            "quality": "auto",
-            "style": "natural",
+            "width": clamped_w,
+            "height": clamped_h,
+            "format": "png",
+            "safe_mode": False,
+            "return_binary": False,
+            "hide_watermark": True,
         }
 
         for attempt in range(3):
@@ -111,17 +104,17 @@ class VeniceImageClient:
                     resp.raise_for_status()
 
                 data = resp.json()
-                # OpenAI-compat returns {"data": [{"b64_json": "..."}]}
-                images = data.get("data", [])
+                # Native endpoint returns {"images": ["<base64>", ...]}
+                images = data.get("images", [])
                 if not images:
                     raise ValueError("Venice returned no images")
 
-                image_bytes = base64.b64decode(images[0]["b64_json"])
+                image_bytes = base64.b64decode(images[0])
 
                 if output_path:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
                     output_path.write_bytes(image_bytes)
-                    logger.debug("Saved image: %s (%s)", output_path, size)
+                    logger.debug("Saved image: %s (%dx%d)", output_path, clamped_w, clamped_h)
 
                 return image_bytes
 
