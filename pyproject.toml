@@ -36,7 +36,7 @@ dependencies = [
     "elevenlabs==2.41.0",
     "chatterbox-tts==0.1.7",
     "pydub==0.25.1",
-    "pymupdf==1.25.5",
+    "pymupdf==1.27.2.2",
     "setuptools>=81.0.0",
 ]
 
