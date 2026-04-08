@@ -442,6 +442,10 @@ class OsiaOrchestrator:
                 "--user-agent",
                 user_agent,
                 "--geo-bypass",
+                "--js-runtimes",
+                "node",
+                "--remote-components",
+                "ejs:github",
             ]
             cookies_path = self.base_dir / "config" / "youtube_cookies.txt"
             if cookies_path.exists():
@@ -550,11 +554,24 @@ class OsiaOrchestrator:
 
         max_rounds = 5
         for _round in range(max_rounds):
-            response = self.client.models.generate_content(
-                model=self.model_id,
-                contents=contents,
-                config=config,
-            )
+            for _attempt in range(3):
+                try:
+                    response = self.client.models.generate_content(
+                        model=self.model_id,
+                        contents=contents,
+                        config=config,
+                    )
+                    break
+                except Exception as e:
+                    msg = str(e)
+                    if _attempt < 2 and ("503" in msg or "UNAVAILABLE" in msg or "429" in msg):
+                        wait = 15 * (_attempt + 1)
+                        logger.warning(
+                            "Research loop Gemini attempt %d failed (%s), retrying in %ds", _attempt + 1, msg[:80], wait
+                        )
+                        await asyncio.sleep(wait)
+                    else:
+                        raise
 
             candidate = response.candidates[0]
             contents.append(candidate.content)
@@ -716,11 +733,52 @@ class OsiaOrchestrator:
             f"Comments:\n{comment_text}"
         )
 
+        _OR_HEADERS = {
+            "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY', '')}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://osia.dev",
+            "X-Title": "OSIA Intelligence Framework",
+        }
+        _TRANSIENT = ("503", "502", "429", "UNAVAILABLE", "overloaded")
+
+        for tier, model_id in enumerate(
+            ("meta-llama/llama-3.1-8b-instruct", "mistralai/mistral-small-2603"),
+            start=1,
+        ):
+            for attempt in range(2):
+                try:
+                    async with httpx.AsyncClient(timeout=30.0) as http:
+                        resp = await http.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            headers=_OR_HEADERS,
+                            json={
+                                "model": model_id,
+                                "messages": [{"role": "user", "content": prompt}],
+                                "max_tokens": 300,
+                                "temperature": 0.2,
+                            },
+                        )
+                        resp.raise_for_status()
+                        return resp.json()["choices"][0]["message"]["content"].strip()
+                except Exception as e:
+                    msg = str(e)
+                    if attempt == 0 and any(t in msg for t in _TRANSIENT):
+                        logger.warning(
+                            "Sentiment tier %d (%s) attempt 1 failed (%s), retrying", tier, model_id, msg[:80]
+                        )
+                        await asyncio.sleep(10)
+                    else:
+                        logger.warning(
+                            "Sentiment tier %d (%s) failed (%s) — trying next tier", tier, model_id, msg[:80]
+                        )
+                        break
+
+        # Tier 3: Gemini direct (last resort)
         try:
             response = self.client.models.generate_content(model=self.model_id, contents=prompt)
             return response.text.strip()
         except Exception as e:
-            logger.warning("Comment sentiment analysis failed: %s", e)
+            logger.warning("Comment sentiment analysis all tiers failed: %s", e)
             return None
 
     async def process_media_link(self, url: str) -> tuple[str, dict]:
@@ -865,7 +923,8 @@ class OsiaOrchestrator:
     # ------------------------------------------------------------------
 
     async def _route_to_desk(self, prompt: str) -> str:
-        """Call Venice uncensored to select a desk slug. Falls back to Gemini on error."""
+        """Call Venice uncensored to select a desk slug. Falls back to OpenRouter then Gemini."""
+        # Tier 1: Venice (uncensored — never refuses routing queries)
         try:
             async with httpx.AsyncClient(timeout=30.0) as http:
                 resp = await http.post(
@@ -884,13 +943,38 @@ class OsiaOrchestrator:
                 resp.raise_for_status()
                 return resp.json()["choices"][0]["message"]["content"].strip()
         except Exception as e:
-            logger.warning("Venice routing failed (%s) — falling back to Gemini", e)
-            result = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=self.model_id,
-                contents=prompt,
-            )
-            return (result.text or "").strip()
+            logger.warning("Venice routing failed (%s) — falling back to OpenRouter", e)
+
+        # Tier 2: OpenRouter
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                resp = await http.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY', '')}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://osia.dev",
+                        "X-Title": "OSIA Intelligence Framework",
+                    },
+                    json={
+                        "model": "meta-llama/llama-3.1-8b-instruct",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 64,
+                        "temperature": 0.0,
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            logger.warning("OpenRouter routing failed (%s) — falling back to Gemini", e)
+
+        # Tier 3: Gemini direct
+        result = await asyncio.to_thread(
+            self.client.models.generate_content,
+            model=self.model_id,
+            contents=prompt,
+        )
+        return (result.text or "").strip()
 
     # ------------------------------------------------------------------
     # Qdrant context injection
