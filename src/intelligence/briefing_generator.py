@@ -160,6 +160,31 @@ The JSON must be an array of slide objects. Each slide has these fields:
   This will be read aloud by a text-to-speech system, so write it conversationally
   but with authority. Include pauses with "..." where appropriate.
 
+## NARRATION STYLE (CRITICAL FOR NATURAL SPEECH)
+
+The narration text is fed directly into a neural TTS model (Chatterbox). To produce
+audio that sounds like real human speech rather than a flat robot reading, follow
+these inflection rules precisely:
+
+- **Separate paragraphs with blank lines.** Each narration MUST contain 2-4 short
+  paragraphs separated by double newlines (\\n\\n). Never write one giant wall of text.
+  Each paragraph should be under 500 characters.
+- **Use ellipses ("...") for dramatic pauses.** Place them where a human speaker would
+  pause for emphasis or to let a point land. Example: "The implications are clear...
+  and they are not good."
+- **Vary sentence length.** Mix short punchy sentences with longer analytical ones.
+  Monotonous sentence length produces monotonous audio. A short sentence after a long
+  one creates natural emphasis.
+- **Use commas for breath pauses.** Insert commas where a speaker would naturally
+  breathe or pause mid-thought, even if grammatically optional.
+- **Use dashes for interjections.** A dash creates a sharper pause than a comma:
+  "The official position — and I use that term loosely — is that nothing happened."
+- **End paragraphs with conviction.** Avoid trailing off. End on a strong declarative
+  sentence, a pointed question, or a clear assessment.
+- **Write for the ear, not the eye.** Avoid acronyms unless you spell them out first.
+  Avoid parenthetical asides. Avoid complex subordinate clauses. If you wouldn't say
+  it out loud at a podium, don't write it.
+
 ## SLIDE STRUCTURE
 
 1. **Title slide** (slide_type: "title"): Your department name and a one-line theme for the week.
@@ -181,7 +206,10 @@ The JSON must be an array of slide objects. Each slide has these fields:
 
 - Respond with ONLY the JSON array. No markdown fences, no preamble.
 - Narration must be written as natural speech — no bullet points, no markdown.
-- Each narration should be 2-4 paragraphs of flowing speech.
+- Each narration MUST be 2-4 paragraphs separated by blank lines (\\n\\n). This is
+  non-negotiable — the TTS system splits on paragraph breaks to avoid audio truncation.
+  A single long paragraph WILL be cut off.
+- Keep each paragraph under 500 characters. Shorter is better for natural delivery.
 - Reference the analytical mandate: anti-imperialism, labor rights, ecological justice.
 - Be specific: name actors, cite dates, reference source reliability.
 - Maintain your character's voice and expertise throughout.
