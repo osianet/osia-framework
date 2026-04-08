@@ -113,18 +113,27 @@ class EntityExtractor:
     # Extraction
     # ------------------------------------------------------------------
 
+    # Venice context window is generous but entity extraction only needs names —
+    # cap at 8000 chars to avoid 400s on large transcripts/reports.
+    _MAX_EXTRACT_CHARS = 8_000
+
     async def extract(self, text: str, source_desk: str) -> list[Entity]:
         """
         Identify named entities in text. Tries Venice first, falls back to Gemini.
         Returns a list of Entity objects, or [] on failure.
         """
+        if len(text) > self._MAX_EXTRACT_CHARS:
+            logger.debug("Entity extractor: truncating %d chars to %d", len(text), self._MAX_EXTRACT_CHARS)
+            text = text[: self._MAX_EXTRACT_CHARS]
+
+        raw: str | None = None
         if VENICE_API_KEY:
             raw = await self._extract_via_venice(text)
-        elif GEMINI_API_KEY:
-            logger.warning("VENICE_API_KEY not set — falling back to Gemini for entity extraction")
+        if raw is None and GEMINI_API_KEY:
+            logger.warning("Venice entity extraction failed — falling back to Gemini")
             raw = await self._extract_via_gemini(text)
-        else:
-            logger.warning("No AI API key configured — skipping entity extraction")
+        if raw is None:
+            logger.warning("No AI API key configured or all providers failed — skipping entity extraction")
             return []
 
         if raw is None:
@@ -197,11 +206,16 @@ class EntityExtractor:
                         logger.warning("Venice entity extractor 429 — waiting %ds", wait)
                         await asyncio.sleep(wait)
                         continue
+                    if resp.status_code >= 400 and resp.status_code < 500:
+                        # Client error (400, 401, etc.) — retrying won't help
+                        logger.warning("Venice entity extraction client error %d — skipping retries", resp.status_code)
+                        return None
                     resp.raise_for_status()
                     return resp.json()["choices"][0]["message"]["content"].strip()
             except Exception as exc:
                 logger.warning("Venice entity extraction attempt %d failed: %s", attempt + 1, exc)
-                await asyncio.sleep(5 * (attempt + 1))
+                if attempt < 2:
+                    await asyncio.sleep(5 * (attempt + 1))
         return None
 
     async def _extract_via_gemini(self, text: str) -> str | None:
