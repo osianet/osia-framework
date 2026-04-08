@@ -17,7 +17,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICES=(
     "osia-orchestrator.service"
     "osia-signal-ingress.service"
-    "osia-persona-daemon.service"
     "osia-rss-ingress.service"
     "osia-mcp-arxiv-bridge.service"
     "osia-mcp-phone-bridge.service"
