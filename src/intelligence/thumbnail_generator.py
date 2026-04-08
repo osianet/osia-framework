@@ -33,9 +33,9 @@ _THUMB_W = 1280
 _THUMB_H = 720
 
 # Title font size thresholds — shorter titles get larger type
-_FONT_SIZE_SHORT = 84   # ≤ 30 chars
+_FONT_SIZE_SHORT = 84  # ≤ 30 chars
 _FONT_SIZE_MEDIUM = 72  # ≤ 55 chars
-_FONT_SIZE_LONG = 54    # > 55 chars
+_FONT_SIZE_LONG = 54  # > 55 chars
 
 _MAX_TITLE_CHARS = 80
 _MAX_SUBTITLE_CHARS = 110
