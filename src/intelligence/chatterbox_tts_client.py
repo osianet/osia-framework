@@ -72,17 +72,57 @@ class ChatterboxTTSClient:
 
     # Chatterbox has a hardcoded max_new_tokens=1000 which caps output at ~40s
     # of speech. Any narration longer than that is silently truncated mid-sentence.
-    # We split on paragraph breaks and generate each chunk separately.
+    # We split on paragraph breaks first, then fall back to sentence-level splitting
+    # for any paragraph that still exceeds the limit.
     _CHUNK_CHAR_LIMIT = 600  # conservative — ~30s of speech per chunk
 
+    @staticmethod
+    def _split_sentences(text: str) -> list[str]:
+        """Split text into sentences, preserving inflection markers like '...'."""
+        import re
+
+        # Split on sentence-ending punctuation followed by whitespace, but keep
+        # the punctuation attached to the preceding sentence.  Handles '. ', '? ',
+        # '! ', and '... ' (ellipsis used as a pause marker).
+        parts = re.split(r"(?<=[.!?])\s+", text.strip())
+        return [s.strip() for s in parts if s.strip()]
+
     def _split_into_chunks(self, text: str) -> list[str]:
-        """Split narration into paragraph-sized chunks that fit within the token limit."""
+        """Split narration into chunks that fit within the token limit.
+
+        Strategy:
+        1. Split on paragraph breaks (\\n\\n).
+        2. Merge small paragraphs together up to the char limit.
+        3. Any single paragraph that still exceeds the limit is further
+           split on sentence boundaries so no chunk is ever too long.
+        """
         paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+
+        # If there were no paragraph breaks at all, treat single newlines as
+        # potential break points (LLM output sometimes uses single newlines).
+        if len(paragraphs) == 1 and len(paragraphs[0]) > self._CHUNK_CHAR_LIMIT:
+            paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
+
         chunks: list[str] = []
         current = ""
 
         for para in paragraphs:
-            if not current:
+            # If a single paragraph exceeds the limit, break it into sentences.
+            if len(para) > self._CHUNK_CHAR_LIMIT:
+                # Flush whatever we've accumulated so far.
+                if current:
+                    chunks.append(current)
+                    current = ""
+                # Pack sentences into sub-chunks.
+                for sentence in self._split_sentences(para):
+                    if not current:
+                        current = sentence
+                    elif len(current) + len(sentence) + 1 <= self._CHUNK_CHAR_LIMIT:
+                        current += " " + sentence
+                    else:
+                        chunks.append(current)
+                        current = sentence
+            elif not current:
                 current = para
             elif len(current) + len(para) + 2 <= self._CHUNK_CHAR_LIMIT:
                 current += "\n\n" + para
@@ -135,6 +175,9 @@ class ChatterboxTTSClient:
             )
         else:
             logger.info("Long narration split into %d chunks (voice=%s)", len(chunks), ref_label)
+            # Short silence between chunks so concatenation sounds natural.
+            silence_samples = int(self._model.sr * 0.35)  # 350ms pause
+            silence = torch.zeros(1, silence_samples)
             wavs = []
             for idx, chunk in enumerate(chunks):
                 w = await asyncio.to_thread(
@@ -144,6 +187,8 @@ class ChatterboxTTSClient:
                     exaggeration=self._exaggeration,
                     cfg_weight=self._cfg_weight,
                 )
+                if wavs:
+                    wavs.append(silence)
                 wavs.append(w)
                 logger.debug("Chunk %d/%d done", idx + 1, len(chunks))
             wav = torch.cat(wavs, dim=-1)
