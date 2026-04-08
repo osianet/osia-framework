@@ -18,7 +18,6 @@ import time
 
 from dotenv import load_dotenv
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.http import models as qdrant_models
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
