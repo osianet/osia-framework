@@ -33,7 +33,7 @@ dependencies = [
     "duckduckgo-search==8.1.1",
     "pypdf==6.9.2",
     "pygments==2.20.0",
-    "elevenlabs==2.40.0",
+    "elevenlabs==2.41.0",
     "chatterbox-tts==0.1.7",
     "pydub==0.25.1",
     "pymupdf==1.25.5",
