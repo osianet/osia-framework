@@ -566,7 +566,9 @@ class OsiaOrchestrator:
                     msg = str(e)
                     if _attempt < 2 and ("503" in msg or "UNAVAILABLE" in msg or "429" in msg):
                         wait = 15 * (_attempt + 1)
-                        logger.warning("Research loop Gemini attempt %d failed (%s), retrying in %ds", _attempt + 1, msg[:80], wait)
+                        logger.warning(
+                            "Research loop Gemini attempt %d failed (%s), retrying in %ds", _attempt + 1, msg[:80], wait
+                        )
                         await asyncio.sleep(wait)
                     else:
                         raise
@@ -761,10 +763,14 @@ class OsiaOrchestrator:
                 except Exception as e:
                     msg = str(e)
                     if attempt == 0 and any(t in msg for t in _TRANSIENT):
-                        logger.warning("Sentiment tier %d (%s) attempt 1 failed (%s), retrying", tier, model_id, msg[:80])
+                        logger.warning(
+                            "Sentiment tier %d (%s) attempt 1 failed (%s), retrying", tier, model_id, msg[:80]
+                        )
                         await asyncio.sleep(10)
                     else:
-                        logger.warning("Sentiment tier %d (%s) failed (%s) — trying next tier", tier, model_id, msg[:80])
+                        logger.warning(
+                            "Sentiment tier %d (%s) failed (%s) — trying next tier", tier, model_id, msg[:80]
+                        )
                         break
 
         # Tier 3: Gemini direct (last resort)
