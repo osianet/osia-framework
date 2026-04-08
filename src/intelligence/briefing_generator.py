@@ -570,6 +570,7 @@ async def generate_desk_briefing(
                 height=h,
                 output_dir=img_dir,
                 resume=resume,
+                desk_slug=desk_slug,
             )
             bg_images_by_orientation[orientation] = bg_images
     else:
