@@ -143,7 +143,11 @@ DEFAULT_AUTHORS: list[dict] = [
     {"slug": "adorno", "path": "/reference/archive/adorno/", "desk_hint": "information-warfare-desk"},
     {"slug": "horkheimer", "path": "/reference/archive/horkheimer/", "desk_hint": "information-warfare-desk"},
     {"slug": "marcuse", "path": "/reference/archive/marcuse/", "desk_hint": "information-warfare-desk"},
-    {"slug": "benjamin", "path": "/reference/archive/benjamin/", "desk_hint": "cultural-and-theological-intelligence-desk"},
+    {
+        "slug": "benjamin",
+        "path": "/reference/archive/benjamin/",
+        "desk_hint": "cultural-and-theological-intelligence-desk",
+    },
     {"slug": "fromm", "path": "/reference/archive/fromm/", "desk_hint": "cultural-and-theological-intelligence-desk"},
     # Political economy
     {"slug": "hilferding", "path": "/archive/hilferding/", "desk_hint": "finance-and-economics-directorate"},
@@ -288,9 +292,7 @@ class LocalEmbedder:
             logger.info("Embedding model loaded.")
         except ImportError as exc:
             raise SystemExit(
-                "sentence-transformers not installed.\n"
-                "Run: uv add sentence-transformers\n"
-                "Then retry."
+                "sentence-transformers not installed.\nRun: uv add sentence-transformers\nThen retry."
             ) from exc
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
@@ -572,9 +574,7 @@ class MIAIngestor:
         )
         return sorted(all_work_urls)
 
-    def _extract_links(
-        self, html: str, base_url: str, author_base_path: str
-    ) -> tuple[set[str], set[str]]:
+    def _extract_links(self, html: str, base_url: str, author_base_path: str) -> tuple[set[str], set[str]]:
         """Parse HTML and return (work_urls, sub_index_urls) for links within author's subtree."""
         soup = BeautifulSoup(html, "html.parser")
         work_urls: set[str] = set()
@@ -825,9 +825,7 @@ class MIAIngestor:
         if not exists:
             await self._qdrant.create_collection(
                 collection_name=COLLECTION_NAME,
-                vectors_config=qdrant_models.VectorParams(
-                    size=EMBEDDING_DIM, distance=qdrant_models.Distance.COSINE
-                ),
+                vectors_config=qdrant_models.VectorParams(size=EMBEDDING_DIM, distance=qdrant_models.Distance.COSINE),
                 optimizers_config=qdrant_models.OptimizersConfigDiff(indexing_threshold=1000),
             )
             logger.info("Created Qdrant collection '%s'.", COLLECTION_NAME)
