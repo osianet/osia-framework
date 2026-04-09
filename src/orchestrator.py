@@ -664,7 +664,7 @@ class OsiaOrchestrator:
                         in-place, e.g. by /desk).
         """
         query = task.get("query", "").strip()
-        recipient = source[len("signal:"):] if source.startswith("signal:") else source
+        recipient = source[len("signal:") :] if source.startswith("signal:") else source
 
         parts = query.split(None, 2)
         command = parts[0].lower()
@@ -742,11 +742,7 @@ class OsiaOrchestrator:
         )
         try:
             raw = await self._route_to_desk(prompt)
-            slugs = [
-                line.strip().lstrip("- •").strip()
-                for line in raw.splitlines()
-                if line.strip()
-            ]
+            slugs = [line.strip().lstrip("- •").strip() for line in raw.splitlines() if line.strip()]
             valid = [s for s in slugs if s in self.valid_desks][:count]
             if valid:
                 return valid
@@ -790,14 +786,16 @@ class OsiaOrchestrator:
         )
         desks = await self._route_to_desks(topic, count=3)
         for desk in desks:
-            payload = json.dumps({
-                "job_id": str(uuid.uuid4()),
-                "topic": topic,
-                "desk": desk,
-                "priority": "high",
-                "directives_lens": True,
-                "triggered_by": f"signal-investigate:{recipient}",
-            })
+            payload = json.dumps(
+                {
+                    "job_id": str(uuid.uuid4()),
+                    "topic": topic,
+                    "desk": desk,
+                    "priority": "high",
+                    "directives_lens": True,
+                    "triggered_by": f"signal-investigate:{recipient}",
+                }
+            )
             await self.redis.rpush("osia:research_queue", payload)
             logger.info("Enqueued investigation job → %s", desk)
 
@@ -831,9 +829,7 @@ class OsiaOrchestrator:
         for i, r in enumerate(results, 1):
             preview = r.text[:220].replace("\n", " ").strip()
             ts = r.metadata.get("timestamp", r.metadata.get("collected_at", ""))[:10]
-            lines.append(
-                f"[{i}] {r.collection} (score: {r.score:.3f}{', ' + ts if ts else ''})\n{preview}…"
-            )
+            lines.append(f"[{i}] {r.collection} (score: {r.score:.3f}{', ' + ts if ts else ''})\n{preview}…")
         await self.send_signal_message(recipient, "\n\n".join(lines))
 
     async def _cmd_status(self, recipient: str) -> None:
@@ -861,10 +857,7 @@ class OsiaOrchestrator:
     async def _cmd_desks(self, recipient: str) -> None:
         """List all valid desk slugs and their aliases."""
         desk_list = "\n".join(f"  • {s}" for s in sorted(self.valid_desks))
-        alias_list = "\n".join(
-            f"  {alias} → {slug}"
-            for alias, slug in sorted(self._DESK_ALIASES.items())
-        )
+        alias_list = "\n".join(f"  {alias} → {slug}" for alias, slug in sorted(self._DESK_ALIASES.items()))
         await self.send_signal_message(
             recipient,
             f"Available desks:\n{desk_list}\n\nAliases (for /desk and /investigate):\n{alias_list}",

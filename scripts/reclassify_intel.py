@@ -208,45 +208,58 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--topic", required=True,
+        "--topic",
+        required=True,
         help="Topic to search for (used as both search query and research topic).",
     )
     parser.add_argument(
-        "--collection", default=None,
+        "--collection",
+        default=None,
         help="Qdrant collection to search and reclassify (e.g. information-warfare-desk). "
-             "Required unless --no-reclassify is set.",
+        "Required unless --no-reclassify is set.",
     )
     parser.add_argument(
-        "--classification", default=None,
+        "--classification",
+        default=None,
         help="New classification value to write (e.g. settler-colonialism-land-dispossession).",
     )
     parser.add_argument(
-        "--note", default=None,
+        "--note",
+        default=None,
         help="Optional human-readable reclassification note. Auto-generated if omitted.",
     )
     parser.add_argument(
-        "--desks", nargs="+", default=None, metavar="DESK",
+        "--desks",
+        nargs="+",
+        default=None,
+        metavar="DESK",
         help="Desk slugs or aliases to enqueue research for "
-             "(e.g. geo humint env). See DESK_ALIASES in script for short forms.",
+        "(e.g. geo humint env). See DESK_ALIASES in script for short forms.",
     )
     parser.add_argument(
-        "--research-topic", default=None,
+        "--research-topic",
+        default=None,
         help="Override the research topic for enqueued jobs (defaults to --topic).",
     )
     parser.add_argument(
-        "--threshold", type=float, default=0.35,
+        "--threshold",
+        type=float,
+        default=0.35,
         help="Minimum Qdrant similarity score to consider a point a match (default: 0.35).",
     )
     parser.add_argument(
-        "--no-reclassify", action="store_true",
+        "--no-reclassify",
+        action="store_true",
         help="Skip the Qdrant search and payload patch.",
     )
     parser.add_argument(
-        "--no-research", action="store_true",
+        "--no-research",
+        action="store_true",
         help="Skip enqueuing research jobs.",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Print planned actions without writing anything.",
     )
     asyncio.run(main(parser.parse_args()))
