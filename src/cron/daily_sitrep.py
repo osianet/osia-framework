@@ -43,15 +43,15 @@ async def _pull_qdrant_seed() -> str | None:
     try:
         from src.intelligence.qdrant_store import QdrantStore
 
-        store = QdrantStore()
-        sections: list[str] = []
+        async with QdrantStore() as store:
+            sections: list[str] = []
 
-        async def _query(label: str, q: str) -> tuple[str, list]:
-            results = await store.cross_desk_search(q, top_k=_SEED_TOP_K, decay_half_life_days=70.0)
-            filtered = [r for r in results if r.score >= _SEED_MIN_SCORE]
-            return label, filtered
+            async def _query(label: str, q: str) -> tuple[str, list]:
+                results = await store.cross_desk_search(q, top_k=_SEED_TOP_K, decay_half_life_days=70.0)
+                filtered = [r for r in results if r.score >= _SEED_MIN_SCORE]
+                return label, filtered
 
-        pairs = await asyncio.gather(*[_query(lbl, q) for lbl, q in _SITREP_SEED_QUERIES])
+            pairs = await asyncio.gather(*[_query(lbl, q) for lbl, q in _SITREP_SEED_QUERIES])
 
         for label, hits in pairs:
             if not hits:

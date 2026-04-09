@@ -800,6 +800,7 @@ async def generate_all_briefings(
 
     if not briefing_desks:
         logger.error("No desks have a briefing config in config/desks/*.yaml")
+        await qdrant.aclose()
         return []
 
     if desks:
@@ -809,6 +810,7 @@ async def generate_all_briefings(
         briefing_desks = [d for d in briefing_desks if d in desks]
         if not briefing_desks:
             logger.error("None of the requested desks have a briefing config")
+            await qdrant.aclose()
             return []
 
     logger.info(
@@ -898,4 +900,5 @@ async def generate_all_briefings(
         )
     logger.info("Manifest written: %s", manifest_path)
 
+    await qdrant.aclose()
     return results
