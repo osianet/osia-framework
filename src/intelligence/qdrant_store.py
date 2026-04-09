@@ -93,6 +93,16 @@ class QdrantStore:
         self._hf_token = os.getenv("HF_TOKEN", "")
         self._client = AsyncQdrantClient(url=qdrant_url, api_key=qdrant_api_key, port=None)
 
+    async def aclose(self) -> None:
+        """Close the underlying Qdrant HTTP connection pool."""
+        await self._client.close()
+
+    async def __aenter__(self) -> "QdrantStore":
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.aclose()
+
     # ------------------------------------------------------------------
     # Embedding
     # ------------------------------------------------------------------

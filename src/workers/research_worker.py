@@ -390,8 +390,8 @@ async def tool_search_intel_kb(query: str, _http: httpx.AsyncClient) -> str:
     try:
         from src.intelligence.qdrant_store import QdrantStore
 
-        store = QdrantStore()
-        results = await store.cross_desk_search(query, top_k=5)
+        async with QdrantStore() as store:
+            results = await store.cross_desk_search(query, top_k=5)
         # Filter low-confidence matches — cosine similarity below 0.45 is noise
         results = [r for r in results if r.score >= 0.45]
         if not results:
