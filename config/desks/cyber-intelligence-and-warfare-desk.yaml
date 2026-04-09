@@ -33,6 +33,17 @@ tools:
   - search_web
   - search_arxiv
   - search_otx
+  - kali_nmap
+  - kali_whois
+  - kali_dig
+  - kali_sslscan
+  - kali_whatweb
+  - kali_harvester
+  - kali_amass
+  - kali_curl_probe
+  - kali_ping
+  - kali_traceroute
+  - kali_nikto
 
 mcp_servers:
   - tavily
