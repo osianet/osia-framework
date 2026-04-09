@@ -19,6 +19,7 @@ from src.agents.social_media_agent import SocialMediaAgent
 from src.desks.desk_registry import DeskRegistry
 from src.desks.hf_endpoint_manager import HFEndpointManager
 from src.gateways.adb_device import ADBDevice
+from src.gateways.kali_dispatcher import KaliDispatcher
 from src.gateways.mcp_dispatcher import MCPDispatcher
 from src.intelligence.entity_extractor import EntityExtractor
 from src.intelligence.infographic_renderer import generate_infographic
@@ -40,6 +41,27 @@ def _extract_mcp_text(result) -> str:
     if hasattr(result, "content") and result.content:
         return "\n".join(block.text for block in result.content if hasattr(block, "text"))
     return str(result)
+
+
+def _format_kali_result(result: dict) -> str:
+    """Format a Kali API response envelope into a readable string for the research loop."""
+    tool = result.get("tool", "unknown")
+    target = result.get("target") or result.get("url", "")
+    duration = result.get("duration_seconds", 0)
+    timed_out = result.get("timed_out", False)
+    rc = result.get("return_code", 0)
+    stdout = (result.get("stdout") or "").strip()
+    stderr = (result.get("stderr") or "").strip()
+
+    header = f"[kali:{tool}] target={target} rc={rc} duration={duration:.1f}s"
+    if timed_out:
+        header += " TIMED_OUT"
+    parts = [header]
+    if stdout:
+        parts.append(stdout)
+    if stderr:
+        parts.append(f"STDERR:\n{stderr}")
+    return "\n".join(parts)
 
 
 # Domains that trigger the ADB media-capture pipeline
@@ -125,6 +147,7 @@ class OsiaOrchestrator:
         self.hf_endpoints = HFEndpointManager()
         self.adb = ADBDevice(device_id=os.getenv("ADB_DEVICE_MEDIA_INTERCEPT"))
         self.mcp = MCPDispatcher()
+        self.kali = KaliDispatcher()
         self.social_agent = SocialMediaAgent(
             adb=self.adb,
             gemini_client=self.client,
@@ -245,6 +268,251 @@ class OsiaOrchestrator:
                             required=["url"],
                         ),
                     ),
+                    # ----------------------------------------------------------
+                    # Kali Linux recon & assessment tools (local API, loopback)
+                    # ----------------------------------------------------------
+                    types.FunctionDeclaration(
+                        name="kali_nmap",
+                        description="Run an nmap port scan / service fingerprint against a host or CIDR range. Use for infrastructure mapping, open port discovery, service/version detection, and OS fingerprinting.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(
+                                    type="STRING", description="IP address, hostname, or CIDR range to scan."
+                                ),
+                                "ports": types.Schema(
+                                    type="STRING", description="Port spec, e.g. '22', '22,80,443', '1-1024'."
+                                ),
+                                "top_ports": types.Schema(type="INTEGER", description="Scan the N most common ports."),
+                                "scan_type": types.Schema(
+                                    type="STRING", description="Scan type: syn, connect, udp, ack, fin, null, xmas."
+                                ),
+                                "version_detection": types.Schema(
+                                    type="BOOLEAN", description="Enable service/version detection (-sV)."
+                                ),
+                                "os_detection": types.Schema(
+                                    type="BOOLEAN", description="Enable OS fingerprinting (-O)."
+                                ),
+                                "aggressive": types.Schema(
+                                    type="BOOLEAN",
+                                    description="Enable aggressive mode (-A): version + scripts + OS + traceroute.",
+                                ),
+                                "scripts": types.Schema(
+                                    type="ARRAY",
+                                    items=types.Schema(type="STRING"),
+                                    description="NSE scripts to run, e.g. ['ssl-cert', 'http-title'].",
+                                ),
+                                "skip_host_discovery": types.Schema(
+                                    type="BOOLEAN", description="Treat host as online (-Pn), skip ping probe."
+                                ),
+                                "timing": types.Schema(
+                                    type="INTEGER", description="Timing template 0-5 (0=paranoid, 3=normal, 5=insane)."
+                                ),
+                                "open_only": types.Schema(type="BOOLEAN", description="Show only open ports."),
+                                "no_dns": types.Schema(type="BOOLEAN", description="Skip reverse DNS resolution (-n)."),
+                            },
+                            required=["target"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_whois",
+                        description="WHOIS lookup for a domain name or IP address. Returns registrar, registration dates, nameservers, and registrant details.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(
+                                    type="STRING", description="Domain name or IP address to look up."
+                                ),
+                                "server": types.Schema(
+                                    type="STRING",
+                                    description="Query this WHOIS server directly (e.g. 'whois.arin.net').",
+                                ),
+                            },
+                            required=["target"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_dig",
+                        description="DNS lookup for any record type. Use for resolving A/AAAA/MX/NS/TXT/CNAME/SOA records, PTR (reverse DNS), DNSSEC validation, or tracing delegation chains.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(
+                                    type="STRING", description="Domain name or IP address (for PTR lookups)."
+                                ),
+                                "record_type": types.Schema(
+                                    type="STRING",
+                                    description="Record type: A, AAAA, MX, NS, TXT, CNAME, SOA, PTR, SRV, CAA, ANY.",
+                                ),
+                                "nameserver": types.Schema(
+                                    type="STRING", description="Query this resolver directly (e.g. '8.8.8.8')."
+                                ),
+                                "short": types.Schema(
+                                    type="BOOLEAN", description="Return answer values only (+short)."
+                                ),
+                                "trace": types.Schema(
+                                    type="BOOLEAN", description="Trace delegation chain from root (+trace)."
+                                ),
+                                "dnssec": types.Schema(type="BOOLEAN", description="Request DNSSEC records."),
+                            },
+                            required=["target"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_sslscan",
+                        description="Scan TLS/SSL configuration of a host: supported protocol versions, cipher suites, certificate details, OCSP stapling. Use to assess TLS posture or extract certificate metadata.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(type="STRING", description="Hostname or hostname:port."),
+                                "port": types.Schema(type="INTEGER", description="Target port (default 443)."),
+                                "show_certificate": types.Schema(
+                                    type="BOOLEAN", description="Include full certificate details."
+                                ),
+                                "starttls": types.Schema(
+                                    type="STRING",
+                                    description="STARTTLS protocol: smtp, ftp, imap, pop3, xmpp, ldap, rdp.",
+                                ),
+                                "ocsp": types.Schema(type="BOOLEAN", description="Check OCSP stapling."),
+                            },
+                            required=["target"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_whatweb",
+                        description="Fingerprint web application technologies: CMS, frameworks, server software, JavaScript libraries, analytics, and WAF detection.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(type="STRING", description="URL or hostname to fingerprint."),
+                                "aggression": types.Schema(
+                                    type="INTEGER",
+                                    description="Aggression level: 1 (stealthy, single request) or 3 (aggressive, multiple requests).",
+                                ),
+                            },
+                            required=["target"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_harvester",
+                        description="Passive OSINT subdomain and infrastructure enumeration. Queries certificate transparency logs, DNS aggregators, and threat intel sources to map a target domain's attack surface.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(
+                                    type="STRING", description="Root domain to enumerate (e.g. 'example.com')."
+                                ),
+                                "sources": types.Schema(
+                                    type="ARRAY",
+                                    items=types.Schema(type="STRING"),
+                                    description="Data sources: crtsh, dnsdumpster, hackertarget, otx, urlscan, anubis, certspotter, etc.",
+                                ),
+                                "limit": types.Schema(type="INTEGER", description="Max results per source (10-500)."),
+                                "dns_resolve": types.Schema(
+                                    type="BOOLEAN", description="Resolve discovered hostnames to IPs."
+                                ),
+                            },
+                            required=["target"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_amass",
+                        description="Active domain enumeration via Amass — zone transfers, certificate grabs, and public data sources. More thorough than harvester for large targets.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(type="STRING", description="Domain to enumerate."),
+                                "mode": types.Schema(
+                                    type="STRING",
+                                    description="'passive' (public data only) or 'active' (zone transfers, cert grabs).",
+                                ),
+                                "timeout": types.Schema(
+                                    type="INTEGER", description="Minutes before stopping (1-30, default 5)."
+                                ),
+                            },
+                            required=["target"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_curl_probe",
+                        description="HTTP/HTTPS probe: fetch headers, response bodies, test endpoints. Use to investigate web services, check server responses, or retrieve RDAP/API data.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "url": types.Schema(
+                                    type="STRING", description="URL to probe (must start with http:// or https://)."
+                                ),
+                                "method": types.Schema(
+                                    type="STRING", description="HTTP method: GET, HEAD, POST, OPTIONS."
+                                ),
+                                "headers": types.Schema(
+                                    type="OBJECT", description="Extra request headers as key-value pairs."
+                                ),
+                                "body": types.Schema(type="STRING", description="Request body for POST."),
+                                "follow_redirects": types.Schema(
+                                    type="BOOLEAN", description="Follow Location redirects."
+                                ),
+                                "insecure": types.Schema(
+                                    type="BOOLEAN", description="Skip TLS certificate verification."
+                                ),
+                                "max_time": types.Schema(
+                                    type="INTEGER", description="Total timeout in seconds (1-60)."
+                                ),
+                            },
+                            required=["url"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_ping",
+                        description="ICMP echo probe to check host reachability and measure round-trip latency.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(type="STRING", description="IP address or hostname to ping."),
+                                "count": types.Schema(type="INTEGER", description="Number of packets to send (1-20)."),
+                            },
+                            required=["target"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_traceroute",
+                        description="Hop-by-hop network path trace to a destination. Reveals routing infrastructure, ISP hops, and geographic path.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(type="STRING", description="IP address or hostname to trace."),
+                                "max_hops": types.Schema(
+                                    type="INTEGER", description="Maximum hop count (1-64, default 30)."
+                                ),
+                                "protocol": types.Schema(
+                                    type="STRING", description="Probe protocol: icmp, udp, or tcp."
+                                ),
+                                "port": types.Schema(
+                                    type="INTEGER", description="Destination port for TCP/UDP probes."
+                                ),
+                            },
+                            required=["target"],
+                        ),
+                    ),
+                    types.FunctionDeclaration(
+                        name="kali_nikto",
+                        description="Web server vulnerability scanner: misconfigured headers, default files, known CVEs, injection points, and outdated software. Use for web server security assessment.",
+                        parameters=types.Schema(
+                            type="OBJECT",
+                            properties={
+                                "target": types.Schema(type="STRING", description="URL or hostname to scan."),
+                                "port": types.Schema(type="INTEGER", description="Override target port."),
+                                "ssl": types.Schema(type="BOOLEAN", description="Force SSL/TLS."),
+                                "tuning": types.Schema(
+                                    type="ARRAY",
+                                    items=types.Schema(type="STRING"),
+                                    description="Test categories: 0=upload, 1=interesting-files, 2=misconfig, 3=info-disclosure, 4=injection, 9=sqli, a=auth-bypass, b=software-id.",
+                                ),
+                                "max_time": types.Schema(type="INTEGER", description="Timeout in seconds (10-600)."),
+                            },
+                            required=["target"],
+                        ),
+                    ),
                 ]
             )
         ]
@@ -273,6 +541,7 @@ class OsiaOrchestrator:
         await self._signal_client.aclose()
         await self.desk_registry.close()
         await self.mcp.close_all()
+        await self.kali.close()
 
     # ------------------------------------------------------------------
     # Signal messaging
@@ -408,6 +677,39 @@ class OsiaOrchestrator:
             logger.info("read_social_post: yt-dlp unavailable, falling back to ADB")
             result = await self.social_agent.read_post_content(args["url"])
             return result.data if result.success else f"FAILED: {result.error}"
+        elif name == "kali_nmap":
+            result = await self.kali.call_tool("nmap", args)
+            return _format_kali_result(result)
+        elif name == "kali_whois":
+            result = await self.kali.call_tool("whois", args)
+            return _format_kali_result(result)
+        elif name == "kali_dig":
+            result = await self.kali.call_tool("dig", args)
+            return _format_kali_result(result)
+        elif name == "kali_sslscan":
+            result = await self.kali.call_tool("sslscan", args)
+            return _format_kali_result(result)
+        elif name == "kali_whatweb":
+            result = await self.kali.call_tool("whatweb", args)
+            return _format_kali_result(result)
+        elif name == "kali_harvester":
+            result = await self.kali.call_tool("harvester", args)
+            return _format_kali_result(result)
+        elif name == "kali_amass":
+            result = await self.kali.call_tool("amass", args)
+            return _format_kali_result(result)
+        elif name == "kali_curl_probe":
+            result = await self.kali.call_tool("curl", args)
+            return _format_kali_result(result)
+        elif name == "kali_ping":
+            result = await self.kali.call_tool("ping", args)
+            return _format_kali_result(result)
+        elif name == "kali_traceroute":
+            result = await self.kali.call_tool("traceroute", args)
+            return _format_kali_result(result)
+        elif name == "kali_nikto":
+            result = await self.kali.call_tool("nikto", args)
+            return _format_kali_result(result)
         else:
             logger.warning("Unknown tool requested by Gemini: %s", name)
             return None
