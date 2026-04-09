@@ -27,6 +27,7 @@ qdrant:
     - church-committee
     - pentagon-papers
     - fbi-vault
+    - marxists-archive
   boost_top_k: 2
 
 tools:

@@ -62,6 +62,7 @@ DESK_COLLECTIONS: list[str] = [
     "icij-offshore-leaks",  # 810K+ offshore entities from Panama Papers, Pandora Papers, Paradise Papers, Bahamas Leaks, Offshore Leaks — beneficial owners, intermediaries, jurisdictions
     "yahoo-finance",  # Yahoo Finance news articles, earnings call transcripts, and company profiles
     "ofac-sanctions",  # OFAC Specially Designated Nationals (SDN) list — 18K+ sanctioned individuals, entities, vessels across all programs
+    "marxists-archive",  # Marxists Internet Archive — curated political theory, ideology, propaganda analysis, revolutionary history (marxists.org)
 ]
 
 # ---------------------------------------------------------------------------

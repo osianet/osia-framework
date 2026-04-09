@@ -24,6 +24,7 @@ qdrant:
     - etymology-database
     - collection-directorate
     - wikileaks-cables
+    - marxists-archive
   boost_top_k: 2
 
 tools:
