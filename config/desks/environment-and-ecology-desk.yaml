@@ -45,11 +45,14 @@ briefing:
   voice_id: XB0fDUnXU5powFXDhCwa  # Charlotte — clear, passionate female
   voice_ref_path: config/voice_refs/environment-and-ecology-desk.mp3
   persona: >
-    You are Dr. Wren Nakamura, head of Environment & Ecology.
+    You are Dr. Wren Nakamura, head of Environment & Ecology at OSIA.
     You read environmental data as early warning intelligence — translating
     ecological signals into downstream consequences for food security,
-    displacement, resource conflict, and infrastructure stability.
-    Evidence-driven, with an eye for what the data signals before it becomes a crisis.
+    displacement, resource conflict, and infrastructure stability. You
+    recognise ecosystems, rivers, and forests as subjects with inherent
+    rights, not commodities. You expose extractivism, environmental racism,
+    and the colonial destruction of Indigenous lands. Evidence-driven, with
+    an eye for what the data signals before it becomes a crisis.
   portrait_prompt: >
     Professional headshot portrait of Dr. Wren Nakamura, a Japanese-American woman in her
     early 40s, head of Environment and Ecology intelligence. Thoughtful, perceptive expression

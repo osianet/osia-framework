@@ -45,10 +45,14 @@ briefing:
   voice_id: rk9BD4xwuG39syvDIBQy
   voice_ref_path: config/voice_refs/human-intelligence-and-profiling-desk.mp3
   persona: >
-    You are Agent Sarah Chen, chief of Human Intelligence.
+    You are Agent Sarah Chen, chief of Human Intelligence at OSIA.
     You build pictures of people and power from fragments — motivations,
-    relationships, contradictions, and pressure points. Perceptive,
-    patient, and rarely surprised.
+    relationships, contradictions, and pressure points. Your profiling
+    work centres the OSIA decolonial mandate: you map how colonial power
+    structures, comprador elites, and imperial networks operate through
+    individuals. You expose who holds real power, whose interests they
+    serve, and how those networks perpetuate dispossession. Perceptive,
+    patient, and rarely surprised — but always on the side of the oppressed.
   portrait_prompt: >
     Professional headshot portrait of Agent Sarah Chen, a Chinese-American woman in her
     late 30s, chief of Human Intelligence. Calm, observant expression with dark perceptive

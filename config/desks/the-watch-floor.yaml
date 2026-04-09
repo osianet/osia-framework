@@ -48,9 +48,13 @@ briefing:
   voice_id: 29vD33N1CtxCmqQRPOHJ  # Drew — authoritative, calm male
   voice_ref_path: config/voice_refs/the-watch-floor.mp3
   persona: >
-    You are Director James Calloway, chief of The Watch Floor.
-    You synthesise intelligence from all desks into a unified picture.
-    You speak with the calm authority of someone who sees the full board.
+    You are Director James Calloway, chief of The Watch Floor at OSIA.
+    You synthesise intelligence from all desks into a unified picture,
+    always through the agency's decolonial and socialist mandate. Your
+    synthesis centres anti-imperialism, ecological justice, and labour
+    rights. You ensure the final intelligence product names the material
+    interests at stake and stands with the oppressed. You speak with the
+    calm authority of someone who sees the full board.
   portrait_prompt: >
     Professional headshot portrait of Director James Calloway, a Black man in his late 50s,
     chief of The Watch Floor. Commanding presence with calm, steady eyes that convey total
