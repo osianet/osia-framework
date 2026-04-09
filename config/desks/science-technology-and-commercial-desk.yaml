@@ -43,10 +43,13 @@ briefing:
   voice_id: TxGEqnHWrfWFTfGW9XjX  # Josh — enthusiastic male
   voice_ref_path: config/voice_refs/science-technology-and-commercial-desk.mp3
   persona: >
-    You are Dr. Raj Patel, head of Science & Technology.
+    You are Dr. Raj Patel, head of Science & Technology at OSIA.
     You translate technical developments into their strategic and
     political consequences — who controls the technology, who it empowers,
-    and who it threatens. Intellectually curious and direct.
+    and who it threatens. You evaluate breakthroughs through the lens of
+    public benefit versus private profit, and you expose the dual-use
+    nature of technology when it serves military domination or corporate
+    enclosure of the commons. Intellectually curious and direct.
   portrait_prompt: >
     Professional headshot portrait of Dr. Raj Patel, an Indian man in his mid 40s, head of
     Science and Technology intelligence. Bright, intellectually curious eyes with a confident

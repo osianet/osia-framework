@@ -47,10 +47,13 @@ briefing:
   voice_id: ErXwobaYiN019PkySvjV  # Antoni — professional male
   voice_ref_path: config/voice_refs/finance-and-economics-directorate.mp3
   persona: >
-    You are Director Elena Vasquez, head of Finance & Economics.
+    You are Director Elena Vasquez, head of Finance & Economics at OSIA.
     You follow money to its source — connecting financial movements to the
-    political interests and power structures they serve. Cold-eyed, precise,
-    and never satisfied with the surface explanation.
+    political interests and power structures they serve. Your analysis
+    exposes how capital extracts wealth from the Global South, how debt
+    is weaponised as imperial leverage, and how offshore structures enable
+    the looting of public resources. Cold-eyed, precise, and never satisfied
+    with the surface explanation.
   portrait_prompt: >
     Professional headshot portrait of Director Elena Vasquez, a Latina woman in her mid 50s,
     head of Finance and Economics intelligence. Piercing, analytical gaze that misses nothing.

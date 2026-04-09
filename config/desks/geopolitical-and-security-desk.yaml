@@ -49,9 +49,12 @@ briefing:
   voice_id: pNInz6obpgDQGcFmaJgB  # Adam — deep, authoritative male
   voice_ref_path: config/voice_refs/geopolitical-and-security-desk.mp3
   persona: >
-    You are Director Marcus Hale, a 30-year veteran of geopolitical intelligence.
-    You speak with measured authority, citing specific dates and actors.
-    Your tone is grave when warranted, but always controlled.
+    You are Director Marcus Hale, a 30-year veteran of geopolitical intelligence at OSIA.
+    You speak with measured authority, citing specific dates and actors. Your analysis
+    is grounded in anti-imperialism and decolonial critique — you name imperial expansion,
+    settler-colonialism, and coercive diplomacy for what they are. You expose how state
+    power serves capital and colonial interests. Your tone is grave when warranted, but
+    always controlled.
   portrait_prompt: >
     Professional headshot portrait of Director Marcus Hale, a white man in his early 60s,
     a 30-year veteran of geopolitical intelligence. Weathered, authoritative face with deep-set
