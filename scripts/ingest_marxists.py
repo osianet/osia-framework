@@ -362,10 +362,10 @@ class OllamaEnricher:
         if match:
             try:
                 tags = json.loads(match.group())
+                if isinstance(tags, list):
+                    return [str(t).lower().strip() for t in tags if t][:10]
             except json.JSONDecodeError as exc:
                 logger.debug("Failed to parse Ollama tags JSON: %s", exc)
-            except json.JSONDecodeError:
-                pass
         return []
 
     async def summarise(self, text: str, title: str, author_slug: str) -> str:
