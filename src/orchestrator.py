@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import subprocess
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -625,6 +626,249 @@ class OsiaOrchestrator:
                 await asyncio.sleep(5)
             except Exception as e:
                 logger.exception("Unexpected error processing task: %s", e)
+
+    # ------------------------------------------------------------------
+    # Signal command handling
+    # ------------------------------------------------------------------
+
+    # Short aliases → full desk slugs, for convenience in /desk and /investigate
+    _DESK_ALIASES: dict[str, str] = {
+        "geo": "geopolitical-and-security-desk",
+        "geopolitical": "geopolitical-and-security-desk",
+        "humint": "human-intelligence-and-profiling-desk",
+        "cultural": "cultural-and-theological-intelligence-desk",
+        "cyber": "cyber-intelligence-and-warfare-desk",
+        "finance": "finance-and-economics-directorate",
+        "sci": "science-technology-and-commercial-desk",
+        "science": "science-technology-and-commercial-desk",
+        "infowar": "information-warfare-desk",
+        "env": "environment-and-ecology-desk",
+        "environment": "environment-and-ecology-desk",
+        "watch": "the-watch-floor",
+        "watchfloor": "the-watch-floor",
+    }
+
+    def _resolve_desk_slug(self, raw: str) -> str | None:
+        """Resolve a full slug or alias to a valid desk slug, or return None."""
+        if raw in self.valid_desks:
+            return raw
+        return self._DESK_ALIASES.get(raw.lower())
+
+    async def _handle_signal_command(self, task: dict, source: str) -> bool:
+        """
+        Intercept slash commands from any source.
+
+        Returns True  → command was fully handled; caller should return.
+        Returns False → not a handled standalone command; caller continues
+                        normal processing (task dict may have been mutated
+                        in-place, e.g. by /desk).
+        """
+        query = task.get("query", "").strip()
+        recipient = source[len("signal:"):] if source.startswith("signal:") else source
+
+        parts = query.split(None, 2)
+        command = parts[0].lower()
+        arg1 = parts[1] if len(parts) > 1 else ""
+        rest = parts[2] if len(parts) > 2 else ""
+
+        if command == "/help":
+            await self._cmd_help(recipient)
+            return True
+
+        if command == "/investigate":
+            topic = (arg1 + (" " + rest if rest else "")).strip()
+            if not topic:
+                await self.send_signal_message(recipient, "Usage: /investigate <topic>")
+                return True
+            await self._cmd_investigate(topic, recipient)
+            return True
+
+        if command == "/desk":
+            # /desk <slug|alias> <query…>
+            if not arg1 or not rest:
+                await self.send_signal_message(
+                    recipient,
+                    "Usage: /desk <slug> <query>\nSend /desks for available slugs.",
+                )
+                return True
+            slug = self._resolve_desk_slug(arg1)
+            if slug is None:
+                await self.send_signal_message(
+                    recipient,
+                    f"Unknown desk: {arg1}\nSend /desks for available slugs and aliases.",
+                )
+                return True
+            # Mutate the task dict so normal process_task flow uses the pinned desk
+            task["desk"] = slug
+            task["query"] = rest
+            return False  # continue normal processing with the pinned desk
+
+        if command == "/search":
+            query_text = (arg1 + (" " + rest if rest else "")).strip()
+            if not query_text:
+                await self.send_signal_message(recipient, "Usage: /search <query>")
+                return True
+            await self._cmd_search(query_text, recipient)
+            return True
+
+        if command == "/status":
+            await self._cmd_status(recipient)
+            return True
+
+        if command == "/desks":
+            await self._cmd_desks(recipient)
+            return True
+
+        # Unknown command
+        await self.send_signal_message(
+            recipient,
+            f"Unknown command: {command}\nSend /help for available commands.",
+        )
+        return True
+
+    async def _route_to_desks(self, topic: str, count: int = 3) -> list[str]:
+        """
+        Ask the Chief of Staff to select the `count` most relevant desks for a
+        multi-desk investigation. Returns validated slug list; falls back to
+        a sensible default set on failure.
+        """
+        valid_desks_list = "\n".join(f"- {s}" for s in sorted(self.valid_desks))
+        prompt = (
+            f"You are the Chief of Staff for OSIA. An investigation directive has arrived:\n\n"
+            f'"{topic}"\n\n'
+            f"Select the {count} most relevant intelligence desks to investigate this topic. "
+            f"Choose from:\n{valid_desks_list}\n\n"
+            f"Reply with ONLY the {count} desk slugs, one per line, no punctuation, nothing else."
+        )
+        try:
+            raw = await self._route_to_desk(prompt)
+            slugs = [
+                line.strip().lstrip("- •").strip()
+                for line in raw.splitlines()
+                if line.strip()
+            ]
+            valid = [s for s in slugs if s in self.valid_desks][:count]
+            if valid:
+                return valid
+        except Exception as e:
+            logger.warning("Multi-desk routing failed: %s — using defaults", e)
+
+        return [
+            "geopolitical-and-security-desk",
+            "human-intelligence-and-profiling-desk",
+            "the-watch-floor",
+        ]
+
+    async def _cmd_help(self, recipient: str) -> None:
+        help_text = (
+            "OSIA Command Reference\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "/investigate <topic>\n"
+            "  Fan out deep research across the 3 most relevant desks.\n"
+            "  Results are embedded into each desk's knowledge base on the\n"
+            "  next research worker run (every 2h). Trigger immediately with:\n"
+            "  sudo systemctl start osia-research-worker.service\n\n"
+            "/desk <slug> <query>\n"
+            "  Route a query directly to a named desk, bypassing AI routing.\n"
+            "  Accepts short aliases: geo, humint, cyber, infowar, env,\n"
+            "  cultural, finance, sci, watch.\n\n"
+            "/search <query>\n"
+            "  Cross-desk Qdrant search across the full intelligence database.\n"
+            "  Returns the top 5 most relevant results with source and score.\n\n"
+            "/status\n"
+            "  Show queue depths and system health.\n\n"
+            "/desks\n"
+            "  List all available desk slugs."
+        )
+        await self.send_signal_message(recipient, help_text)
+
+    async def _cmd_investigate(self, topic: str, recipient: str) -> None:
+        """Fan out an investigation across the top 3 relevant desks via research queue."""
+        await self.send_signal_message(
+            recipient,
+            f"Routing investigation to relevant desks: {topic[:120]}{'...' if len(topic) > 120 else ''}",
+        )
+        desks = await self._route_to_desks(topic, count=3)
+        for desk in desks:
+            payload = json.dumps({
+                "job_id": str(uuid.uuid4()),
+                "topic": topic,
+                "desk": desk,
+                "priority": "high",
+                "directives_lens": True,
+                "triggered_by": f"signal-investigate:{recipient}",
+            })
+            await self.redis.rpush("osia:research_queue", payload)
+            logger.info("Enqueued investigation job → %s", desk)
+
+        desk_list = "\n".join(f"  • {d}" for d in desks)
+        queue_depth = await self.redis.llen("osia:research_queue")
+        await self.send_signal_message(
+            recipient,
+            f"Investigation queued across {len(desks)} desk(s):\n{desk_list}\n\n"
+            f"Research queue depth: {queue_depth}\n"
+            f"Results surface on the next worker run (every 2h).\n"
+            f"Trigger now: sudo systemctl start osia-research-worker.service",
+        )
+
+    async def _cmd_search(self, query: str, recipient: str) -> None:
+        """Cross-desk Qdrant search; returns top 5 results to Signal."""
+        await self.send_signal_message(
+            recipient,
+            f"Searching intelligence database: {query[:80]}{'...' if len(query) > 80 else ''}",
+        )
+        try:
+            results = await self.qdrant.cross_desk_search(query, top_k=5, decay_half_life_days=70.0)
+        except Exception as e:
+            await self.send_signal_message(recipient, f"Search failed: {e}")
+            return
+
+        if not results:
+            await self.send_signal_message(recipient, "No matching intelligence found.")
+            return
+
+        lines = [f"Top {len(results)} result(s) for: {query}\n"]
+        for i, r in enumerate(results, 1):
+            preview = r.text[:220].replace("\n", " ").strip()
+            ts = r.metadata.get("timestamp", r.metadata.get("collected_at", ""))[:10]
+            lines.append(
+                f"[{i}] {r.collection} (score: {r.score:.3f}{', ' + ts if ts else ''})\n{preview}…"
+            )
+        await self.send_signal_message(recipient, "\n\n".join(lines))
+
+    async def _cmd_status(self, recipient: str) -> None:
+        """Report queue depths and system health."""
+        now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        try:
+            task_depth, research_depth, rss_depth = await asyncio.gather(
+                self.redis.llen("osia:task_queue"),
+                self.redis.llen("osia:research_queue"),
+                self.redis.llen("osia:rss:daily_digest"),
+            )
+        except Exception as e:
+            await self.send_signal_message(recipient, f"Status check failed: {e}")
+            return
+
+        await self.send_signal_message(
+            recipient,
+            f"OSIA System Status — {now}\n\n"
+            f"Queues:\n"
+            f"  task_queue:       {task_depth} pending\n"
+            f"  research_queue:   {research_depth} pending\n"
+            f"  rss:daily_digest: {rss_depth} staged",
+        )
+
+    async def _cmd_desks(self, recipient: str) -> None:
+        """List all valid desk slugs and their aliases."""
+        desk_list = "\n".join(f"  • {s}" for s in sorted(self.valid_desks))
+        alias_list = "\n".join(
+            f"  {alias} → {slug}"
+            for alias, slug in sorted(self._DESK_ALIASES.items())
+        )
+        await self.send_signal_message(
+            recipient,
+            f"Available desks:\n{desk_list}\n\nAliases (for /desk and /investigate):\n{alias_list}",
+        )
 
     # ------------------------------------------------------------------
     # MCP tool dispatch (maps Gemini function names → MCP calls)
@@ -1372,6 +1616,15 @@ class OsiaOrchestrator:
         """Main routing logic for an incoming OSINT task."""
         source = task.get("source", "unknown")
         original_query = task.get("query", "")
+
+        # Intercept slash commands before any media/desk processing.
+        # /desk mutates task in-place and returns False so normal flow continues.
+        if original_query.strip().startswith("/"):
+            if await self._handle_signal_command(task, source):
+                return
+            # Re-extract in case /desk mutated the query and desk fields
+            original_query = task.get("query", original_query)
+
         query = original_query
         media_analysis = None
         research_summary = None
