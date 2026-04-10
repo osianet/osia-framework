@@ -939,17 +939,17 @@ class OsiaOrchestrator:
             load_avg = Path("/proc/loadavg").read_text().split()[:3]
             lines.append(f"  Load: {' '.join(load_avg)}")
         except Exception:
-            pass
+            logger.debug("Could not read /proc/loadavg", exc_info=True)
 
         # CPU temperature (ARM SBCs)
         temp_path = Path("/sys/class/thermal/thermal_zone0/temp")
         if temp_path.exists():
             try:
                 cpu_temp = int(temp_path.read_text().strip()) // 1000
-                warn = " ⚠️" if cpu_temp >= 70 else (" 🔴" if cpu_temp >= 85 else "")
+                warn = " 🔴" if cpu_temp >= 85 else (" ⚠️" if cpu_temp >= 70 else "")
                 lines.append(f"  CPU Temp: {cpu_temp}°C{warn}")
             except Exception:
-                pass
+                logger.debug("Could not read CPU temperature", exc_info=True)
 
         # Memory
         try:
@@ -959,10 +959,10 @@ class OsiaOrchestrator:
             mem_used_mb = (mem_total_kb - mem_avail_kb) // 1024
             mem_total_mb = mem_total_kb // 1024
             mem_pct = mem_used_mb * 100 // mem_total_mb if mem_total_mb else 0
-            warn = " ⚠️" if mem_pct >= 75 else (" 🔴" if mem_pct >= 90 else "")
+            warn = " 🔴" if mem_pct >= 90 else (" ⚠️" if mem_pct >= 75 else "")
             lines.append(f"  Mem: {mem_used_mb}MB / {mem_total_mb}MB ({mem_pct}%){warn}")
         except Exception:
-            pass
+            logger.debug("Could not read /proc/meminfo", exc_info=True)
 
         # Disk
         project_dir = str(Path(__file__).resolve().parents[2])
@@ -971,7 +971,7 @@ class OsiaOrchestrator:
             parts = disk_raw.splitlines()[-1].split()
             if len(parts) >= 5:
                 disk_pct = int(parts[4].rstrip("%")) if parts[4].rstrip("%").isdigit() else 0
-                warn = " ⚠️" if disk_pct >= 80 else (" 🔴" if disk_pct >= 95 else "")
+                warn = " 🔴" if disk_pct >= 95 else (" ⚠️" if disk_pct >= 80 else "")
                 lines.append(f"  Disk: {parts[2]} used, {parts[3]} free ({parts[4]}){warn}")
 
         return "\n".join(lines)
@@ -1181,7 +1181,7 @@ class OsiaOrchestrator:
                     preview = json.loads(raw).get("query", str(raw))[:120]
                     lines.append(f"  Next task: {preview}")
             except Exception:
-                pass
+                logger.debug("Could not fetch next task preview from Redis", exc_info=True)
 
         return "\n".join(lines)
 
