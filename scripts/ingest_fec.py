@@ -102,8 +102,10 @@ RESEARCH_QUEUE_KEY = "osia:research_queue"
 TODAY = datetime.now(UTC).strftime("%Y-%m-%d")
 CURRENT_YEAR = datetime.now(UTC).year
 # FEC cycles are even years
-DEFAULT_CYCLES = [CURRENT_YEAR if CURRENT_YEAR % 2 == 0 else CURRENT_YEAR + 1,
-                  (CURRENT_YEAR if CURRENT_YEAR % 2 == 0 else CURRENT_YEAR + 1) - 2]
+DEFAULT_CYCLES = [
+    CURRENT_YEAR if CURRENT_YEAR % 2 == 0 else CURRENT_YEAR + 1,
+    (CURRENT_YEAR if CURRENT_YEAR % 2 == 0 else CURRENT_YEAR + 1) - 2,
+]
 
 # Large individual contribution threshold for notable enqueue
 NOTABLE_AMOUNT = 50_000
@@ -391,12 +393,15 @@ class FecIngestor:
 
         page = start_page
         while True:
-            data = await self._fec_get("/candidates/", {
-                "election_year": cycle,
-                "per_page": PAGE_SIZE,
-                "page": page,
-                "sort": "name",
-            })
+            data = await self._fec_get(
+                "/candidates/",
+                {
+                    "election_year": cycle,
+                    "per_page": PAGE_SIZE,
+                    "page": page,
+                    "sort": "name",
+                },
+            )
             results = data.get("results", [])
             if not results:
                 break
@@ -408,10 +413,16 @@ class FecIngestor:
                     stats.records_skipped += 1
                     continue
                 candidate_id = rec.get("candidate_id", "")
-                entity_tags = [t for t in [
-                    rec.get("name", ""), rec.get("party_full", ""),
-                    rec.get("state", ""), rec.get("office_full", "")
-                ] if t]
+                entity_tags = [
+                    t
+                    for t in [
+                        rec.get("name", ""),
+                        rec.get("party_full", ""),
+                        rec.get("state", ""),
+                        rec.get("office_full", ""),
+                    ]
+                    if t
+                ]
                 await self._buffer_point(
                     f"fec:candidate:{candidate_id}:{cycle}",
                     doc,
@@ -453,12 +464,15 @@ class FecIngestor:
 
         page = start_page
         while True:
-            data = await self._fec_get("/committees/", {
-                "cycle": cycle,
-                "per_page": PAGE_SIZE,
-                "page": page,
-                "sort": "name",
-            })
+            data = await self._fec_get(
+                "/committees/",
+                {
+                    "cycle": cycle,
+                    "per_page": PAGE_SIZE,
+                    "page": page,
+                    "sort": "name",
+                },
+            )
             results = data.get("results", [])
             if not results:
                 break
@@ -470,10 +484,16 @@ class FecIngestor:
                     stats.records_skipped += 1
                     continue
                 committee_id = rec.get("committee_id", "")
-                entity_tags = [t for t in [
-                    rec.get("name", ""), rec.get("party_full", ""),
-                    rec.get("state", ""), rec.get("committee_type_full", "")
-                ] if t]
+                entity_tags = [
+                    t
+                    for t in [
+                        rec.get("name", ""),
+                        rec.get("party_full", ""),
+                        rec.get("state", ""),
+                        rec.get("committee_type_full", ""),
+                    ]
+                    if t
+                ]
                 await self._buffer_point(
                     f"fec:committee:{committee_id}:{cycle}",
                     doc,
@@ -516,14 +536,17 @@ class FecIngestor:
 
         page = start_page
         while True:
-            data = await self._fec_get("/schedules/schedule_a/", {
-                "two_year_transaction_period": cycle,
-                "per_page": PAGE_SIZE,
-                "page": page,
-                "min_amount": int(self.min_amount),
-                "sort": "contribution_receipt_date",
-                "sort_nulls_last": True,
-            })
+            data = await self._fec_get(
+                "/schedules/schedule_a/",
+                {
+                    "two_year_transaction_period": cycle,
+                    "per_page": PAGE_SIZE,
+                    "page": page,
+                    "min_amount": int(self.min_amount),
+                    "sort": "contribution_receipt_date",
+                    "sort_nulls_last": True,
+                },
+            )
             results = data.get("results", [])
             if not results:
                 break
@@ -558,7 +581,7 @@ class FecIngestor:
                         dt = datetime.strptime(date_str, "%Y-%m-%d")
                         ingest_unix = int(dt.replace(tzinfo=UTC).timestamp())
                     except ValueError:
-                        pass
+                        pass  # malformed date in FEC source data — fall back to ingest time
 
                 await self._buffer_point(
                     f"fec:contrib:{transaction_id}",
@@ -608,26 +631,26 @@ class FecIngestor:
         topic = f"FEC large contribution: {contributor} donated ${amount:,.0f} to {committee_name} ({date_str})"
         if employer:
             topic += f" — employer: {employer}"
-        job = json.dumps({
-            "job_id": str(uuid.uuid4()),
-            "topic": topic,
-            "desk": "human-intelligence-and-profiling-desk",
-            "priority": "normal",
-            "triggered_by": "fec_ingest",
-            "metadata": {
-                "transaction_id": transaction_id,
-                "contributor": contributor,
-                "amount_usd": amount,
-                "committee": committee_name,
-            },
-        })
+        job = json.dumps(
+            {
+                "job_id": str(uuid.uuid4()),
+                "topic": topic,
+                "desk": "human-intelligence-and-profiling-desk",
+                "priority": "normal",
+                "triggered_by": "fec_ingest",
+                "metadata": {
+                    "transaction_id": transaction_id,
+                    "contributor": contributor,
+                    "amount_usd": amount,
+                    "committee": committee_name,
+                },
+            }
+        )
         await self._redis.rpush(RESEARCH_QUEUE_KEY, job)
         await self._redis.set(redis_key, "1", ex=60 * 60 * 24 * 60)
         stats.events_enqueued += 1
 
-    async def _buffer_point(
-        self, key: str, doc: str, payload: dict, stats: IngestStats
-    ) -> None:
+    async def _buffer_point(self, key: str, doc: str, payload: dict, stats: IngestStats) -> None:
         chunks = chunk_text(doc)
         if not chunks:
             stats.records_skipped += 1
@@ -640,9 +663,7 @@ class FecIngestor:
             if len(chunks) > 1:
                 p["chunk_index"] = i
                 p["total_chunks"] = len(chunks)
-            self._upsert_buffer.append(
-                qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=p)
-            )
+            self._upsert_buffer.append(qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=p))
         if len(self._upsert_buffer) >= self.upsert_batch_size:
             await self._flush_upsert_buffer(stats)
 

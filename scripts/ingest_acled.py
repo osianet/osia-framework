@@ -133,13 +133,11 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
 def _parse_date_unix(date_str: str) -> int | None:
     if not date_str:
         return None
-    for _fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
-            return int(dt.replace(tzinfo=UTC).timestamp())
-        except ValueError:
-            continue
-    return None
+    try:
+        dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
+        return int(dt.replace(tzinfo=UTC).timestamp())
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +202,7 @@ def build_document(event: dict) -> tuple[str, int | None]:
         if fat > 0:
             lines.append(f"Fatalities: {fat}")
     except (ValueError, TypeError):
-        pass
+        pass  # malformed fatality count in source data — skip field
 
     if source:
         lines.append(f"Source: {source}" + (f" ({source_scale})" if source_scale else ""))

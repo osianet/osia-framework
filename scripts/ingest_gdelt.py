@@ -104,26 +104,67 @@ TODAY = datetime.now(UTC).strftime("%Y-%m-%d")
 
 # GDELT 2.0 export CSV column names (no header in file, 61 columns)
 GDELT_COLUMNS = [
-    "GlobalEventID", "Day", "MonthYear", "Year", "FractionDate",
-    "Actor1Code", "Actor1Name", "Actor1CountryCode", "Actor1KnownGroupCode",
-    "Actor1EthnicCode", "Actor1Religion1Code", "Actor1Religion2Code",
-    "Actor1Type1Code", "Actor1Type2Code", "Actor1Type3Code",
-    "Actor2Code", "Actor2Name", "Actor2CountryCode", "Actor2KnownGroupCode",
-    "Actor2EthnicCode", "Actor2Religion1Code", "Actor2Religion2Code",
-    "Actor2Type1Code", "Actor2Type2Code", "Actor2Type3Code",
-    "IsRootEvent", "EventCode", "EventBaseCode", "EventRootCode",
-    "QuadClass", "GoldsteinScale", "NumMentions", "NumSources",
-    "NumArticles", "AvgTone",
-    "Actor1Geo_Type", "Actor1Geo_FullName", "Actor1Geo_CountryCode",
-    "Actor1Geo_ADM1Code", "Actor1Geo_ADM2Code", "Actor1Geo_Lat", "Actor1Geo_Long",
+    "GlobalEventID",
+    "Day",
+    "MonthYear",
+    "Year",
+    "FractionDate",
+    "Actor1Code",
+    "Actor1Name",
+    "Actor1CountryCode",
+    "Actor1KnownGroupCode",
+    "Actor1EthnicCode",
+    "Actor1Religion1Code",
+    "Actor1Religion2Code",
+    "Actor1Type1Code",
+    "Actor1Type2Code",
+    "Actor1Type3Code",
+    "Actor2Code",
+    "Actor2Name",
+    "Actor2CountryCode",
+    "Actor2KnownGroupCode",
+    "Actor2EthnicCode",
+    "Actor2Religion1Code",
+    "Actor2Religion2Code",
+    "Actor2Type1Code",
+    "Actor2Type2Code",
+    "Actor2Type3Code",
+    "IsRootEvent",
+    "EventCode",
+    "EventBaseCode",
+    "EventRootCode",
+    "QuadClass",
+    "GoldsteinScale",
+    "NumMentions",
+    "NumSources",
+    "NumArticles",
+    "AvgTone",
+    "Actor1Geo_Type",
+    "Actor1Geo_FullName",
+    "Actor1Geo_CountryCode",
+    "Actor1Geo_ADM1Code",
+    "Actor1Geo_ADM2Code",
+    "Actor1Geo_Lat",
+    "Actor1Geo_Long",
     "Actor1Geo_FeatureID",
-    "Actor2Geo_Type", "Actor2Geo_FullName", "Actor2Geo_CountryCode",
-    "Actor2Geo_ADM1Code", "Actor2Geo_ADM2Code", "Actor2Geo_Lat", "Actor2Geo_Long",
+    "Actor2Geo_Type",
+    "Actor2Geo_FullName",
+    "Actor2Geo_CountryCode",
+    "Actor2Geo_ADM1Code",
+    "Actor2Geo_ADM2Code",
+    "Actor2Geo_Lat",
+    "Actor2Geo_Long",
     "Actor2Geo_FeatureID",
-    "ActionGeo_Type", "ActionGeo_FullName", "ActionGeo_CountryCode",
-    "ActionGeo_ADM1Code", "ActionGeo_ADM2Code", "ActionGeo_Lat", "ActionGeo_Long",
+    "ActionGeo_Type",
+    "ActionGeo_FullName",
+    "ActionGeo_CountryCode",
+    "ActionGeo_ADM1Code",
+    "ActionGeo_ADM2Code",
+    "ActionGeo_Lat",
+    "ActionGeo_Long",
     "ActionGeo_FeatureID",
-    "DATEADDED", "SOURCEURL",
+    "DATEADDED",
+    "SOURCEURL",
 ]
 
 # CAMEO event root codes relevant to information warfare
@@ -211,14 +252,18 @@ def build_document(row: dict) -> tuple[str, int | None]:
             dt = datetime.strptime(day, "%Y%m%d")
             event_unix = int(dt.replace(tzinfo=UTC).timestamp())
         except ValueError:
-            pass
+            pass  # malformed YYYYMMDD date in GDELT row — leave event_unix as None
 
     if not (actor1_name or actor2_name or action_geo):
         return "", event_unix
 
     # Map QuadClass to human-readable
-    quad_labels = {"1": "Verbal Cooperation", "2": "Material Cooperation",
-                   "3": "Verbal Conflict", "4": "Material Conflict"}
+    quad_labels = {
+        "1": "Verbal Cooperation",
+        "2": "Material Cooperation",
+        "3": "Verbal Conflict",
+        "4": "Material Conflict",
+    }
     quad_label = quad_labels.get(str(quad_class), f"Class {quad_class}")
 
     date_str = f"{day[:4]}-{day[4:6]}-{day[6:8]}" if day and len(day) == 8 else day
@@ -254,19 +299,19 @@ def build_document(row: dict) -> tuple[str, int | None]:
     try:
         lines.append(f"Media Coverage: {int(num_mentions)} mentions across {int(num_articles)} articles")
     except (ValueError, TypeError):
-        pass
+        pass  # numeric fields missing or non-numeric in source row — skip
 
     try:
         tone_val = float(avg_tone)
         tone_desc = "hostile" if tone_val < -5 else "negative" if tone_val < 0 else "positive"
         lines.append(f"Average Tone: {tone_val:.2f} ({tone_desc})")
     except (ValueError, TypeError):
-        pass
+        pass  # avg_tone missing or non-numeric in source row — skip
 
     try:
         lines.append(f"Goldstein Scale: {float(goldstein):.1f} (stability impact: -10=destabilising, +10=stabilising)")
     except (ValueError, TypeError):
-        pass
+        pass  # goldstein score missing or non-numeric in source row — skip
 
     if source_url:
         lines.append(f"Source: {source_url}")
@@ -414,9 +459,7 @@ class GdeltIngestor:
         results.sort(key=lambda x: x[1])
         return results
 
-    async def _process_file(
-        self, url: str, ts_str: str, stats: IngestStats, http: httpx.AsyncClient
-    ) -> None:
+    async def _process_file(self, url: str, ts_str: str, stats: IngestStats, http: httpx.AsyncClient) -> None:
         logger.info("Processing GDELT file %s", ts_str)
 
         for attempt in range(4):
@@ -434,9 +477,7 @@ class GdeltIngestor:
         else:
             raise RuntimeError(f"Failed to download {url}")
 
-        rows = await asyncio.get_event_loop().run_in_executor(
-            None, self._parse_zip_csv, zip_bytes
-        )
+        rows = await asyncio.get_event_loop().run_in_executor(None, self._parse_zip_csv, zip_bytes)
 
         file_processed = 0
         for row in rows:
