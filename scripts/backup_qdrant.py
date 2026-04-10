@@ -43,7 +43,7 @@ QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY", "")
 SNAPSHOT_SOURCE_DIR = Path("/home/ubuntu/osia-qdrant/snapshots")
 BACKUP_BASE_DIR = Path("/home/ubuntu/osia-qdrant-backups")
 KEEP_DAYS = 7
-POLL_INTERVAL = 5   # seconds between status checks
+POLL_INTERVAL = 5  # seconds between status checks
 TIMEOUT_SECS = 3600  # 1 hour max for snapshot creation
 
 
