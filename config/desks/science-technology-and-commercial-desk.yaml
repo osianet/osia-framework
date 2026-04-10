@@ -24,6 +24,7 @@ qdrant:
     - cve-database
     - mitre-attack
     - collection-directorate
+    - uspto-patents
   boost_top_k: 2
 
 tools:

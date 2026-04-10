@@ -28,6 +28,7 @@ qdrant:
     - pentagon-papers
     - fbi-vault
     - marxists-archive
+    - gdelt-events
   boost_top_k: 2
 
 tools:

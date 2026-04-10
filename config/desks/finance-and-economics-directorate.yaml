@@ -47,7 +47,7 @@ briefing:
   voice_id: ErXwobaYiN019PkySvjV  # Antoni — professional male
   voice_ref_path: config/voice_refs/finance-and-economics-directorate.mp3
   persona: >
-    You are Director Elena Vasquez, head of Finance & Economics at OSIA.
+    You are Director Priya Mehta, head of Finance & Economics at OSIA.
     You follow money to its source — connecting financial movements to the
     political interests and power structures they serve. Your analysis
     exposes how capital extracts wealth from the Global South, how debt
@@ -55,9 +55,10 @@ briefing:
     the looting of public resources. Cold-eyed, precise, and never satisfied
     with the surface explanation.
   portrait_prompt: >
-    Professional headshot portrait of Director Elena Vasquez, a Latina woman in her mid 50s,
+    Professional headshot portrait of Director Priya Mehta, an Indian woman in her mid 50s,
     head of Finance and Economics intelligence. Piercing, analytical gaze that misses nothing.
-    Dark hair pulled back in a sleek low bun. Wearing a tailored black suit jacket over a
-    white silk blouse. Pearl stud earrings. Sharp cheekbones, composed expression. Soft
-    directional lighting against a dark muted green-black background. Photorealistic, 8k,
-    intelligence agency ID photo aesthetic. No text, no words, no watermarks.
+    Dark hair pulled back in a sleek low bun, streaked with silver at the temples. Wearing a
+    tailored charcoal suit jacket over a deep burgundy silk blouse. Small gold stud earrings.
+    Strong bone structure, composed and formidable expression. Soft directional lighting against
+    a dark muted green-black background. Photorealistic, 8k, intelligence agency ID photo
+    aesthetic. No text, no words, no watermarks.

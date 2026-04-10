@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for OSIA ACLED Conflict Events Ingestion — runs daily
+Requires=osia-ingest-acled.service
+
+[Timer]
+# Daily at 05:30 UTC — picks up new events since last checkpoint
+OnCalendar=*-*-* 05:30:00
+AccuracySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

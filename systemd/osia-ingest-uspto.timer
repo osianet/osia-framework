@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for OSIA USPTO Patent Ingestion — runs weekly
+Requires=osia-ingest-uspto.service
+
+[Timer]
+# Weekly on Saturday at 02:30 UTC — staggered 90min after FEC
+OnCalendar=Sat *-*-* 02:30:00
+AccuracySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

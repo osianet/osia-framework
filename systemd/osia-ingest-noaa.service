@@ -1,0 +1,25 @@
+[Unit]
+Description=OSIA NOAA Storm Events Database Ingestion
+After=network.target osia-qdrant.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/osia-framework
+EnvironmentFile=/home/ubuntu/osia-framework/.env
+ExecStart=/home/ubuntu/osia-framework/.venv/bin/python scripts/ingest_noaa_storm_events.py --resume --enqueue-notable
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osia-ingest-noaa
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/osia-framework
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
