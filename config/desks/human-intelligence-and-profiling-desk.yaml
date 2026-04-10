@@ -27,6 +27,8 @@ qdrant:
     - church-committee
     - cia-crest
     - fbi-vault
+    - fec-campaign-finance
+    - courtlistener-cases
   boost_top_k: 3
 
 tools:

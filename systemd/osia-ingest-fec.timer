@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for OSIA FEC Campaign Finance Ingestion — runs weekly
+Requires=osia-ingest-fec.service
+
+[Timer]
+# Weekly on Saturday at 01:00 UTC — FEC bulk data updates weekly
+OnCalendar=Sat *-*-* 01:00:00
+AccuracySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

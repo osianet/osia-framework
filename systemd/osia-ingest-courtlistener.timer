@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for OSIA CourtListener Court Opinions Ingestion — runs weekly
+Requires=osia-ingest-courtlistener.service
+
+[Timer]
+# Weekly on Saturday at 04:00 UTC — staggered after USPTO
+OnCalendar=Sat *-*-* 04:00:00
+AccuracySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

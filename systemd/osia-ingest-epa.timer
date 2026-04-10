@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for OSIA EPA Toxic Release Inventory Ingestion — runs weekly
+Requires=osia-ingest-epa.service
+
+[Timer]
+# Weekly on Sunday at 03:30 UTC — staggered 90min after NOAA to avoid overlap
+OnCalendar=Sun *-*-* 03:30:00
+AccuracySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

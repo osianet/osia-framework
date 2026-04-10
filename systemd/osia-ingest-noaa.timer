@@ -1,0 +1,12 @@
+[Unit]
+Description=Timer for OSIA NOAA Storm Events Ingestion — runs weekly
+Requires=osia-ingest-noaa.service
+
+[Timer]
+# Weekly on Sunday at 02:00 UTC — CSV files update periodically; --resume skips known years
+OnCalendar=Sun *-*-* 02:00:00
+AccuracySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
