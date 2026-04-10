@@ -104,17 +104,47 @@ TODAY = datetime.now(UTC).strftime("%Y-%m-%d")
 
 # Court slugs for high-value federal courts
 HIGH_VALUE_COURTS = {
-    "scotus",           # Supreme Court
-    "ca1", "ca2", "ca3", "ca4", "ca5", "ca6", "ca7", "ca8", "ca9", "ca10", "ca11",
-    "cadc", "cafc",     # DC Circuit, Federal Circuit
+    "scotus",  # Supreme Court
+    "ca1",
+    "ca2",
+    "ca3",
+    "ca4",
+    "ca5",
+    "ca6",
+    "ca7",
+    "ca8",
+    "ca9",
+    "ca10",
+    "ca11",
+    "cadc",
+    "cafc",  # DC Circuit, Federal Circuit
 }
 
 # Keywords in case name suggesting high HUMINT value
 NOTABLE_CASE_KEYWORDS = {
-    "united states v.", "conspiracy", "espionage", "terrorism", "bribery",
-    "corruption", "fraud", "rico", "trafficking", "assassination", "treason",
-    "sanctions", "laundering", "surveillance", "wiretap", "classified",
-    "national security", "cia", "nsa", "fbi", "doj", "sec v.", "ftc v.",
+    "united states v.",
+    "conspiracy",
+    "espionage",
+    "terrorism",
+    "bribery",
+    "corruption",
+    "fraud",
+    "rico",
+    "trafficking",
+    "assassination",
+    "treason",
+    "sanctions",
+    "laundering",
+    "surveillance",
+    "wiretap",
+    "classified",
+    "national security",
+    "cia",
+    "nsa",
+    "fbi",
+    "doj",
+    "sec v.",
+    "ftc v.",
 }
 
 CHUNK_SIZE = 600
@@ -415,7 +445,7 @@ class CourtListenerIngestor:
             # Fetch cluster metadata concurrently for the whole page
             cluster_urls = [op.get("cluster", "") for op in results if isinstance(op.get("cluster"), str)]
             clusters_fetched = await asyncio.gather(*[self._fetch_cluster(http, url) for url in cluster_urls])
-            cluster_map = {url: cl for url, cl in zip(cluster_urls, clusters_fetched)}
+            cluster_map = {url: cl for url, cl in zip(cluster_urls, clusters_fetched, strict=False)}
 
             for opinion in results:
                 stats.records_seen += 1
@@ -530,8 +560,7 @@ class CourtListenerIngestor:
         return citations >= 50
 
     async def _maybe_enqueue(
-        self, opinion_id: str, case_name: str, court_id: str, date_filed: str,
-        cluster: dict, stats: IngestStats
+        self, opinion_id: str, case_name: str, court_id: str, date_filed: str, cluster: dict, stats: IngestStats
     ) -> None:
         if not self._redis or self.dry_run:
             return
@@ -542,19 +571,21 @@ class CourtListenerIngestor:
         topic = f"CourtListener notable case: {case_name} ({court_id.upper()}, {date_filed})"
         if citations:
             topic += f" — {citations} citations"
-        job = json.dumps({
-            "job_id": str(uuid.uuid4()),
-            "topic": topic,
-            "desk": "human-intelligence-and-profiling-desk",
-            "priority": "normal",
-            "triggered_by": "courtlistener_ingest",
-            "metadata": {
-                "opinion_id": opinion_id,
-                "case_name": case_name,
-                "court_id": court_id,
-                "date_filed": date_filed,
-            },
-        })
+        job = json.dumps(
+            {
+                "job_id": str(uuid.uuid4()),
+                "topic": topic,
+                "desk": "human-intelligence-and-profiling-desk",
+                "priority": "normal",
+                "triggered_by": "courtlistener_ingest",
+                "metadata": {
+                    "opinion_id": opinion_id,
+                    "case_name": case_name,
+                    "court_id": court_id,
+                    "date_filed": date_filed,
+                },
+            }
+        )
         await self._redis.rpush(RESEARCH_QUEUE_KEY, job)
         await self._redis.set(redis_key, "1", ex=60 * 60 * 24 * 60)
         stats.events_enqueued += 1
@@ -611,7 +642,6 @@ class CourtListenerIngestor:
         return [[0.0] * EMBEDDING_DIM for _ in texts]
 
 
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -627,8 +657,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--date-from", help="Start date YYYY-MM-DD (default: 2 years ago)")
     p.add_argument("--date-to", help="End date YYYY-MM-DD (default: today)")
     p.add_argument("--court-ids", nargs="+", help="Court slugs to include (default: all federal)")
-    p.add_argument("--enqueue-notable", action="store_true",
-                   help="Push notable cases to HUMINT research queue")
+    p.add_argument("--enqueue-notable", action="store_true", help="Push notable cases to HUMINT research queue")
     p.add_argument("--limit", type=int, default=0, help="Stop after N opinions (0=no limit)")
     p.add_argument("--embed-batch-size", type=int, default=24, help="Texts per HF embedding call")
     p.add_argument("--embed-concurrency", type=int, default=2, help="Parallel embedding calls")

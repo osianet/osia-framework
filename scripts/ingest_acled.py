@@ -133,7 +133,7 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
 def _parse_date_unix(date_str: str) -> int | None:
     if not date_str:
         return None
-    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
+    for _fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"):
         try:
             dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
             return int(dt.replace(tzinfo=UTC).timestamp())
@@ -462,9 +462,7 @@ class AcledIngestor:
         if len(self._upsert_buffer) >= self.upsert_batch_size:
             await self._flush_upsert_buffer(stats)
 
-        if self.enqueue_notable and (
-            fatalities >= NOTABLE_FATALITY_THRESHOLD or event_type in NOTABLE_EVENT_TYPES
-        ):
+        if self.enqueue_notable and (fatalities >= NOTABLE_FATALITY_THRESHOLD or event_type in NOTABLE_EVENT_TYPES):
             await self._maybe_enqueue(event_id, event_type, country, actor1, actor2, fatalities, event_date, stats)
 
     async def _maybe_enqueue(
