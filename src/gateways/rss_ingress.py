@@ -16,6 +16,16 @@ from src.intelligence.qdrant_store import QdrantStore
 
 logger = logging.getLogger("osia.rss")
 
+# ---------------------------------------------------------------------------
+# Summarisation model chain
+# OpenRouter options first (2), then Gemini direct (non-OR), then raw fallback.
+# ---------------------------------------------------------------------------
+_OR_SUMMARISE_MODELS = [
+    "google/gemma-4-31b-it:free",  # zero-cost first attempt
+    "anthropic/claude-haiku-4.5",  # paid, reliable second
+]
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+
 # Redis keys
 SEEN_KEY = "osia:rss:seen_links"
 DAILY_DIGEST_KEY = "osia:rss:daily_digest"  # list of summaries collected today
@@ -32,6 +42,52 @@ class RSSIngress:
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
         base_dir = Path(os.getenv("OSIA_BASE_DIR", Path(__file__).resolve().parent.parent.parent))
         self.feeds_file = base_dir / "config" / "feeds.txt"
+
+    async def _summarise_openrouter(self, prompt: str, model: str) -> str:
+        """POST to OpenRouter chat completions and return the assistant text."""
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 1024,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["choices"][0]["message"]["content"]
+
+    async def _summarise_with_fallback(self, prompt: str, title: str) -> str | None:
+        """
+        Try OpenRouter models first (2 options), then Gemini direct (non-OR).
+        Returns None only if all AI providers fail — caller should fall back to
+        raw text truncation.
+        """
+        if OPENROUTER_API_KEY:
+            for model in _OR_SUMMARISE_MODELS:
+                try:
+                    result = await self._summarise_openrouter(prompt, model)
+                    logger.debug("RSS summary via OR model=%s for '%s'", model, title)
+                    return result
+                except Exception as e:
+                    logger.warning("OR summarization failed (model=%s, title='%s'): %s", model, title, e)
+
+        # Non-OR fallback: Gemini direct
+        try:
+            res = await asyncio.to_thread(
+                self.client.models.generate_content,
+                model=self.model_id,
+                contents=prompt,
+            )
+            logger.debug("RSS summary via Gemini direct for '%s'", title)
+            return res.text
+        except Exception as e:
+            logger.error("Gemini summarization failed for '%s': %s", title, e)
+            return None
 
     def get_feeds(self) -> list[str]:
         if not self.feeds_file.exists():
@@ -94,7 +150,7 @@ class RSSIngress:
                     # Get published date if available
                     published = getattr(entry, "published", "")
 
-                    # Summarize with Gemini
+                    # Summarize via multi-provider fallback chain
                     prompt = (
                         "You are an intelligence analyst. Summarize this news report in 2-3 concise paragraphs, "
                         "focusing on: who is involved, what happened, strategic implications, and any data/figures mentioned.\n\n"
@@ -103,12 +159,9 @@ class RSSIngress:
                         f"Source: {url}\n\n"
                         f"Content:\n{clean_text[:8000]}"  # cap input to avoid token limits
                     )
-                    try:
-                        res = self.client.models.generate_content(model=self.model_id, contents=prompt)
-                        ai_summary = res.text
-                    except Exception as e:
-                        logger.error("Gemini summarization failed for '%s': %s", title, e)
-                        # Fall back to raw text truncation
+                    ai_summary = await self._summarise_with_fallback(prompt, title)
+                    if ai_summary is None:
+                        logger.warning("All summarization providers failed for '%s'; using raw truncation", title)
                         ai_summary = clean_text[:2000]
 
                     # Build the intelligence record

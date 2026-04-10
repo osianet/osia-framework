@@ -7,7 +7,7 @@ embeds results into Qdrant for retrieval-augmented generation at report time.
 
 Desk → model routing:
   HUMINT / Cultural / Geopolitical / InfoWar  → venice-uncensored          (no guardrails, ReAct tool use)
-  Cyber / Finance                             → mistral-31-24b             (Venice-private, native FC)
+  Cyber / Finance                             → mistral-small-3-2-24b-instruct (Venice, native FC)
   Science / Environment / default             → mistral-small-3-2-24b-instruct (cheap, native FC)
 
 Fallback chain: Venice → OpenRouter → Gemini
@@ -23,7 +23,7 @@ Environment variables:
   RESEARCH_BATCH_THRESHOLD    — Min queue depth before processing (default: 3)
   RESEARCH_COOLDOWN_HOURS     — Hours before a topic can be re-researched (default: 72)
   VENICE_MODEL_UNCENSORED     — Override uncensored model slug (default: venice-uncensored)
-  VENICE_MODEL_CYBER          — Override cyber desk model slug (default: mistral-31-24b)
+  VENICE_MODEL_CYBER          — Override cyber desk model slug (default: mistral-small-3-2-24b-instruct)
   VENICE_MODEL_DEFAULT        — Override default model slug (default: mistral-small-3-2-24b-instruct)
   GEMINI_API_KEY              — Fallback if neither Venice nor OpenRouter key is set
   GEMINI_MODEL_ID             — Gemini model ID (default: gemini-2.5-flash)
@@ -90,7 +90,7 @@ RESEARCH_COOLDOWN_SECONDS = int(os.getenv("RESEARCH_COOLDOWN_HOURS", "72")) * 36
 
 # Venice model routing per desk
 VENICE_MODEL_UNCENSORED = os.getenv("VENICE_MODEL_UNCENSORED", "venice-uncensored")
-VENICE_MODEL_CYBER = os.getenv("VENICE_MODEL_CYBER", "mistral-31-24b")
+VENICE_MODEL_CYBER = os.getenv("VENICE_MODEL_CYBER", "mistral-small-3-2-24b-instruct")
 VENICE_MODEL_DEFAULT = os.getenv("VENICE_MODEL_DEFAULT", "mistral-small-3-2-24b-instruct")
 
 # Models that reject tool_choice/tools in the API payload — use ReAct prompt only
@@ -122,7 +122,7 @@ def _model_for_desk(desk: str) -> str:
     if desk in CYBER_DESKS:
         return VENICE_MODEL_CYBER
     if desk in FINANCE_DESKS:
-        return VENICE_MODEL_CYBER  # mistral-31-24b — same tier as Cyber
+        return VENICE_MODEL_CYBER  # same tier as Cyber
     return VENICE_MODEL_DEFAULT
 
 

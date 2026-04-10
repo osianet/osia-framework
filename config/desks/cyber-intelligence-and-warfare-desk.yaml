@@ -6,7 +6,7 @@ prompt_file: templates/prompts/cyber-intelligence-and-warfare-desk.txt
 model:
   primary:
     provider: venice
-    model_id: mistral-31-24b
+    model_id: mistral-small-3-2-24b-instruct
     temperature: 0.4
     max_tokens: 4096
   fallback:

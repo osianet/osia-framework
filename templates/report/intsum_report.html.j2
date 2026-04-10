@@ -8,7 +8,35 @@
 /* ================================================================
    OSIA INTELLIGENCE SUMMARY — DOCUMENT STYLESHEET
    Aesthetic: Traditional Intelligence Agency + Cyber Operations
+   Palette: void_black / signal_green / amber_alert / liberation_red
+   Typography: OsiaTitle (headings) · OsiaMono (body/code) · OsiaBody (meta)
    ================================================================ */
+
+/* ── Ubuntu font family ──────────────────────────────────────── */
+@font-face {
+    font-family: 'OsiaTitle';
+    src: url('/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf') format('truetype');
+    font-weight: bold;
+    font-style: normal;
+}
+@font-face {
+    font-family: 'OsiaMono';
+    src: url('/usr/share/fonts/truetype/ubuntu/UbuntuMono-B.ttf') format('truetype');
+    font-weight: bold;
+    font-style: normal;
+}
+@font-face {
+    font-family: 'OsiaMono';
+    src: url('/usr/share/fonts/truetype/ubuntu/UbuntuMono-R.ttf') format('truetype');
+    font-weight: normal;
+    font-style: normal;
+}
+@font-face {
+    font-family: 'OsiaBody';
+    src: url('/usr/share/fonts/truetype/ubuntu/UbuntuSans[wdth,wght].ttf') format('truetype');
+    font-weight: 100 900;
+    font-style: normal;
+}
 
 @page {
     size: A4;
@@ -18,9 +46,9 @@
         content: "";
     }
     @bottom-center {
-        font-family: 'Courier New', Courier, monospace;
+        font-family: 'OsiaMono', 'Courier New', Courier, monospace;
         font-size: 7pt;
-        color: #ff2222;
+        color: #8B1A1A;
         content: "⬛ OSIA INTERNAL USE ONLY ⬛  |  " attr(data-ref) "  |  PAGE " counter(page) " OF " counter(pages);
         border-top: 1pt solid #3a0000;
         padding-top: 4pt;
@@ -35,30 +63,31 @@
 }
 
 html, body {
-    background-color: #080c08;
-    color: #b8d4b0;
-    font-family: 'Courier New', Courier, monospace;
+    background-color: #0A0C0B;
+    color: #D4CFC4;
+    font-family: 'OsiaMono', 'Courier New', Courier, monospace;
     font-size: 9.5pt;
     line-height: 1.55;
 }
 
 /* ── Classification Banner ─────────────────────────────────────── */
 .classification-banner {
-    background-color: #6b0000;
+    background-color: #5A0C0C;
     color: #ffffff;
     text-align: center;
     padding: 5pt 0;
+    font-family: 'OsiaMono', 'Courier New', Courier, monospace;
     font-size: 8pt;
     font-weight: bold;
     letter-spacing: 0.25em;
     text-transform: uppercase;
-    border-bottom: 2pt solid #cc0000;
+    border-bottom: 2pt solid #8B1A1A;
     page-break-after: avoid;
 }
 
 /* ── Document Header ───────────────────────────────────────────── */
 .doc-header {
-    background: linear-gradient(180deg, #0c110c 0%, #080c08 100%);
+    background: linear-gradient(180deg, #0e140e 0%, #0A0C0B 100%);
     border-bottom: 1pt solid #1e4a1e;
     padding: 14pt 22pt 10pt 22pt;
     page-break-after: avoid;
@@ -97,6 +126,7 @@ html, body {
 }
 
 .agency-name {
+    font-family: 'OsiaTitle', 'Ubuntu', sans-serif;
     font-size: 15pt;
     font-weight: bold;
     color: #00dd55;
@@ -106,17 +136,20 @@ html, body {
 }
 
 .agency-subtitle {
+    font-family: 'OsiaBody', 'Ubuntu Sans', sans-serif;
     font-size: 7.5pt;
-    color: #4a8a4a;
-    letter-spacing: 0.12em;
+    font-weight: 300;
+    color: #4A5248;
+    letter-spacing: 0.10em;
     text-transform: uppercase;
     margin-top: 2pt;
 }
 
 .doc-type {
+    font-family: 'OsiaMono', 'Courier New', Courier, monospace;
     font-size: 11pt;
     font-weight: bold;
-    color: #ff8c00;
+    color: #C8860A;
     letter-spacing: 0.2em;
     text-transform: uppercase;
     margin-top: 5pt;
@@ -129,15 +162,17 @@ html, body {
 }
 
 .ref-number {
+    font-family: 'OsiaMono', 'Courier New', Courier, monospace;
     font-size: 8pt;
-    color: #ff8c00;
+    color: #C8860A;
     letter-spacing: 0.08em;
     font-weight: bold;
 }
 
 .header-timestamp {
+    font-family: 'OsiaBody', 'Ubuntu Sans', sans-serif;
     font-size: 7.5pt;
-    color: #4a8a4a;
+    color: #4A5248;
     margin-top: 3pt;
 }
 
@@ -148,39 +183,51 @@ html, body {
     border-bottom: 2pt solid #1a3a1a;
     padding: 6pt 22pt;
     display: flex;
-    gap: 24pt;
+    flex-wrap: wrap;
+    gap: 6pt 20pt;
     page-break-after: avoid;
 }
 
 .meta-item {
+    font-family: 'OsiaBody', 'Ubuntu Sans', sans-serif;
     font-size: 7.5pt;
-    color: #4a8a4a;
+    color: #4A5248;
     letter-spacing: 0.05em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200pt;
+}
+
+.meta-item.meta-source {
+    max-width: 260pt;
 }
 
 .meta-item strong {
-    color: #ffa040;
+    font-family: 'OsiaMono', 'Courier New', Courier, monospace;
+    color: #C8860A;
     letter-spacing: 0.08em;
 }
 
-/* ── Scanline overlay effect (visual texture) ──────────────────── */
+/* ── Page body ─────────────────────────────────────────────────── */
 .page-body {
-    padding: 16pt 22pt 20pt 22pt;
+    padding: 16pt 22pt 20pt 26pt;
+    border-left: 3pt solid rgba(200, 134, 10, 0.18);
     background-image: repeating-linear-gradient(
         0deg,
         transparent,
         transparent 2px,
-        rgba(0, 20, 0, 0.03) 2px,
-        rgba(0, 20, 0, 0.03) 3px
+        rgba(0, 20, 0, 0.025) 2px,
+        rgba(0, 20, 0, 0.025) 3px
     );
-    min-height: 600pt;
 }
 
 /* ── Body Content Typography ───────────────────────────────────── */
 h1 {
+    font-family: 'OsiaTitle', 'Ubuntu', sans-serif;
     font-size: 13pt;
     font-weight: bold;
-    color: #ff8c00;
+    color: #C8860A;
     letter-spacing: 0.14em;
     text-transform: uppercase;
     margin: 18pt 0 6pt 0;
@@ -190,18 +237,20 @@ h1 {
 }
 
 h2 {
+    font-family: 'OsiaTitle', 'Ubuntu', sans-serif;
     font-size: 11pt;
     font-weight: bold;
-    color: #ffa040;
+    color: #C8860A;
     letter-spacing: 0.12em;
     text-transform: uppercase;
     margin: 14pt 0 5pt 0;
     padding-left: 8pt;
-    border-left: 3pt solid #ff8c00;
+    border-left: 3pt solid #C8860A;
     page-break-after: avoid;
 }
 
 h3 {
+    font-family: 'OsiaTitle', 'Ubuntu', sans-serif;
     font-size: 10pt;
     font-weight: bold;
     color: #ffd060;
@@ -211,6 +260,7 @@ h3 {
 }
 
 h4 {
+    font-family: 'OsiaBody', 'Ubuntu Sans', sans-serif;
     font-size: 9.5pt;
     font-weight: bold;
     color: #c0b040;
@@ -225,12 +275,12 @@ p {
 }
 
 strong, b {
-    color: #ddc090;
+    color: #E8DFC8;
     font-weight: bold;
 }
 
 em, i {
-    color: #90b890;
+    color: #8A9688;
     font-style: italic;
 }
 
@@ -251,17 +301,17 @@ li {
 }
 
 ul li::marker {
-    color: #ff8c00;
+    color: #C8860A;
     content: "▸ ";
 }
 
 ol li::marker {
-    color: #ff8c00;
+    color: #C8860A;
 }
 
 /* ── Code & Pre ────────────────────────────────────────────────── */
 code {
-    font-family: 'Courier New', Courier, monospace;
+    font-family: 'OsiaMono', 'Courier New', Courier, monospace;
     font-size: 8.5pt;
     background-color: #0a180a;
     color: #00dd55;
@@ -298,7 +348,8 @@ table {
 
 th {
     background-color: #0c1c0c;
-    color: #ffa040;
+    color: #C8860A;
+    font-family: 'OsiaMono', 'Courier New', Courier, monospace;
     font-weight: bold;
     padding: 5pt 8pt;
     text-align: left;
@@ -318,7 +369,7 @@ tr:nth-child(even) td {
 }
 
 tr:nth-child(odd) td {
-    background-color: #080c08;
+    background-color: #0A0C0B;
 }
 
 /* ── Horizontal Rules ──────────────────────────────────────────── */
@@ -328,13 +379,13 @@ hr {
     margin: 12pt 0;
 }
 
-/* ── Blockquotes (used for key assessments) ────────────────────── */
+/* ── Blockquotes (key assessments) ────────────────────────────── */
 blockquote {
-    border-left: 3pt solid #ffa040;
+    border-left: 3pt solid #C8860A;
     background-color: #0c140a;
     margin: 8pt 0;
     padding: 6pt 12pt;
-    color: #c8d8c0;
+    color: #D4CFC4;
     font-style: italic;
 }
 
@@ -342,46 +393,31 @@ blockquote {
 h2#sources,
 h2:has(+ ul > li > a),
 .sources-section h2 {
-    color: #40c0ff;
-    border-left-color: #40c0ff;
+    color: #40c0ff !important;
+    border-left-color: #40c0ff !important;
 }
 
-/* ── Source Confidence indicator ───────────────────────────────── */
+/* ── Source Confidence indicators ──────────────────────────────── */
 .source-confidence-high {
     color: #00dd55;
     font-weight: bold;
 }
 
 .source-confidence-moderate {
-    color: #ffa040;
+    color: #C8860A;
     font-weight: bold;
 }
 
 .source-confidence-low {
-    color: #ff4444;
+    color: #cc3333;
     font-weight: bold;
-}
-
-/* ── TIMESTAMP line ────────────────────────────────────────────── */
-p:first-child,
-p strong:first-child {
-    /* Keep timestamp visible */
-}
-
-/* ── Citation markers [N] ──────────────────────────────────────── */
-/* These appear as inline text in the content */
-
-/* ── Corner bracket accent (decorative) ───────────────────────── */
-.corner-accent {
-    color: #1e4a1e;
-    font-size: 7pt;
-    letter-spacing: 0.05em;
 }
 
 /* ── Section divider ───────────────────────────────────────────── */
 .section-divider {
     text-align: center;
     color: #1e3a1e;
+    font-family: 'OsiaMono', 'Courier New', Courier, monospace;
     font-size: 8pt;
     letter-spacing: 0.3em;
     margin: 10pt 0;
@@ -396,19 +432,40 @@ p strong:first-child {
     page-break-inside: avoid;
 }
 </style>
+{% if bg_image_data_uri %}
+<style>
+/* Per-desk background: rendered beneath every page, dark overlay ensures legibility */
+@page {
+    background-image: url('{{ bg_image_data_uri }}');
+    background-size: cover;
+    background-position: center top;
+}
+body {
+    background-image: linear-gradient(
+        to bottom,
+        rgba(10, 12, 11, 0.93) 0%,
+        rgba(10, 12, 11, 0.91) 100%
+    );
+}
+</style>
+{% endif %}
 <style>
   /* Per-desk accent colour injection */
   :root { --desk-accent: {{ desk_accent | default('#C8860A') }}; }
-  .doc-type, .ref-number, h1, .doc-type { color: var(--desk-accent) !important; }
+  .classification-banner:first-of-type { border-top: 4pt solid var(--desk-accent); }
+  .doc-type, .ref-number { color: var(--desk-accent) !important; }
+  h1 { color: var(--desk-accent) !important; border-bottom-color: color-mix(in srgb, var(--desk-accent) 35%, transparent) !important; }
   h2 { color: var(--desk-accent) !important; border-left-color: var(--desk-accent) !important; }
   ul li::marker, ol li::marker { color: var(--desk-accent); }
   .meta-item strong { color: var(--desk-accent) !important; }
   .doc-header { border-bottom-color: color-mix(in srgb, var(--desk-accent) 30%, transparent) !important; }
+  .page-body { border-left-color: color-mix(in srgb, var(--desk-accent) 22%, transparent) !important; }
+  blockquote { border-left-color: var(--desk-accent) !important; }
 </style>
 </head>
 <body data-ref="{{ ref_number }}">
 
-  <!-- Classification Banner -->
+  <!-- Classification Banner (top) — accent bar via CSS :first-of-type -->
   <div class="classification-banner">
     ⬛&nbsp;&nbsp;OSIA INTERNAL USE ONLY — NOT FOR PUBLIC DISTRIBUTION&nbsp;&nbsp;⬛
   </div>
@@ -442,7 +499,7 @@ p strong:first-child {
   <div class="metadata-bar">
     <div class="meta-item"><strong>DESK:</strong> {{ desk_name }}</div>
     <div class="meta-item"><strong>SLUG:</strong> {{ desk_slug }}</div>
-    <div class="meta-item"><strong>SOURCE:</strong> {{ source }}</div>
+    <div class="meta-item meta-source"><strong>SOURCE:</strong> {{ source | truncate(55, true, '…') }}</div>
     <div class="meta-item"><strong>CLASS:</strong> INTERNAL USE ONLY</div>
   </div>
 
@@ -455,7 +512,7 @@ p strong:first-child {
     <div class="section-divider">· · · · · · · · · · END TRANSMISSION · · · · · · · · · · ·</div>
   </div>
 
-  <!-- Bottom Classification Banner -->
+  <!-- Classification Banner (bottom) -->
   <div class="classification-banner">
     ⬛&nbsp;&nbsp;OSIA INTERNAL USE ONLY — NOT FOR PUBLIC DISTRIBUTION&nbsp;&nbsp;⬛
   </div>

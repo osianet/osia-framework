@@ -151,7 +151,7 @@ class ResearchRequest(BaseModel):
         default=None,
         max_length=64,
         pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$",
-        description="Optional desk slug. Determines model routing in the research worker (e.g. cyber gets mistral-31-24b). Defaults to AI-selected routing.",
+        description="Optional desk slug. Determines model routing in the research worker (e.g. cyber gets mistral-small-3-2-24b-instruct). Defaults to AI-selected routing.",
     )
 
     model_config = {"str_strip_whitespace": True}

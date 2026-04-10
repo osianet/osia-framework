@@ -7,6 +7,7 @@ UI changes across app versions and screen sizes.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -15,14 +16,41 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
 from google import genai
 
 from src.gateways.adb_device import ADBDevice
+
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 
 logger = logging.getLogger("osia.social_agent")
 
 # How long to wait for a screen transition after a tap/swipe
 _TRANSITION_WAIT = (1.5, 3.0)  # random range in seconds — looks more human
+
+# Google direct models — tried first using the native genai client.
+# model_id (from env/constructor) is always prepended at runtime.
+# NOTE: gemini-2.5-flash is scheduled for deprecation on Google direct API June 17 2026.
+#       gemini-2.0-flash is restricted (no new access) and shuts down June 1 2026 — removed.
+_VISION_GOOGLE_MODELS = ["gemini-2.5-flash"]
+
+# OpenRouter fallbacks — tried in order when all Google direct models fail.
+# Covers Google-via-OR, Anthropic, and OpenAI so a single provider outage or
+# billing issue cannot take down all vision capability.
+# Last verified: 2026-04-10
+_VISION_OPENROUTER_MODELS = [
+    "google/gemini-2.5-flash",  # Google via OR — separate quota from direct API
+    "google/gemini-2.0-flash-001",  # pinned revision; bare alias google/gemini-2.0-flash removed from OR
+    "anthropic/claude-haiku-4.5",  # Anthropic — OR uses dot notation, not date suffix
+    "openai/gpt-4o-mini",  # OpenAI — reliable vision, different provider entirely
+]
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Return True for errors that warrant trying the next model."""
+    msg = str(exc).upper()
+    return any(s in msg for s in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "OVERLOADED", "502", "504"))
+
 
 # Maximum vision-action iterations per high-level command
 _MAX_STEPS = 15
@@ -92,6 +120,89 @@ class SocialMediaAgent:
         self._screen_height: int | None = None
 
     # ------------------------------------------------------------------
+    # Vision model helper
+    # ------------------------------------------------------------------
+
+    async def _generate_with_fallback(self, screenshot_path: str, prompt: str) -> str:
+        """Try vision models across providers, returning the response text.
+
+        Order:
+          1. Google direct (native genai client) — ``self.model_id`` first,
+             then ``_VISION_GOOGLE_MODELS``.
+          2. OpenRouter — ``_VISION_OPENROUTER_MODELS`` (multiple providers).
+
+        Falls through on any transient error (503 / 429 / UNAVAILABLE).
+        Raises the last exception if every model is exhausted.
+        """
+        last_exc: Exception | None = None
+
+        # --- Google direct ---
+        google_models = [self.model_id] + [m for m in _VISION_GOOGLE_MODELS if m != self.model_id]
+        screen_file = None
+        for model in google_models:
+            try:
+                if screen_file is None:
+                    screen_file = self.gemini.files.upload(file=screenshot_path)
+                response = self.gemini.models.generate_content(
+                    model=model,
+                    contents=[screen_file, prompt],
+                )
+                if model != self.model_id:
+                    logger.info("Vision: Google direct fell back to %s", model)
+                return response.text
+            except Exception as exc:
+                if _is_transient(exc):
+                    logger.warning("Vision: Google/%s unavailable (%s) — trying next", model, str(exc)[:100])
+                    last_exc = exc
+                    screen_file = None  # force fresh upload on next attempt
+                else:
+                    raise
+
+        # --- OpenRouter fallbacks ---
+        if not OPENROUTER_API_KEY:
+            logger.warning("Vision: all Google direct models failed and OPENROUTER_API_KEY is not set")
+            raise last_exc or RuntimeError("All Google vision models unavailable")
+
+        for model in _VISION_OPENROUTER_MODELS:
+            try:
+                text = await self._call_openrouter_vision(screenshot_path, prompt, model)
+                logger.info("Vision: OpenRouter/%s succeeded", model)
+                return text
+            except Exception as exc:
+                logger.warning("Vision: OpenRouter/%s failed (%s) — trying next", model, str(exc)[:100])
+                last_exc = exc
+
+        raise last_exc or RuntimeError("All vision models exhausted")
+
+    async def _call_openrouter_vision(self, screenshot_path: str, prompt: str, model: str) -> str:
+        """Send a screenshot + prompt to a vision model via OpenRouter's chat API."""
+        img_b64 = base64.b64encode(Path(screenshot_path).read_bytes()).decode()
+        async with httpx.AsyncClient(timeout=60.0) as http:
+            resp = await http.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "HTTP-Referer": "https://osia.dev",
+                    "X-Title": "OSIA",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}},
+                                {"type": "text", "text": prompt},
+                            ],
+                        }
+                    ],
+                    "max_tokens": 1024,
+                },
+            )
+            resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+    # ------------------------------------------------------------------
     # Core vision-action loop
     # ------------------------------------------------------------------
 
@@ -123,8 +234,6 @@ class SocialMediaAgent:
             - data: any extracted data (e.g. comment text)
             - reasoning: why this action was chosen
         """
-        screen_file = self.gemini.files.upload(file=screenshot_path)
-
         # Build resolution context string if available
         if self._screen_width and self._screen_height:
             resolution_context = (
@@ -201,12 +310,7 @@ Rules:
 - CRITICAL: If you can see the Android home screen (wallpaper, app icons, clock/date, no social media app visible), use "fail" immediately — do not try to navigate back.
 """
 
-        response = self.gemini.models.generate_content(
-            model=self.model_id,
-            contents=[screen_file, prompt],
-        )
-
-        text = response.text.strip()
+        text = (await self._generate_with_fallback(screenshot_path, prompt)).strip()
         # Strip markdown code fences if the model wraps them
         if text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -533,8 +637,6 @@ Rules:
             logger.warning("_read_engagement_from_current_screen: screenshot failed: %s", exc)
             return {}
 
-        screen_file = self.gemini.files.upload(file=screenshot_path)
-
         if self._screen_width and self._screen_height:
             right_bar_x = int(self._screen_width * 0.85)
             layout_hint = (
@@ -567,11 +669,7 @@ Rules:
         )
 
         try:
-            response = self.gemini.models.generate_content(
-                model=self.model_id,
-                contents=[screen_file, prompt],
-            )
-            text = response.text.strip()
+            text = (await self._generate_with_fallback(screenshot_path, prompt)).strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1] if "\n" in text else text[3:]
             if text.endswith("```"):

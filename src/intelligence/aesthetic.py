@@ -43,19 +43,46 @@ def _load_image_b64(path: Path) -> str | None:
 
 
 def load_logo_b64() -> str | None:
-    return _load_image_b64(_ASSETS_DIR / "osia_logo_sm.png")
+    """Load the OSIA logo as a base64 data URI.
+
+    Prefers the new aesthetic-pack transparent logo; falls back to the legacy
+    ``osia_logo_sm.png`` if the pack hasn't been generated yet.
+    """
+    for candidate in (
+        _ASSETS_DIR / "aesthetic" / "logo_logo_transparent_512.png",
+        _ASSETS_DIR / "osia_logo_sm.png",
+    ):
+        result = _load_image_b64(candidate)
+        if result:
+            return result
+    return None
 
 
 def load_portrait_b64(desk_slug: str) -> str | None:
     return _load_image_b64(_ASSETS_DIR / "portraits" / f"{desk_slug}.png")
 
 
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+def _is_true_png(path: Path) -> bool:
+    """Return True only if the file has real PNG magic bytes (not a JPEG in disguise)."""
+    try:
+        return path.read_bytes()[:8] == _PNG_MAGIC
+    except OSError:
+        return False
+
+
 def load_desk_badge_b64(desk_slug: str) -> str | None:
-    """Load the transparent desk badge from the aesthetic pack, if generated."""
-    # Prefer transparent version, fall back to opaque
+    """Load the transparent desk badge from the aesthetic pack, if generated.
+
+    Only true PNG files are returned — JPEG badges (even with a .png extension)
+    have no alpha channel and render poorly on dark backgrounds.
+    Returns None until proper transparent PNGs are generated.
+    """
     for suffix in (f"badge_{desk_slug}_transparent.png", f"badge_{desk_slug}.png"):
         path = _ASSETS_DIR / "aesthetic" / suffix
-        if path.exists():
+        if path.exists() and _is_true_png(path):
             return _load_image_b64(path)
     return None
 

@@ -277,6 +277,55 @@ def _save_manifest(manifest: dict) -> None:
         json.dump(manifest, f, indent=2)
 
 
+async def remove_badge_backgrounds(resume: bool = False) -> None:
+    """Remove backgrounds from generated desk badge files via Venice AI.
+
+    Reads each ``badge_{slug}.png`` from assets/aesthetic/, removes its background,
+    and writes ``badge_{slug}_transparent.png`` alongside it.
+    """
+    cfg = load_config()
+    manifest: dict = {}
+    if MANIFEST_PATH.exists():
+        with open(MANIFEST_PATH) as f:
+            manifest = json.load(f)
+
+    client = VeniceImageClient()
+    desks = cfg["asset_specs"]["desk_badges"]["desks"]
+
+    for slug in desks:
+        src_path = OUT_DIR / f"badge_{slug}.png"
+        out_path = OUT_DIR / f"badge_{slug}_transparent.png"
+
+        if not src_path.exists():
+            logger.warning("Source not found (generate first): %s", src_path.name)
+            continue
+
+        if resume and out_path.exists():
+            logger.info("SKIP (exists): %s", out_path.name)
+            continue
+
+        logger.info("Removing background: %s → %s", src_path.name, out_path.name)
+        try:
+            await client.remove_background(src_path.read_bytes(), output_path=out_path)
+            manifest[f"badge_{slug}_transparent"] = {
+                "id": f"badge_{slug}_transparent",
+                "source_id": f"badge_{slug}",
+                "category": "desk_badges",
+                "desk": slug,
+                "filename": out_path.name,
+                "path": str(out_path.relative_to(ROOT)),
+                "generated_at": datetime.now(UTC).isoformat(),
+                "tags": ["badge", "desk", "transparent", slug],
+                "bg": "transparent",
+            }
+            _save_manifest(manifest)
+            logger.info("✓ %s", out_path.name)
+        except Exception as e:
+            logger.error("✗ bg-remove %s: %s", slug, e)
+
+    logger.info("Done.")
+
+
 # ── CLI ────────────────────────────────────────────────────────────────────────
 
 
@@ -285,8 +334,16 @@ def main() -> None:
     parser.add_argument("--category", choices=CATEGORIES, default=None)
     parser.add_argument("--resume", action="store_true", help="Skip already-generated files")
     parser.add_argument("--dry-run", action="store_true", help="Print prompts without generating")
+    parser.add_argument(
+        "--remove-bg-badges",
+        action="store_true",
+        help="Remove backgrounds from existing desk badge files (creates badge_{slug}_transparent.png)",
+    )
     args = parser.parse_args()
-    asyncio.run(generate_pack(args.category, args.resume, args.dry_run))
+    if args.remove_bg_badges:
+        asyncio.run(remove_badge_backgrounds(args.resume))
+    else:
+        asyncio.run(generate_pack(args.category, args.resume, args.dry_run))
 
 
 if __name__ == "__main__":
