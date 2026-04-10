@@ -6,6 +6,7 @@ Requires=osia-ingest-epa.service
 # Weekly on Sunday at 03:30 UTC — staggered 90min after NOAA to avoid overlap
 OnCalendar=Sun *-*-* 03:30:00
 AccuracySec=15min
+RandomizedDelaySec=1h
 Persistent=true
 
 [Install]

@@ -6,6 +6,7 @@ Requires=osia-ingest-uspto.service
 # Weekly on Saturday at 02:30 UTC — staggered 90min after FEC
 OnCalendar=Sat *-*-* 02:30:00
 AccuracySec=15min
+RandomizedDelaySec=1h
 Persistent=true
 
 [Install]

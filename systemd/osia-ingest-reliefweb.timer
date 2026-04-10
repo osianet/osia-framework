@@ -6,6 +6,7 @@ Requires=osia-ingest-reliefweb.service
 # Daily at 04:00 UTC — live API, picks up new events each day
 OnCalendar=*-*-* 04:00:00
 AccuracySec=10min
+RandomizedDelaySec=1h
 Persistent=true
 
 [Install]
