@@ -1,6 +1,7 @@
 [Unit]
-Description=OSIA GDELT 2.0 Global Events Ingestion
+Description=OSIA Qdrant Full-Instance Backup
 After=network.target osia-qdrant.service
+Requires=osia-qdrant.service
 
 [Service]
 Type=oneshot
@@ -8,24 +9,18 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/osia-framework
 EnvironmentFile=/home/ubuntu/osia-framework/.env
-ExecStart=/home/ubuntu/osia-framework/.venv/bin/python scripts/ingest_gdelt.py --resume --enqueue-notable
+ExecStart=/home/ubuntu/osia-framework/.venv/bin/python scripts/backup_qdrant.py
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=osia-ingest-gdelt
+SyslogIdentifier=osia-qdrant-backup
+
+# Give it up to 2 hours for very large snapshots
+TimeoutStartSec=7200
 
 NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/home/ubuntu/osia-framework
-ProtectHome=read-only
 PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-
-IOSchedulingClass=idle
-IOSchedulingPriority=7
-Nice=10
-MemoryMax=2G
-MemorySwapMax=500M
 
 [Install]
 WantedBy=multi-user.target

@@ -21,5 +21,11 @@ PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
+IOSchedulingClass=idle
+IOSchedulingPriority=7
+Nice=10
+MemoryMax=2G
+MemorySwapMax=500M
+
 [Install]
 WantedBy=multi-user.target

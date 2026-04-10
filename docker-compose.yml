@@ -9,6 +9,9 @@ services:
       - "127.0.0.1:6334:6334"
     volumes:
       - /home/ubuntu/osia-qdrant/storage:/qdrant/storage
+      - /home/ubuntu/osia-qdrant/snapshots:/qdrant/snapshots
+    mem_limit: 6g
+    memswap_limit: 7g
     restart: always
 
   redis:

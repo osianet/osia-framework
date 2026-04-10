@@ -6,6 +6,7 @@ Requires=osia-ingest-fec.service
 # Weekly on Saturday at 01:00 UTC — FEC bulk data updates weekly
 OnCalendar=Sat *-*-* 01:00:00
 AccuracySec=15min
+RandomizedDelaySec=1h
 Persistent=true
 
 [Install]

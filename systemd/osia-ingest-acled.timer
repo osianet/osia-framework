@@ -6,6 +6,7 @@ Requires=osia-ingest-acled.service
 # Daily at 05:30 UTC — picks up new events since last checkpoint
 OnCalendar=*-*-* 05:30:00
 AccuracySec=10min
+RandomizedDelaySec=1h
 Persistent=true
 
 [Install]
