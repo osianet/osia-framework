@@ -712,7 +712,7 @@ class OsiaOrchestrator:
             return True
 
         if command == "/status":
-            await self._cmd_status(recipient)
+            await self._cmd_status(recipient, arg1)
             return True
 
         if command == "/desks":
@@ -761,20 +761,24 @@ class OsiaOrchestrator:
             "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             "/investigate <topic>\n"
             "  Fan out deep research across the 3 most relevant desks.\n"
-            "  Results are embedded into each desk's knowledge base on the\n"
-            "  next research worker run (every 2h). Trigger immediately with:\n"
-            "  sudo systemctl start osia-research-worker.service\n\n"
+            "  Results embedded into each desk's KB on next worker run (2h).\n\n"
             "/desk <slug> <query>\n"
             "  Route a query directly to a named desk, bypassing AI routing.\n"
-            "  Accepts short aliases: geo, humint, cyber, infowar, env,\n"
-            "  cultural, finance, sci, watch.\n\n"
+            "  Aliases: geo, humint, cyber, infowar, env, cultural, finance,\n"
+            "  sci, watch.\n\n"
             "/search <query>\n"
-            "  Cross-desk Qdrant search across the full intelligence database.\n"
-            "  Returns the top 5 most relevant results with source and score.\n\n"
-            "/status\n"
-            "  Show queue depths and system health.\n\n"
+            "  Cross-desk Qdrant search. Returns top 5 results with scores.\n\n"
+            "/status [section]\n"
+            "  Full system status dashboard, or a specific section:\n"
+            "    system   — CPU, memory, disk, temperature\n"
+            "    services — systemd service health\n"
+            "    docker   — Docker container states\n"
+            "    api      — HTTP + Redis health checks\n"
+            "    qdrant   — KB collections and vector counts\n"
+            "    queue    — task/research/RSS queue depths\n"
+            "    worker   — research worker timer and stats\n\n"
             "/desks\n"
-            "  List all available desk slugs."
+            "  List all available desk slugs and aliases."
         )
         await self.send_signal_message(recipient, help_text)
 
@@ -832,27 +836,415 @@ class OsiaOrchestrator:
             lines.append(f"[{i}] {r.collection} (score: {r.score:.3f}{', ' + ts if ts else ''})\n{preview}…")
         await self.send_signal_message(recipient, "\n\n".join(lines))
 
-    async def _cmd_status(self, recipient: str) -> None:
-        """Report queue depths and system health."""
-        now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    # ------------------------------------------------------------------
+    # Status dashboard helpers
+    # ------------------------------------------------------------------
+
+    _STATUS_SERVICES = [
+        "osia-orchestrator.service",
+        "osia-signal-ingress.service",
+        "osia-rss-ingress.service",
+        "osia-mcp-arxiv-bridge.service",
+        "osia-mcp-phone-bridge.service",
+        "osia-mcp-semantic-scholar-bridge.service",
+        "osia-mcp-tavily-bridge.service",
+        "osia-mcp-time-bridge.service",
+        "osia-mcp-wikipedia-bridge.service",
+        "osia-cyber-bridge.service",
+        "osia-status-api.service",
+        "osia-queue-api.service",
+    ]
+    _STATUS_TIMERS = [
+        "osia-daily-sitrep.timer",
+        "osia-rss-ingress.timer",
+        "osia-research-worker.timer",
+    ]
+    _STATUS_CONTAINERS = [
+        "osia-anythingllm",
+        "osia-qdrant",
+        "osia-redis",
+        "osia-signal",
+        "mailserver",
+        "osia-kali",
+    ]
+
+    async def _run_cmd(self, *args: str, timeout: float = 5.0) -> str:
+        """Run a subprocess and return stripped stdout, or empty string on any failure."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            return stdout.decode().strip()
+        except Exception:
+            return ""
+
+    async def _cmd_status(self, recipient: str, subcommand: str = "") -> None:
+        """Full system status dashboard, or a specific section."""
+        sub = subcommand.lower().strip()
+
+        if sub in ("system", "sys"):
+            msg = await self._status_system()
+        elif sub in ("services", "svc", "service"):
+            msg = await self._status_services()
+        elif sub in ("docker", "containers"):
+            msg = await self._status_docker()
+        elif sub in ("api", "health"):
+            msg = await self._status_api()
+        elif sub in ("qdrant", "kb", "collections"):
+            msg = await self._status_qdrant()
+        elif sub in ("queue", "queues"):
+            msg = await self._status_queue()
+        elif sub in ("worker", "research"):
+            msg = await self._status_worker()
+        elif sub in ("", "all", "full"):
+            # Compact summary across all sections — gathered concurrently
+            now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
+            sections = await asyncio.gather(
+                self._status_system(),
+                self._status_services(),
+                self._status_docker(),
+                self._status_api(),
+                self._status_qdrant_compact(),
+                self._status_queue(),
+                self._status_worker_compact(),
+                return_exceptions=True,
+            )
+            parts = [f"OSIA STATUS — {now}"]
+            for s in sections:
+                if isinstance(s, Exception):
+                    parts.append(f"[section error: {s}]")
+                elif s:
+                    parts.append(s)
+            parts.append("—\n/status <section> for detail:\nsystem|services|docker|api|qdrant|queue|worker")
+            msg = "\n\n".join(parts)
+        else:
+            msg = f"Unknown section: {sub}\nUsage: /status [system|services|docker|api|qdrant|queue|worker]"
+
+        await self.send_signal_message(recipient, msg)
+
+    async def _status_system(self) -> str:
+        """System stats: hostname, uptime, load, CPU temp, memory, disk."""
+        lines = ["SYSTEM"]
+
+        # Hostname + uptime
+        hostname = await self._run_cmd("hostname")
+        uptime_raw = await self._run_cmd("uptime", "-p")
+        lines.append(f"  Host: {hostname or 'unknown'}  |  {uptime_raw or 'uptime unavailable'}")
+
+        # Load average
+        try:
+            load_avg = Path("/proc/loadavg").read_text().split()[:3]
+            lines.append(f"  Load: {' '.join(load_avg)}")
+        except Exception:
+            pass
+
+        # CPU temperature (ARM SBCs)
+        temp_path = Path("/sys/class/thermal/thermal_zone0/temp")
+        if temp_path.exists():
+            try:
+                cpu_temp = int(temp_path.read_text().strip()) // 1000
+                warn = " ⚠️" if cpu_temp >= 70 else (" 🔴" if cpu_temp >= 85 else "")
+                lines.append(f"  CPU Temp: {cpu_temp}°C{warn}")
+            except Exception:
+                pass
+
+        # Memory
+        try:
+            meminfo = Path("/proc/meminfo").read_text()
+            mem_total_kb = int(next(ln for ln in meminfo.splitlines() if ln.startswith("MemTotal:")).split()[1])
+            mem_avail_kb = int(next(ln for ln in meminfo.splitlines() if ln.startswith("MemAvailable:")).split()[1])
+            mem_used_mb = (mem_total_kb - mem_avail_kb) // 1024
+            mem_total_mb = mem_total_kb // 1024
+            mem_pct = mem_used_mb * 100 // mem_total_mb if mem_total_mb else 0
+            warn = " ⚠️" if mem_pct >= 75 else (" 🔴" if mem_pct >= 90 else "")
+            lines.append(f"  Mem: {mem_used_mb}MB / {mem_total_mb}MB ({mem_pct}%){warn}")
+        except Exception:
+            pass
+
+        # Disk
+        project_dir = str(Path(__file__).resolve().parents[2])
+        disk_raw = await self._run_cmd("df", "-h", project_dir)
+        if disk_raw:
+            parts = disk_raw.splitlines()[-1].split()
+            if len(parts) >= 5:
+                disk_pct = int(parts[4].rstrip("%")) if parts[4].rstrip("%").isdigit() else 0
+                warn = " ⚠️" if disk_pct >= 80 else (" 🔴" if disk_pct >= 95 else "")
+                lines.append(f"  Disk: {parts[2]} used, {parts[3]} free ({parts[4]}){warn}")
+
+        return "\n".join(lines)
+
+    async def _status_services(self) -> str:
+        """Systemd service + timer health."""
+        # Check all services concurrently
+        states = await asyncio.gather(
+            *[self._run_cmd("systemctl", "is-active", svc) for svc in self._STATUS_SERVICES],
+            return_exceptions=True,
+        )
+
+        ok = []
+        fail = []
+        for svc, state in zip(self._STATUS_SERVICES, states, strict=True):
+            short = svc.replace(".service", "").replace("osia-", "")
+            if isinstance(state, Exception) or state != "active":
+                fail.append(f"  ❌ {short} ({state if isinstance(state, str) else 'error'})")
+            else:
+                ok.append(short)
+
+        lines = [f"SERVICES [{len(ok)}/{len(self._STATUS_SERVICES)} active]"]
+        if fail:
+            lines.extend(fail)
+        else:
+            lines.append("  All services active")
+
+        # Timers with next trigger
+        lines.append("")
+        lines.append("TIMERS")
+        for timer in self._STATUS_TIMERS:
+            active = await self._run_cmd("systemctl", "is-active", timer)
+            short = timer.replace(".timer", "").replace("osia-", "")
+            if active != "active":
+                lines.append(f"  ❌ {short} ({active or 'inactive'})")
+            else:
+                next_run = await self._run_cmd("systemctl", "show", "-p", "NextElapseUSecRealtime", "--value", timer)
+                # Trim to "YYYY-MM-DD HH:MM" if it looks like a date string
+                next_short = next_run[:16] if len(next_run) > 10 else next_run
+                lines.append(f"  ✅ {short}  →  {next_short or 'n/a'}")
+
+        return "\n".join(lines)
+
+    async def _status_docker(self) -> str:
+        """Docker container states."""
+        # Single docker inspect call for all containers
+        fmt = "{{.Name}}: {{.State.Status}}"
+        raw = await self._run_cmd("docker", "inspect", "--format", fmt, *self._STATUS_CONTAINERS, timeout=8.0)
+
+        lines = [f"DOCKER [{len(self._STATUS_CONTAINERS)} containers]"]
+        if not raw:
+            lines.append("  docker unavailable or no containers found")
+            return "\n".join(lines)
+
+        ok_count = 0
+        for line in raw.splitlines():
+            if ": " not in line:
+                continue
+            name, state = line.split(": ", 1)
+            name = name.lstrip("/")
+            if state == "running":
+                ok_count += 1
+                lines.append(f"  ✅ {name}")
+            else:
+                lines.append(f"  ❌ {name} ({state})")
+
+        # Rewrite header with count
+        lines[0] = f"DOCKER [{ok_count}/{len(self._STATUS_CONTAINERS)} running]"
+        return "\n".join(lines)
+
+    async def _status_api(self) -> str:
+        """HTTP and Redis health checks."""
+        lines = ["API HEALTH"]
+
+        qdrant_url = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
+        qdrant_key = os.getenv("QDRANT_API_KEY")
+        queue_api_ua = os.getenv("QUEUE_API_UA_SENTINEL", "osia-worker/1")
+
+        async def _http_check(name: str, url: str, headers: dict | None = None) -> str:
+            try:
+                async with httpx.AsyncClient(timeout=4.0) as c:
+                    resp = await c.get(url, headers=headers or {})
+                ok = 200 <= resp.status_code < 400
+                return f"  {'✅' if ok else '❌'} {name} (HTTP {resp.status_code})"
+            except Exception as exc:
+                return f"  ❌ {name} (timeout/error: {type(exc).__name__})"
+
+        qdrant_headers = {"api-key": qdrant_key} if qdrant_key else {}
+        checks = await asyncio.gather(
+            _http_check("Qdrant", f"{qdrant_url}/collections", qdrant_headers),
+            _http_check("Signal API", f"{self.signal_api_url}/v1/about"),
+            _http_check("Queue API", "http://localhost:8098/health", {"User-Agent": queue_api_ua}),
+            _http_check("Status API", "http://localhost:8099/health"),
+        )
+        lines.extend(checks)
+
+        # Redis ping
+        try:
+            pong = await self.redis.ping()
+            lines.append(f"  {'✅' if pong else '❌'} Redis")
+        except Exception as exc:
+            lines.append(f"  ❌ Redis ({exc})")
+
+        # Phone bridge
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as c:
+                resp = await c.get("http://localhost:8006/health")
+            data = resp.json()
+            connected = data.get("phone_connected", False)
+            device = data.get("device_id", "none")
+            icon = "✅" if connected else "⚠️"
+            lines.append(f"  {icon} Phone Bridge (device: {device}, connected: {connected})")
+        except Exception:
+            lines.append("  ❌ Phone Bridge (unreachable)")
+
+        return "\n".join(lines)
+
+    async def _status_qdrant(self) -> str:
+        """Full Qdrant KB collection listing with vector counts."""
+        qdrant_url = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
+        qdrant_key = os.getenv("QDRANT_API_KEY")
+        headers = {"api-key": qdrant_key} if qdrant_key else {}
+
+        lines = ["QDRANT KB"]
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as c:
+                resp = await c.get(f"{qdrant_url}/collections", headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as exc:
+            lines.append(f"  ❌ Qdrant unavailable: {exc}")
+            return "\n".join(lines)
+
+        collections = sorted(
+            data.get("result", {}).get("collections", []),
+            key=lambda x: x.get("name", ""),
+        )
+        if not collections:
+            lines.append("  No collections found")
+            return "\n".join(lines)
+
+        total_points = 0
+        coll_details = await asyncio.gather(
+            *[self._qdrant_collection_info(qdrant_url, headers, coll["name"]) for coll in collections],
+            return_exceptions=True,
+        )
+        for coll, info in zip(collections, coll_details, strict=True):
+            name = coll["name"]
+            if isinstance(info, Exception) or info is None:
+                lines.append(f"  • {name}: (error)")
+            else:
+                pts = info.get("points_count", 0) or 0
+                total_points += pts
+                lines.append(f"  • {name}: {pts:,} pts")
+
+        lines.append("  ─────────────────────────")
+        lines.append(f"  Total: {len(collections)} collections, {total_points:,} points")
+        return "\n".join(lines)
+
+    async def _qdrant_collection_info(self, base_url: str, headers: dict, name: str) -> dict | None:
+        """Fetch point/vector counts for a single Qdrant collection."""
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as c:
+                resp = await c.get(f"{base_url}/collections/{name}", headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                return data.get("result", {})
+        except Exception:
+            return None
+
+    async def _status_qdrant_compact(self) -> str:
+        """Single-line Qdrant summary for the full /status view."""
+        qdrant_url = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
+        qdrant_key = os.getenv("QDRANT_API_KEY")
+        headers = {"api-key": qdrant_key} if qdrant_key else {}
+        try:
+            async with httpx.AsyncClient(timeout=6.0) as c:
+                resp = await c.get(f"{qdrant_url}/collections", headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+            colls = data.get("result", {}).get("collections", [])
+            return f"QDRANT KB\n  {len(colls)} collections (use /status qdrant for counts)"
+        except Exception:
+            return "QDRANT KB\n  ❌ Qdrant unavailable"
+
+    async def _status_queue(self) -> str:
+        """Redis queue depths with optional next-task preview."""
+        lines = ["QUEUES"]
         try:
             task_depth, research_depth, rss_depth = await asyncio.gather(
                 self.redis.llen("osia:task_queue"),
                 self.redis.llen("osia:research_queue"),
                 self.redis.llen("osia:rss:daily_digest"),
             )
-        except Exception as e:
-            await self.send_signal_message(recipient, f"Status check failed: {e}")
-            return
+        except Exception as exc:
+            lines.append(f"  ❌ Redis unavailable: {exc}")
+            return "\n".join(lines)
 
-        await self.send_signal_message(
-            recipient,
-            f"OSIA System Status — {now}\n\n"
-            f"Queues:\n"
-            f"  task_queue:       {task_depth} pending\n"
-            f"  research_queue:   {research_depth} pending\n"
-            f"  rss:daily_digest: {rss_depth} staged",
+        lines.append(f"  task_queue:       {task_depth} pending")
+        lines.append(f"  research_queue:   {research_depth} pending")
+        lines.append(f"  rss:daily_digest: {rss_depth} staged")
+
+        if task_depth > 0:
+            try:
+                raw = await self.redis.lindex("osia:task_queue", 0)
+                if raw:
+                    preview = json.loads(raw).get("query", str(raw))[:120]
+                    lines.append(f"  Next task: {preview}")
+            except Exception:
+                pass
+
+        return "\n".join(lines)
+
+    async def _status_worker(self) -> str:
+        """Research worker timer, last run, and queue stats."""
+        lines = ["RESEARCH WORKER"]
+
+        # Timer next run
+        active = await self._run_cmd("systemctl", "is-active", "osia-research-worker.timer")
+        if active == "active":
+            next_run = await self._run_cmd(
+                "systemctl",
+                "show",
+                "-p",
+                "NextElapseUSecRealtime",
+                "--value",
+                "osia-research-worker.timer",
+            )
+            next_short = next_run[:16] if len(next_run) > 10 else next_run
+            lines.append(f"  Timer: ✅ active  →  next {next_short or 'n/a'}")
+        else:
+            lines.append(f"  Timer: ❌ {active or 'inactive'}")
+
+        # Last journal entry from the worker service
+        last_log = await self._run_cmd(
+            "journalctl",
+            "-u",
+            "osia-research-worker.service",
+            "-n",
+            "3",
+            "--no-pager",
+            "-q",
+            "--output=short",
+            timeout=6.0,
         )
+        if last_log:
+            # Trim to last two lines for Signal readability
+            log_lines = [ln for ln in last_log.splitlines() if ln.strip()][-2:]
+            lines.append("  Last runs:")
+            for ln in log_lines:
+                lines.append(f"    {ln[:100]}")
+
+        # Queue and dedup stats
+        try:
+            research_depth, seen_count = await asyncio.gather(
+                self.redis.llen("osia:research_queue"),
+                self.redis.scard("osia:research:seen_topics"),
+            )
+            lines.append(f"  Pending:  {research_depth} queued, {seen_count} already seen")
+        except Exception:
+            lines.append("  Redis unavailable — cannot check queue")
+
+        return "\n".join(lines)
+
+    async def _status_worker_compact(self) -> str:
+        """Single-line worker summary for the full /status view."""
+        active = await self._run_cmd("systemctl", "is-active", "osia-research-worker.timer")
+        try:
+            depth = await self.redis.llen("osia:research_queue")
+        except Exception:
+            depth = "?"
+        icon = "✅" if active == "active" else "❌"
+        return f"RESEARCH WORKER\n  Timer: {icon}  |  Research queue: {depth} pending"
 
     async def _cmd_desks(self, recipient: str) -> None:
         """List all valid desk slugs and their aliases."""
