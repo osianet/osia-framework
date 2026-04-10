@@ -31,7 +31,7 @@ dependencies = [
     "jinja2==3.1.6",
     "markdown==3.10.2",
     "duckduckgo-search==8.1.1",
-    "pypdf==6.9.2",
+    "pypdf==6.10.0",
     "pygments==2.20.0",
     "elevenlabs==2.41.0",
     "chatterbox-tts==0.1.7",
