@@ -15,7 +15,7 @@ payload in-place with a structured verdict and updated reliability_tier.
 Model routing:
   All desks → nousresearch/hermes-4-70b via OpenRouter (SOTA on RefusalBench —
               no censorship, native tool calling, strong structured output)
-  Fallback  → mistral-31-24b via Venice if OPENROUTER_API_KEY is not set
+  Fallback  → mistral-small-3-2-24b-instruct via Venice if OPENROUTER_API_KEY is not set
   Fallback  → Gemini if neither key is available
 
 Verdict transitions:
@@ -105,7 +105,7 @@ DESKS_DIR = Path("config/desks")
 HERMES_MODEL = os.getenv("HERMES_MODEL", "nousresearch/hermes-4-70b")
 
 # Venice fallback — only used when OPENROUTER_API_KEY is not configured.
-VENICE_MODEL_FALLBACK = os.getenv("VENICE_MODEL_FALLBACK", "mistral-31-24b")
+VENICE_MODEL_FALLBACK = os.getenv("VENICE_MODEL_FALLBACK", "mistral-small-3-2-24b-instruct")
 
 # Hermes 4 uses its own <tool_call> XML format via system prompt injection rather than
 # the standard OpenAI tools API parameter. OpenRouter's routing layer has no endpoint
@@ -134,7 +134,7 @@ def _model_for_desk(_desk: str) -> tuple[str, str, str | None]:
 
     All desks use Hermes 4 via OpenRouter — no per-desk splits needed since
     Hermes 4 is uncensored and handles sensitive intelligence content natively.
-    Falls back to Venice mistral-31-24b if OpenRouter is not configured.
+    Falls back to Venice mistral-small-3-2-24b-instruct if OpenRouter is not configured.
     """
     if OPENROUTER_API_KEY:
         return HERMES_MODEL, OPENROUTER_BASE_URL, OPENROUTER_API_KEY
