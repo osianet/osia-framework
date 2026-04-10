@@ -106,10 +106,28 @@ DEFAULT_CPC_SECTIONS = ["G", "H", "C12", "B64", "A61"]
 
 # Defence/strategic assignees for notable enqueue
 NOTABLE_ASSIGNEE_KEYWORDS = {
-    "lockheed", "raytheon", "northrop", "boeing", "bae systems",
-    "general dynamics", "l3", "leidos", "saic", "mitre", "darpa",
-    "department of defense", "navy", "air force", "army", "defense",
-    "huawei", "zte", "hikvision", "dahua", "sensetime", "megvii",
+    "lockheed",
+    "raytheon",
+    "northrop",
+    "boeing",
+    "bae systems",
+    "general dynamics",
+    "l3",
+    "leidos",
+    "saic",
+    "mitre",
+    "darpa",
+    "department of defense",
+    "navy",
+    "air force",
+    "army",
+    "defense",
+    "huawei",
+    "zte",
+    "hikvision",
+    "dahua",
+    "sensetime",
+    "megvii",
 }
 
 CHUNK_SIZE = 500
@@ -168,12 +186,11 @@ def build_document(patent: dict) -> tuple[str, int | None]:
     patent_unix = _parse_date_unix(date)
 
     inventor_names = [
-        f"{inv.get('inventor_first_name', '')} {inv.get('inventor_last_name', '')}".strip()
-        for inv in inventors[:5]
+        f"{inv.get('inventor_first_name', '')} {inv.get('inventor_last_name', '')}".strip() for inv in inventors[:5]
     ]
     assignee_names = [
-        a.get("assignee_organization", "") or
-        f"{a.get('assignee_first_name', '')} {a.get('assignee_last_name', '')}".strip()
+        a.get("assignee_organization", "")
+        or f"{a.get('assignee_first_name', '')} {a.get('assignee_last_name', '')}".strip()
         for a in assignees[:5]
     ]
     assignee_names = [a for a in assignee_names if a]
@@ -283,8 +300,9 @@ class UsptoIngestor:
             await self._ensure_collection()
 
             date_from = await self._resolve_date_from()
-            logger.info("Fetching patents from %s to %s (CPC: %s)", date_from, self.date_to,
-                        ", ".join(self.cpc_sections))
+            logger.info(
+                "Fetching patents from %s to %s (CPC: %s)", date_from, self.date_to, ", ".join(self.cpc_sections)
+            )
 
             stats = IngestStats()
             await self._ingest(stats, date_from)
@@ -324,10 +342,7 @@ class UsptoIngestor:
 
     async def _ingest(self, stats: IngestStats, date_from: str) -> None:
         # Build CPC filter: OR across all sections
-        cpc_criteria = [
-            {"cpc_subgroup_id": {"begins_with": section}}
-            for section in self.cpc_sections
-        ]
+        cpc_criteria = [{"cpc_subgroup_id": {"begins_with": section}} for section in self.cpc_sections]
         cpc_filter = {"_or": cpc_criteria} if len(cpc_criteria) > 1 else cpc_criteria[0]
 
         query = {
@@ -339,13 +354,22 @@ class UsptoIngestor:
         }
 
         fields = [
-            "patent_id", "patent_title", "patent_date", "patent_abstract",
-            "patent_num_claims", "patent_kind",
-            "inventors.inventor_first_name", "inventors.inventor_last_name",
-            "inventors.inventor_city", "inventors.inventor_country",
-            "assignees.assignee_organization", "assignees.assignee_first_name",
-            "assignees.assignee_last_name", "assignees.assignee_country",
-            "cpcs.cpc_section_id", "cpcs.cpc_subgroup_id",
+            "patent_id",
+            "patent_title",
+            "patent_date",
+            "patent_abstract",
+            "patent_num_claims",
+            "patent_kind",
+            "inventors.inventor_first_name",
+            "inventors.inventor_last_name",
+            "inventors.inventor_city",
+            "inventors.inventor_country",
+            "assignees.assignee_organization",
+            "assignees.assignee_first_name",
+            "assignees.assignee_last_name",
+            "assignees.assignee_country",
+            "cpcs.cpc_section_id",
+            "cpcs.cpc_subgroup_id",
         ]
 
         page = 1
@@ -432,8 +456,8 @@ class UsptoIngestor:
         date = patent.get("patent_date", "")
         assignees = patent.get("assignees", []) or []
         assignee_names = [
-            a.get("assignee_organization", "") or
-            f"{a.get('assignee_first_name', '')} {a.get('assignee_last_name', '')}".strip()
+            a.get("assignee_organization", "")
+            or f"{a.get('assignee_first_name', '')} {a.get('assignee_last_name', '')}".strip()
             for a in assignees[:3]
         ]
         assignee_names = [a for a in assignee_names if a]
@@ -486,14 +510,16 @@ class UsptoIngestor:
             return
         assignee_str = "; ".join(assignees[:3])
         topic = f"USPTO strategic patent: {title} — filed by {assignee_str} ({date})"
-        job = json.dumps({
-            "job_id": str(uuid.uuid4()),
-            "topic": topic,
-            "desk": "science-technology-and-commercial-desk",
-            "priority": "normal",
-            "triggered_by": "uspto_ingest",
-            "metadata": {"patent_id": patent_id, "assignees": assignees, "date": date},
-        })
+        job = json.dumps(
+            {
+                "job_id": str(uuid.uuid4()),
+                "topic": topic,
+                "desk": "science-technology-and-commercial-desk",
+                "priority": "normal",
+                "triggered_by": "uspto_ingest",
+                "metadata": {"patent_id": patent_id, "assignees": assignees, "date": date},
+            }
+        )
         await self._redis.rpush(RESEARCH_QUEUE_KEY, job)
         await self._redis.set(redis_key, "1", ex=60 * 60 * 24 * 60)
         stats.events_enqueued += 1
@@ -569,10 +595,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--resume", action="store_true", help="Resume from last Redis checkpoint date")
     p.add_argument("--date-from", help="Start date YYYY-MM-DD (default: 2 years ago)")
     p.add_argument("--date-to", help="End date YYYY-MM-DD (default: today)")
-    p.add_argument("--cpc-sections", nargs="+", default=DEFAULT_CPC_SECTIONS,
-                   help="CPC section codes to include")
-    p.add_argument("--enqueue-notable", action="store_true",
-                   help="Push strategic assignee patents to research queue")
+    p.add_argument("--cpc-sections", nargs="+", default=DEFAULT_CPC_SECTIONS, help="CPC section codes to include")
+    p.add_argument("--enqueue-notable", action="store_true", help="Push strategic assignee patents to research queue")
     p.add_argument("--limit", type=int, default=0, help="Stop after N patents (0=no limit)")
     p.add_argument("--embed-batch-size", type=int, default=32, help="Texts per HF embedding call")
     p.add_argument("--embed-concurrency", type=int, default=3, help="Parallel embedding calls")
