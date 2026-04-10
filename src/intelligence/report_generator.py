@@ -13,7 +13,7 @@ from pathlib import Path
 import markdown as md
 from jinja2 import Environment, FileSystemLoader
 
-from src.intelligence.aesthetic import desk_accent_colour, load_desk_badge_b64, load_logo_b64
+from src.intelligence.aesthetic import desk_accent_colour, load_desk_badge_b64, load_desk_bg_b64, load_logo_b64
 from src.intelligence.thumbnail_generator import generate_report_thumbnail
 
 logger = logging.getLogger("osia.report_generator")
@@ -114,6 +114,7 @@ def generate_intsum_pdf(
         logo_data_uri=load_logo_b64(),
         desk_accent=desk_accent_colour(desk_slug),
         desk_badge_uri=load_desk_badge_b64(desk_slug),
+        bg_image_data_uri=load_desk_bg_b64(desk_slug, "portrait"),
     )
 
     HTML(string=html_content, base_url=str(_TEMPLATES_DIR)).write_pdf(str(output_path))
