@@ -105,7 +105,18 @@ class ADBDevice:
     async def record_screen(self, remote_path: str = "/sdcard/screen_capture.mp4", time_limit: int = 30):
         logger.info("Recording screen for %d seconds...", time_limit)
         cmd = self._build_cmd(["shell", "screenrecord", "--time-limit", str(time_limit), remote_path])
-        await asyncio.to_thread(subprocess.run, cmd)
+        # Add a hard subprocess timeout so a disconnected device can't hang the pipeline.
+        # screenrecord should exit on its own after time_limit seconds; give it 30s grace.
+        subprocess_timeout = time_limit + 30
+        try:
+            await asyncio.to_thread(subprocess.run, cmd, timeout=subprocess_timeout)
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "screenrecord did not exit within %ds (time_limit=%ds) — "
+                "device may have disconnected. Continuing with partial capture.",
+                subprocess_timeout,
+                time_limit,
+            )
 
     async def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300):
         """Perform a swipe gesture between two points."""

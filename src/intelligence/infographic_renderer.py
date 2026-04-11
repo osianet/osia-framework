@@ -12,10 +12,12 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 from jinja2 import Environment, FileSystemLoader
 
 from src.intelligence.aesthetic import load_logo_b64
@@ -34,7 +36,7 @@ _EXTRACT_PROMPT = """\
 You are an intelligence analyst preparing a visual brief.
 Read the following report and extract:
 1. A short, punchy headline (max 10 words) summarising the core finding.
-2. Between 4 and 6 key findings as concise bullet points (each max 25 words).
+2. Between 8 and 12 key findings as concise bullet points (each max 20 words).
 3. A short image prompt (max 30 words) describing a dark, moody, cinematic \
 background scene that evokes the mood and theme of the report. No text, no \
 words, no letters in the image. Abstract and atmospheric.
@@ -46,34 +48,75 @@ REPORT:
 {report_text}"""
 
 
-async def extract_findings(gemini_client, model_id: str, report_text: str) -> dict | None:
-    """Use Gemini to extract structured headline + findings from a report.
+def _parse_findings_json(raw: str) -> dict | None:
+    """Strip fences and parse the JSON blob returned by any model."""
+    raw = raw.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    data = json.loads(raw)
+    headline = data.get("headline", "").strip()
+    findings = [f.strip() for f in data.get("findings", []) if f.strip()]
+    if not headline or len(findings) < 2:
+        return None
+    return {"headline": headline, "findings": findings[:12], "image_prompt": data.get("image_prompt", "")}
 
-    Returns a dict with 'headline' (str) and 'findings' (list[str]),
-    or None if extraction fails.
+
+async def extract_findings(gemini_client, model_id: str, report_text: str) -> dict | None:
+    """Extract structured headline + findings from a report.
+
+    Tries Gemini first; falls back to OpenRouter (Gemini Flash via OR) when
+    the direct Google endpoint is unreachable.
+
+    Returns a dict with 'headline', 'findings', and 'image_prompt', or None.
     """
     prompt = _EXTRACT_PROMPT.format(report_text=report_text[:6000])
+
+    # ── Tier 1: Gemini direct ────────────────────────────────────────────────
     try:
         res = await asyncio.to_thread(
             gemini_client.models.generate_content,
             model=model_id,
             contents=prompt,
         )
-        raw = (res.text or "").strip()
-        # Strip markdown code fences if the model wraps the JSON
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-        data = json.loads(raw)
-        headline = data.get("headline", "").strip()
-        findings = [f.strip() for f in data.get("findings", []) if f.strip()]
-        if not headline or len(findings) < 2:
-            logger.warning("Infographic extraction returned insufficient data: %s", raw[:200])
-            return None
-        return {"headline": headline, "findings": findings[:6], "image_prompt": data.get("image_prompt", "")}
+        result = _parse_findings_json(res.text or "")
+        if result:
+            return result
+        logger.warning("Infographic extraction returned insufficient data from Gemini.")
     except (json.JSONDecodeError, KeyError, TypeError) as e:
-        logger.error("Failed to parse infographic findings JSON: %s", e)
+        logger.error("Failed to parse Gemini infographic JSON: %s", e)
     except Exception as e:
-        logger.error("Infographic findings extraction failed: %s", e)
+        logger.warning("Infographic Gemini extraction failed: %s — trying OpenRouter fallback.", e)
+
+    # ── Tier 2: OpenRouter fallback ──────────────────────────────────────────
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if not openrouter_key:
+        logger.error("Infographic extraction failed and OPENROUTER_API_KEY not set — no fallback.")
+        return None
+    try:
+        logger.info("Infographic extraction: falling back to OpenRouter.")
+        async with httpx.AsyncClient(timeout=60.0) as http:
+            resp = await http.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "google/gemini-2.5-flash",
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"] or ""
+        result = _parse_findings_json(raw)
+        if result:
+            logger.info("Infographic extraction succeeded via OpenRouter fallback.")
+            return result
+        logger.warning("OpenRouter infographic extraction returned insufficient data: %s", raw[:200])
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        logger.error("Failed to parse OpenRouter infographic JSON: %s", e)
+    except Exception as e:
+        logger.error("Infographic OpenRouter fallback also failed: %s", e)
     return None
 
 

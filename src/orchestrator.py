@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -124,8 +125,13 @@ class OsiaOrchestrator:
         self._signal_client = httpx.AsyncClient(timeout=30.0)
 
         # Modern Gemini (media analysis, research loop, image generation)
+        # Timeout of 300s: video generate_content calls can take 60-120s for longer clips;
+        # the default httpx timeout (~60s) causes "Server disconnected" on busy Gemini nodes.
         api_key = os.getenv("GEMINI_API_KEY")
-        self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(timeout=300),
+        )
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
 
         # Venice (desk routing) — uncensored so sensitive queries are never refused or misrouted
@@ -533,6 +539,42 @@ class OsiaOrchestrator:
             self.default_desk,
         )
 
+        # Recover any tasks that were in-flight when the service last crashed.
+        # They were moved to osia:task_processing but never completed, so we
+        # move them back to the front of osia:task_queue for reprocessing.
+        recovered = 0
+        while True:
+            item = await self.redis.lmove(
+                "osia:task_processing", self.queue_name, "LEFT", "LEFT"
+            )
+            if item is None:
+                break
+            recovered += 1
+        if recovered:
+            logger.warning(
+                "Recovered %d in-progress task(s) from previous crash — re-queued for processing.",
+                recovered,
+            )
+
+        # Post a brief startup status message to the Signal group
+        signal_group = os.getenv("SIGNAL_GROUP_ID")
+        if signal_group:
+            try:
+                queued = await self.redis.llen(self.queue_name)
+                research_queued = await self.redis.llen("osia:research_queue")
+                lines = [
+                    "⬛ OSIA ONLINE ⬛",
+                    f"🕐 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}",
+                    f"🗂 Desks active: {len(self.valid_desks)}",
+                    f"📥 Task queue: {queued} pending",
+                    f"🔬 Research queue: {research_queued} pending",
+                ]
+                if recovered:
+                    lines.append(f"♻️ {recovered} task(s) recovered from crash")
+                await self.send_signal_message(signal_group, "\n".join(lines))
+            except Exception as e:
+                logger.warning("Failed to send startup status to Signal: %s", e)
+
     # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
@@ -616,11 +658,22 @@ class OsiaOrchestrator:
         logger.info("OSIA Orchestrator online. Listening to Redis queue: %s", self.queue_name)
         while True:
             try:
-                result = await self.redis.blpop(self.queue_name, timeout=0)
-                if result:
-                    _, task_json = result
+                # Atomically move the task from the input queue into the
+                # processing list before touching it.  If the service crashes
+                # mid-task, bootstrap() will move it back to the input queue
+                # on the next start so it isn't silently dropped.
+                task_json = await self.redis.blmove(
+                    self.queue_name, "osia:task_processing", 0, src="LEFT", dest="RIGHT"
+                )
+                if task_json:
                     task = json.loads(task_json)
-                    await self.process_task(task)
+                    try:
+                        await self.process_task(task)
+                    finally:
+                        # Remove from processing list regardless of outcome.
+                        # A task that raises an unhandled exception has already
+                        # been logged; re-queuing it would just loop forever.
+                        await self.redis.lrem("osia:task_processing", 1, task_json)
             except redis.ConnectionError as e:
                 logger.error("Redis connection lost: %s — retrying in 5s", e)
                 await asyncio.sleep(5)
@@ -757,28 +810,63 @@ class OsiaOrchestrator:
 
     async def _cmd_help(self, recipient: str) -> None:
         help_text = (
-            "OSIA Command Reference\n"
+            "◈ OSIA OPERATIVE GUIDE ◈\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "── NATURAL LANGUAGE ─────────────────\n"
+            "Just send a message. The Chief of Staff reads it, selects the\n"
+            "most relevant desk, assembles context from the knowledge base,\n"
+            "and returns a full intelligence assessment. No command needed.\n\n"
+            "  Examples:\n"
+            "  · What is the current threat posture in the South China Sea?\n"
+            "  · Profile Klaus Schwab — background, influence networks, funding.\n"
+            "  · Explain the strategic implications of the CHIPS Act.\n\n"
+            "── VIDEO & SOCIAL MEDIA LINKS ───────\n"
+            "Paste a URL and OSIA processes it automatically:\n\n"
+            "  YouTube      — transcript extracted and analysed by the desk.\n"
+            "  TikTok       — video screen-recorded via ADB and analysed by Gemini.\n"
+            "  Instagram    — post and comments captured via ADB.\n"
+            "  Facebook     — post content captured via ADB.\n\n"
+            "  Include context after the URL to guide the analysis:\n"
+            "  · https://youtu.be/xyz  — assess for disinfo markers\n\n"
+            "── RESEARCH QUERIES ─────────────────\n"
+            "Anything phrased as an open question or investigation directive\n"
+            "triggers a live multi-tool research loop: web search (Tavily),\n"
+            "academic papers (Semantic Scholar / ArXiv), Wikipedia, and the\n"
+            "full OSIA knowledge base. Results are embedded into the desk KB\n"
+            "for future retrieval.\n\n"
+            "── SLASH COMMANDS ───────────────────\n"
             "/investigate <topic>\n"
-            "  Fan out deep research across the 3 most relevant desks.\n"
-            "  Results embedded into each desk's KB on next worker run (2h).\n\n"
+            "  Fan-out deep research across the 3 most relevant desks in\n"
+            "  parallel. Each desk produces a full INTSUM. Use for complex\n"
+            "  multi-angle topics where one desk is not enough.\n\n"
             "/desk <slug> <query>\n"
-            "  Route a query directly to a named desk, bypassing AI routing.\n"
+            "  Bypass AI routing and send directly to a named desk.\n"
+            "  Useful when you know exactly which desk should handle it.\n"
             "  Aliases: geo, humint, cyber, infowar, env, cultural, finance,\n"
-            "  sci, watch.\n\n"
+            "           sci, watch.\n\n"
             "/search <query>\n"
-            "  Cross-desk Qdrant search. Returns top 5 results with scores.\n\n"
+            "  Semantic search across all desk knowledge bases. Returns the\n"
+            "  top 5 stored intelligence items with relevance scores. Good\n"
+            "  for retrieving prior research without triggering a new analysis.\n\n"
             "/status [section]\n"
-            "  Full system status dashboard, or a specific section:\n"
+            "  System health dashboard. Sections:\n"
             "    system   — CPU, memory, disk, temperature\n"
-            "    services — systemd service health\n"
-            "    docker   — Docker container states\n"
-            "    api      — HTTP + Redis health checks\n"
+            "    services — systemd service states\n"
+            "    docker   — container states\n"
+            "    api      — HTTP + Redis health\n"
             "    qdrant   — KB collections and vector counts\n"
-            "    queue    — task/research/RSS queue depths\n"
-            "    worker   — research worker timer and stats\n\n"
+            "    queue    — task / research / RSS queue depths\n"
+            "    worker   — research worker timer and last run stats\n\n"
             "/desks\n"
-            "  List all available desk slugs and aliases."
+            "  List all available desk slugs and their aliases.\n\n"
+            "/help\n"
+            "  Show this guide.\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "All analysis is backed by OSIA's persistent vector knowledge\n"
+            "base (Qdrant) — 17 collections spanning geopolitics, HUMINT,\n"
+            "cyber, finance, InfoWar, ecology, and declassified archives\n"
+            "(Church Committee, FRUS, Pentagon Papers, CIA CREST, FBI Vault,\n"
+            "WikiLeaks cables, Epstein files). Research auto-embeds into KB."
         )
         await self.send_signal_message(recipient, help_text)
 
@@ -1495,10 +1583,30 @@ class OsiaOrchestrator:
                     break
                 except Exception as e:
                     msg = str(e)
-                    if _attempt < 2 and ("503" in msg or "UNAVAILABLE" in msg or "429" in msg):
-                        wait = 15 * (_attempt + 1)
+                    msg_lower = msg.lower()
+                    _is_network = any(
+                        tok in msg_lower
+                        for tok in ("ssl", "handshake", "timed out", "connection", "reset", "eof")
+                    )
+                    _is_capacity = any(
+                        tok in msg for tok in ("503", "429", "UNAVAILABLE", "502", "504", "OVERLOADED")
+                    )
+                    if _is_network:
+                        # Network-level failure — provider is unreachable right now.
+                        # Retrying won't help; fall through to _research_fallback immediately.
                         logger.warning(
-                            "Research loop Gemini attempt %d failed (%s), retrying in %ds", _attempt + 1, msg[:80], wait
+                            "Research loop: network error (%s) — skipping retries, falling back.",
+                            msg[:80],
+                        )
+                        raise
+                    elif _attempt < 2 and _is_capacity:
+                        # Capacity error (429/503) — short backoff is worth trying.
+                        wait = 10 * (_attempt + 1)
+                        logger.warning(
+                            "Research loop Gemini attempt %d failed (%s), retrying in %ds",
+                            _attempt + 1,
+                            msg[:80],
+                            wait,
                         )
                         await asyncio.sleep(wait)
                     else:
@@ -1584,6 +1692,66 @@ class OsiaOrchestrator:
                 return json.loads(proc.stdout)
         except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
             logger.warning("yt-dlp metadata fetch failed: %s", e)
+        return None
+
+    async def _download_video_yt_dlp(self, url: str) -> str | None:
+        """Try to download the actual video via yt-dlp for direct analysis.
+
+        For public Instagram reels (and TikTok/Facebook) this gives the original
+        encoded video with full-quality audio — far superior to ADB screenrecord
+        which routes audio through Android's screencast pipeline.
+
+        Returns the local file path on success, or None if the content is
+        login-gated, geo-blocked, or yt-dlp otherwise fails.
+        """
+        yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
+        if not yt_dlp_bin.exists():
+            yt_dlp_bin = Path("yt-dlp")
+
+        output_path = str(self.base_dir / "osia_ytdlp_video.mp4")
+
+        cmd = [
+            str(yt_dlp_bin),
+            "--no-playlist",
+            # Best quality up to 720p with audio; fall back progressively
+            "-f", "bv[height<=720]+ba/b[height<=720]/best[height<=720]/best",
+            "--merge-output-format", "mp4",
+            "-o", output_path,
+            "--socket-timeout", "30",
+        ]
+        # Re-use the same cookie files as the metadata fetcher
+        _COOKIE_FILES = {
+            "instagram.com": self.base_dir / "config" / "instagram_cookies.txt",
+            "youtube.com": self.base_dir / "config" / "youtube_cookies.txt",
+            "youtu.be": self.base_dir / "config" / "youtube_cookies.txt",
+        }
+        for domain, cookie_path in _COOKIE_FILES.items():
+            if domain in url and cookie_path.exists():
+                cmd.extend(["--cookies", str(cookie_path)])
+                break
+        cmd.append(url)
+
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run, cmd, capture_output=True, text=True, timeout=120
+            )
+            out = Path(output_path)
+            if proc.returncode == 0 and out.exists() and out.stat().st_size > 10_000:
+                logger.info(
+                    "yt-dlp video download succeeded (%d bytes): %s",
+                    out.stat().st_size,
+                    output_path,
+                )
+                return output_path
+            logger.info(
+                "yt-dlp video download unavailable (rc=%d) — content may require login.\nstderr: %s",
+                proc.returncode,
+                proc.stderr[-300:] if proc.stderr else "(empty)",
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("yt-dlp video download timed out after 120s")
+        except Exception as e:
+            logger.warning("yt-dlp video download error: %s", e)
         return None
 
     async def _detect_video_duration(self, url: str) -> int | None:
@@ -1767,87 +1935,399 @@ class OsiaOrchestrator:
         finally:
             await self.redis.delete("osia:adb:lock")
 
-        # Pre-process: trim to 3 minutes max and re-encode to keep Gemini uploads
-        # small and reliable. Raw ADB captures can be hundreds of MB / many minutes.
+        try:
+            return await self._analyse_video_file(local_path, engagement_counts)
+        finally:
+            try:
+                Path(local_path).unlink(missing_ok=True)
+            except Exception as exc:
+                logger.debug("Could not remove ADB capture file %s: %s", local_path, exc)
+
+    async def _analyse_video_file(
+        self,
+        video_path: str,
+        engagement_counts: dict,
+    ) -> tuple[str | None, dict]:
+        """Transcode a local video and analyse it via Gemini (falling back to Reka).
+
+        Shared by both the ADB screenrecord path (called from process_media_link)
+        and the yt-dlp direct download path.  Cleans up the transcoded temp file
+        but leaves ``video_path`` untouched — callers are responsible for their own
+        input file cleanup.
+
+        Audio is encoded at 128 kbps (up from the old 64 kbps) so that speech is
+        preserved at sufficient fidelity for verbatim transcription.
+        """
         _GEMINI_MAX_SECS = 180
-        upload_path = local_path
-        transcoded_path = local_path.replace(".mp4", "_tc.mp4")
-        try:
-            probe = await asyncio.to_thread(
-                subprocess.run,
-                [
-                    "ffprobe",
-                    "-v",
-                    "quiet",
-                    "-show_entries",
-                    "format=duration",
-                    "-of",
-                    "csv=p=0",
-                    local_path,
-                ],
-                capture_output=True,
-                text=True,
-            )
-            raw_duration = float(probe.stdout.strip() or "0")
-        except Exception:
-            raw_duration = 0.0  # ffprobe unavailable or failed; skip trimming
+        upload_path = video_path
+        transcoded_path = video_path.replace(".mp4", "_tc.mp4")
 
-        if raw_duration > _GEMINI_MAX_SECS:
-            logger.info(
-                "Video is %.0fs — trimming to %ds and re-encoding before Gemini upload.",
-                raw_duration,
-                _GEMINI_MAX_SECS,
+        ff = await asyncio.to_thread(
+            subprocess.run,
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                video_path,
+                "-t",
+                str(_GEMINI_MAX_SECS),       # hard cap at 3 minutes
+                "-vf",
+                "scale='min(720,iw)':-2",    # 720p max — sufficient for content analysis
+                "-b:v",
+                "500k",                       # 500 kbps video — readable text/faces at 720p
+                "-b:a",
+                "128k",                       # 128 kbps audio — sufficient for verbatim transcription
+                "-preset",
+                "fast",
+                "-movflags",
+                "+faststart",
+                transcoded_path,
+            ],
+            capture_output=True,
+            timeout=_GEMINI_MAX_SECS + 60,
+        )
+        if ff.returncode == 0:
+            upload_path = transcoded_path
+            logger.info("Transcoded to 720p/500k/128k for Gemini upload (%s).", transcoded_path)
+        else:
+            logger.warning(
+                "ffmpeg transcode failed (rc=%d) — uploading original.\n%s",
+                ff.returncode,
+                ff.stderr.decode(errors="replace")[:500],
             )
-            ff = await asyncio.to_thread(
-                subprocess.run,
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    local_path,
-                    "-t",
-                    str(_GEMINI_MAX_SECS),
-                    "-vf",
-                    "scale='min(1280,iw)':-2",
-                    "-b:v",
-                    "1M",
-                    "-b:a",
-                    "128k",
-                    "-movflags",
-                    "+faststart",
-                    transcoded_path,
-                ],
-                capture_output=True,
-            )
-            if ff.returncode == 0:
-                upload_path = transcoded_path
-            else:
-                logger.warning("ffmpeg transcode failed (rc=%d) — uploading original.", ff.returncode)
 
         try:
-            logger.info("Uploading captured video to Gemini (%s)...", upload_path)
-            video_file = await asyncio.to_thread(self.client.files.upload, file=upload_path)
+            _MAX_UPLOAD_ATTEMPTS = 3
+            video_file = None
+            for attempt in range(1, _MAX_UPLOAD_ATTEMPTS + 1):
+                try:
+                    logger.info(
+                        "Uploading video to Gemini (%s) — attempt %d/%d...",
+                        upload_path,
+                        attempt,
+                        _MAX_UPLOAD_ATTEMPTS,
+                    )
+                    video_file = await asyncio.to_thread(self.client.files.upload, file=upload_path)
+                    break
+                except Exception as upload_err:
+                    logger.warning(
+                        "Gemini upload attempt %d/%d failed: %s",
+                        attempt,
+                        _MAX_UPLOAD_ATTEMPTS,
+                        upload_err,
+                    )
+                    if attempt < _MAX_UPLOAD_ATTEMPTS:
+                        msg = str(upload_err).lower()
+                        is_network_err = any(
+                            tok in msg for tok in ("ssl", "handshake", "timed out", "connection", "reset")
+                        )
+                        if is_network_err and attempt >= 2:
+                            logger.warning(
+                                "Gemini upload: persistent network error — skipping final retry, falling back to Reka."
+                            )
+                            return await self._analyse_video_reka(upload_path, engagement_counts)
+                        wait = 5 if is_network_err else 5 * attempt
+                        logger.info("Retrying upload in %ds...", wait)
+                        await asyncio.sleep(wait)
+                    else:
+                        logger.error(
+                            "Gemini upload failed after %d attempts — trying Reka fallback.",
+                            _MAX_UPLOAD_ATTEMPTS,
+                        )
+                        return await self._analyse_video_reka(upload_path, engagement_counts)
+
             while video_file.state.name == "PROCESSING":
                 await asyncio.sleep(2)
                 video_file = await asyncio.to_thread(self.client.files.get, name=video_file.name)
 
             prompt = (
-                "Watch this intercepted short-form video. Transcribe any spoken audio, "
-                "describe the visual context, identify any text on screen, and summarize "
-                "the core message or propaganda narrative."
+                "Watch this intercepted video. Transcribe ALL spoken audio verbatim "
+                "and as completely as possible — do not paraphrase or summarise speech, "
+                "reproduce the exact words spoken. Then describe the visual context, "
+                "identify any text on screen, and summarize the core message or narrative."
             )
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=self.model_id,
-                contents=[video_file, prompt],
-            )
-            return response.text, engagement_counts
+            try:
+                response = await asyncio.to_thread(
+                    self.client.models.generate_content,
+                    model=self.model_id,
+                    contents=[video_file, prompt],
+                )
+                return response.text, engagement_counts
+            except Exception as gc_err:
+                logger.warning(
+                    "Gemini generate_content failed: %s — trying Reka fallback.", gc_err
+                )
+                return await self._analyse_video_reka(upload_path, engagement_counts)
         finally:
-            for p in (local_path, transcoded_path):
+            try:
+                Path(transcoded_path).unlink(missing_ok=True)
+            except Exception as exc:
+                logger.debug("Could not remove transcoded file %s: %s", transcoded_path, exc)
+
+    async def _research_fallback(self, query: str) -> tuple[str, SourceTracker]:
+        """Direct-tool research when the Gemini multi-turn loop is unavailable.
+
+        Runs Tavily web search and Wikipedia in parallel without a reasoning
+        loop — no LLM involved, so works even when every Google endpoint is down.
+        Returns concatenated raw results; the desk model provides the synthesis.
+        """
+        logger.info("Direct-tool research fallback for: %s", query[:120])
+        tracker = SourceTracker()
+        parts: list[str] = []
+        q = query[:500]  # keep tool queries short
+
+        web, wiki = await asyncio.gather(
+            self.mcp.call_tool("tavily", "tavily_search", {"query": q}),
+            self.mcp.call_tool("wikipedia", "search_pages", {"input": {"query": q[:200]}}),
+            return_exceptions=True,
+        )
+
+        if not isinstance(web, BaseException):
+            text = _extract_mcp_text(web)
+            if text:
+                parts.append(f"## Web Search (Tavily)\n{text}")
+                tracker.record("search_web", q, text)
+            else:
+                logger.debug("Fallback: Tavily returned empty result")
+        else:
+            logger.warning("Fallback: Tavily failed: %s", web)
+
+        if not isinstance(wiki, BaseException):
+            text = _extract_mcp_text(wiki)
+            if text:
+                parts.append(f"## Wikipedia\n{text}")
+                tracker.record("search_wikipedia", q[:200], text)
+            else:
+                logger.debug("Fallback: Wikipedia returned empty result")
+        else:
+            logger.warning("Fallback: Wikipedia failed: %s", wiki)
+
+        return "\n\n".join(parts), tracker
+
+    # ------------------------------------------------------------------
+    # Reka video analysis fallback
+    # ------------------------------------------------------------------
+
+    async def _analyse_video_reka(
+        self,
+        upload_path: str,
+        engagement_counts: dict,
+    ) -> tuple[str | None, dict]:
+        """Analyse a captured video via Reka — fallback when Gemini is unavailable.
+
+        Two-tier fallback covering any video duration:
+
+        Tier 1 — OpenRouter rekaai/reka-edge
+            60s-trimmed base64 clip. Fast — no upload round-trip. Uses the
+            existing OPENROUTER_API_KEY. Good for typical short reels.
+
+        Tier 2 — Reka Vision API (vision-agent.api.reka.ai)
+            Full multipart file upload + async indexing + Q&A. Handles any
+            duration up to the 180s transcode cap (and beyond if needed).
+            Requires REKA_API_KEY. Remote video is deleted after analysis.
+
+        Returns (analysis_text, engagement_counts), or (None, engagement_counts)
+        if both tiers fail so the caller can degrade to metadata-only analysis.
+        """
+        prompt = (
+            "Watch this intercepted video. Transcribe ALL spoken audio verbatim "
+            "and as completely as possible — do not paraphrase or summarise speech, "
+            "reproduce the exact words spoken. Then describe the visual context, "
+            "identify any text on screen, and summarize the core message or narrative."
+        )
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        reka_key = os.getenv("REKA_API_KEY")
+
+        # Probe duration so we can decide which tier to use.
+        # Tier 1 only covers the first 60s — skip it entirely for longer videos
+        # so we don't silently return a partial analysis.
+        _OR_MAX_SECS = 60
+        try:
+            probe = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    "ffprobe", "-v", "quiet",
+                    "-show_entries", "format=duration",
+                    "-of", "csv=p=0",
+                    upload_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            video_duration = float(probe.stdout.strip() or "0")
+        except Exception:
+            video_duration = 0.0
+        logger.info("Reka fallback: video duration=%.0fs (Tier 1 threshold=%ds)", video_duration, _OR_MAX_SECS)
+
+        # ── Tier 1: OpenRouter reka-edge — base64, 60s trim ───────────────────
+        # Skipped for videos longer than 60s — Tier 2 handles those in full.
+        if openrouter_key and video_duration <= _OR_MAX_SECS:
+            _OR_MAX_SECS = 60
+            trimmed_path = str(
+                Path(upload_path).with_name(Path(upload_path).stem + "_reka60.mp4")
+            )
+            try:
+                ff = await asyncio.to_thread(
+                    subprocess.run,
+                    [
+                        "ffmpeg", "-y", "-i", upload_path,
+                        "-t", str(_OR_MAX_SECS),
+                        "-c", "copy",
+                        trimmed_path,
+                    ],
+                    capture_output=True,
+                    timeout=60,
+                )
+                use_path = trimmed_path if ff.returncode == 0 else upload_path
+                video_bytes = Path(use_path).read_bytes()
+                data_uri = "data:video/mp4;base64," + base64.b64encode(video_bytes).decode()
+
+                async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as http:
+                    resp = await http.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {openrouter_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": "rekaai/reka-edge",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": prompt},
+                                        {"type": "video_url", "video_url": {"url": data_uri}},
+                                    ],
+                                }
+                            ],
+                        },
+                    )
+                    resp.raise_for_status()
+                    analysis = resp.json()["choices"][0]["message"]["content"]
+                    logger.info("Reka video analysis succeeded via OpenRouter (60s clip).")
+                    return analysis, engagement_counts
+            except Exception as or_err:
+                logger.warning(
+                    "Reka via OpenRouter failed: %s — trying Reka Vision API.", or_err
+                )
+            finally:
                 try:
-                    Path(p).unlink(missing_ok=True)
-                except Exception as exc:
-                    logger.debug("Could not remove temp file %s: %s", p, exc)
+                    Path(trimmed_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+        # ── Tier 2: Reka Vision API — full video, any duration ────────────────
+        if not reka_key:
+            logger.error(
+                "REKA_API_KEY not set — cannot use Vision API. "
+                "All video analysis providers exhausted."
+            )
+            return None, engagement_counts
+
+        _VISION_BASE = "https://vision-agent.api.reka.ai"
+        _VISION_HEADERS = {"X-Api-Key": reka_key}
+        video_id: str | None = None
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as http:
+                # Upload
+                logger.info("Reka Vision API: uploading %s...", upload_path)
+                with open(upload_path, "rb") as fh:
+                    up_resp = await http.post(
+                        f"{_VISION_BASE}/v1/videos/upload",
+                        headers=_VISION_HEADERS,
+                        files={"file": ("video.mp4", fh, "video/mp4")},
+                        data={
+                            "video_name": f"osia_{uuid.uuid4().hex[:8]}",
+                            "index": "true",
+                        },
+                    )
+                up_resp.raise_for_status()
+                video_id = up_resp.json()["video_id"]
+                logger.info(
+                    "Reka Vision: upload complete (video_id=%s) — polling for indexing...",
+                    video_id,
+                )
+
+                # Poll until indexed — up to 5 minutes
+                for _ in range(60):
+                    await asyncio.sleep(5)
+                    poll = await http.get(
+                        f"{_VISION_BASE}/v1/videos/{video_id}",
+                        headers=_VISION_HEADERS,
+                    )
+                    status = poll.json().get("indexing_status", "")
+                    logger.debug("Reka Vision indexing status: %s", status)
+                    if status == "indexed":
+                        break
+                    if status == "failed":
+                        raise RuntimeError(
+                            f"Reka Vision indexing failed (video_id={video_id})"
+                        )
+                else:
+                    raise TimeoutError(
+                        "Reka Vision indexing did not complete within 5 minutes"
+                    )
+
+                # Q&A — API uses messages array (chat format), not a bare "question" field
+                qa_resp = await http.post(
+                    f"{_VISION_BASE}/v1/qa/chat",
+                    headers={**_VISION_HEADERS, "Content-Type": "application/json"},
+                    json={
+                        "video_id": video_id,
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                )
+                if not qa_resp.is_success:
+                    logger.error(
+                        "Reka Vision Q&A returned %d: %s",
+                        qa_resp.status_code,
+                        qa_resp.text[:300],
+                    )
+                qa_resp.raise_for_status()
+                qa_data = qa_resp.json()
+                # chat_response is a JSON string containing a sections array;
+                # concatenate all markdown sections to get the full analysis.
+                analysis = None
+                chat_response_raw = qa_data.get("chat_response")
+                if chat_response_raw:
+                    try:
+                        cr = json.loads(chat_response_raw)
+                        sections = cr.get("sections", [])
+                        analysis = "\n\n".join(
+                            s["markdown"] for s in sections if s.get("markdown")
+                        ).strip() or None
+                    except (json.JSONDecodeError, TypeError, KeyError):
+                        # Fallback: use the raw string directly if it isn't JSON
+                        analysis = chat_response_raw.strip() or None
+                if not analysis:
+                    logger.error(
+                        "Reka Vision Q&A: could not extract text. Keys: %s. Raw: %s",
+                        list(qa_data.keys()),
+                        str(qa_data)[:300],
+                    )
+                    raise ValueError(f"Unrecognised Reka Q&A response shape: {list(qa_data.keys())}")
+                logger.info(
+                    "Reka Vision API analysis succeeded (video_id=%s).", video_id
+                )
+                return analysis, engagement_counts
+
+        except Exception as vision_err:
+            logger.error("Reka Vision API failed: %s", vision_err)
+            return None, engagement_counts
+        finally:
+            # Always delete the remote video to avoid accumulating storage
+            if video_id:
+                try:
+                    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as http:
+                        await http.delete(
+                            f"{_VISION_BASE}/v1/videos/{video_id}",
+                            headers=_VISION_HEADERS,
+                        )
+                    logger.debug("Reka Vision: deleted remote video_id=%s", video_id)
+                except Exception as del_err:
+                    logger.debug("Reka Vision cleanup failed (non-fatal): %s", del_err)
 
     # ------------------------------------------------------------------
     # Desk routing via Venice (uncensored — no query is refused or misrouted)
@@ -2018,6 +2498,41 @@ class OsiaOrchestrator:
 
         logger.info("Received new task from %s: %s", source, query)
 
+        # Immediate acknowledgement — let the operative know OSIA has the task
+        # before any slow processing (ADB capture, research loop etc.) begins.
+        if source.startswith("signal:"):
+            _recipient = source[len("signal:"):]
+            _ack_url_match = re.search(r"(https?://[^\s]+)", original_query)
+            _ack_url = (_ack_url_match.group(1).lower() if _ack_url_match else "")
+            if any(d in _ack_url for d in MEDIA_DOMAINS):
+                _platform = next(
+                    d.split(".")[0].capitalize() for d in MEDIA_DOMAINS if d in _ack_url
+                )
+                _ack_msg = (
+                    f"⬛ OSIA TASKED ⬛\n"
+                    f"{_platform} reel detected — ADB screen capture initiated.\n"
+                    f"Stand by for full INTSUM (~2–3 min)."
+                )
+            elif any(d in _ack_url for d in YOUTUBE_DOMAINS):
+                _ack_msg = (
+                    "⬛ OSIA TASKED ⬛\n"
+                    "YouTube video detected — transcript extraction initiated.\n"
+                    "INTSUM incoming."
+                )
+            elif _ack_url:
+                _ack_msg = (
+                    "⬛ OSIA TASKED ⬛\n"
+                    "URL received — research and analysis initiated.\n"
+                    "INTSUM incoming."
+                )
+            else:
+                _ack_msg = (
+                    "⬛ OSIA TASKED ⬛\n"
+                    "Query received — research loop and desk analysis initiated.\n"
+                    "INTSUM incoming."
+                )
+            await self.send_signal_message(_recipient, _ack_msg)
+
         # 1a. Signal attachment analysis (images / videos sent directly to the chat)
         signal_attachments = task.get("attachments") or []
         if signal_attachments:
@@ -2117,20 +2632,47 @@ class OsiaOrchestrator:
 
             elif any(domain in url_lower for domain in MEDIA_DOMAINS):
                 try:
-                    media_result, raw_meta = await asyncio.gather(
-                        self.process_media_link(url),
+                    # Try yt-dlp direct download first — runs in parallel with metadata
+                    # fetch so we don't pay extra time if both succeed.
+                    # For public reels this gives original audio quality; login-gated
+                    # content returns None and we fall back to ADB screenrecord.
+                    yt_video_result, raw_meta = await asyncio.gather(
+                        self._download_video_yt_dlp(url),
                         self._fetch_yt_dlp_metadata(url),
                         return_exceptions=True,
                     )
-                    if isinstance(media_result, BaseException):
-                        logger.error("Media interception failed: %s", media_result)
-                        adb_analysis = None
-                        screen_counts: dict = {}
-                    else:
-                        adb_analysis, screen_counts = media_result
+                    yt_video_path = None if isinstance(yt_video_result, BaseException) else yt_video_result
+                    if isinstance(yt_video_result, BaseException):
+                        logger.warning("yt-dlp video download raised: %s", yt_video_result)
                     if isinstance(raw_meta, BaseException):
                         logger.warning("Social metadata fetch failed: %s", raw_meta)
                         raw_meta = None
+
+                    adb_analysis = None
+                    screen_counts: dict = {}
+
+                    if yt_video_path:
+                        # Public content: analyse the clean yt-dlp download directly.
+                        # No ADB recording needed — engagement counts come from metadata.
+                        logger.info("Using yt-dlp video for analysis (skipping ADB screenrecord)")
+                        try:
+                            adb_analysis, _ = await self._analyse_video_file(yt_video_path, {})
+                        except Exception as ytdlp_err:
+                            logger.error("yt-dlp video analysis failed: %s", ytdlp_err)
+                        finally:
+                            try:
+                                Path(yt_video_path).unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                    else:
+                        # Private/login-required or yt-dlp unavailable — fall back to
+                        # ADB screenrecord. Metadata was already fetched above.
+                        logger.info("yt-dlp download unavailable — falling back to ADB screenrecord")
+                        media_result = await self.process_media_link(url)
+                        if isinstance(media_result, BaseException):
+                            logger.error("ADB media interception failed: %s", media_result)
+                        elif media_result is not None:
+                            adb_analysis, screen_counts = media_result
 
                     # Merge screen-captured engagement counts into yt-dlp metadata.
                     # Instagram never exposes comment_count via yt-dlp; the screenshot
@@ -2178,20 +2720,41 @@ class OsiaOrchestrator:
                     logger.error("Media interception failed: %s", e)
 
         # 2. Automated Research (multi-turn tool calling)
-        try:
-            research_summary, source_tracker = await self.handle_research(original_query or media_analysis or query)
-            if research_summary:
-                logger.info("Research complete.")
-                manifest = source_tracker.format_manifest() if source_tracker else ""
-                citation_block = build_citation_protocol()
-                query = (
-                    f"Baseline research summary for this topic:\n{research_summary}\n\n"
-                    f"{manifest}\n\n"
-                    f"{citation_block}\n\n"
-                    f"Original Request: {query}"
-                )
-        except Exception as e:
-            logger.error("Automated research failed: %s", e)
+        # Skip for social media ADB tasks (Instagram/TikTok/Facebook) — the ADB capture
+        # and yt-dlp metadata already constitute the intelligence gathering for these URLs.
+        # Running handle_research on a raw social media URL produces useless Tavily results.
+        _is_social_media_url = url and any(domain in url.lower() for domain in MEDIA_DOMAINS)
+        if not _is_social_media_url:
+            try:
+                research_summary, source_tracker = await self.handle_research(original_query or media_analysis or query)
+                if research_summary:
+                    logger.info("Research complete.")
+                    manifest = source_tracker.format_manifest() if source_tracker else ""
+                    citation_block = build_citation_protocol()
+                    query = (
+                        f"Baseline research summary for this topic:\n{research_summary}\n\n"
+                        f"{manifest}\n\n"
+                        f"{citation_block}\n\n"
+                        f"Original Request: {query}"
+                    )
+            except Exception as e:
+                logger.error("Automated research failed: %s — attempting direct-tool fallback.", e)
+                try:
+                    research_summary, source_tracker = await self._research_fallback(
+                        original_query or media_analysis or query
+                    )
+                    if research_summary:
+                        logger.info("Direct-tool research fallback produced %d chars.", len(research_summary))
+                        manifest = source_tracker.format_manifest() if source_tracker else ""
+                        citation_block = build_citation_protocol()
+                        query = (
+                            f"Baseline research summary for this topic:\n{research_summary}\n\n"
+                            f"{manifest}\n\n"
+                            f"{citation_block}\n\n"
+                            f"Original Request: {query}"
+                        )
+                except Exception as fallback_err:
+                    logger.error("Direct-tool research fallback also failed: %s", fallback_err)
 
         # 3. Entity extraction + research job enqueuing
         entities = []

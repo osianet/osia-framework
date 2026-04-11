@@ -49,7 +49,10 @@ _VISION_OPENROUTER_MODELS = [
 def _is_transient(exc: Exception) -> bool:
     """Return True for errors that warrant trying the next model."""
     msg = str(exc).upper()
-    return any(s in msg for s in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "OVERLOADED", "502", "504"))
+    return any(s in msg for s in (
+        "503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "OVERLOADED", "502", "504",
+        "SSL", "HANDSHAKE", "TIMED OUT", "CONNECTION", "RESET", "EOF",
+    ))
 
 
 # Maximum vision-action iterations per high-level command
