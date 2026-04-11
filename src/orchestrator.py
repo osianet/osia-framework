@@ -544,9 +544,7 @@ class OsiaOrchestrator:
         # move them back to the front of osia:task_queue for reprocessing.
         recovered = 0
         while True:
-            item = await self.redis.lmove(
-                "osia:task_processing", self.queue_name, "LEFT", "LEFT"
-            )
+            item = await self.redis.lmove("osia:task_processing", self.queue_name, "LEFT", "LEFT")
             if item is None:
                 break
             recovered += 1
@@ -1585,12 +1583,9 @@ class OsiaOrchestrator:
                     msg = str(e)
                     msg_lower = msg.lower()
                     _is_network = any(
-                        tok in msg_lower
-                        for tok in ("ssl", "handshake", "timed out", "connection", "reset", "eof")
+                        tok in msg_lower for tok in ("ssl", "handshake", "timed out", "connection", "reset", "eof")
                     )
-                    _is_capacity = any(
-                        tok in msg for tok in ("503", "429", "UNAVAILABLE", "502", "504", "OVERLOADED")
-                    )
+                    _is_capacity = any(tok in msg for tok in ("503", "429", "UNAVAILABLE", "502", "504", "OVERLOADED"))
                     if _is_network:
                         # Network-level failure — provider is unreachable right now.
                         # Retrying won't help; fall through to _research_fallback immediately.
@@ -1714,10 +1709,14 @@ class OsiaOrchestrator:
             str(yt_dlp_bin),
             "--no-playlist",
             # Best quality up to 720p with audio; fall back progressively
-            "-f", "bv[height<=720]+ba/b[height<=720]/best[height<=720]/best",
-            "--merge-output-format", "mp4",
-            "-o", output_path,
-            "--socket-timeout", "30",
+            "-f",
+            "bv[height<=720]+ba/b[height<=720]/best[height<=720]/best",
+            "--merge-output-format",
+            "mp4",
+            "-o",
+            output_path,
+            "--socket-timeout",
+            "30",
         ]
         # Re-use the same cookie files as the metadata fetcher
         _COOKIE_FILES = {
@@ -1732,9 +1731,7 @@ class OsiaOrchestrator:
         cmd.append(url)
 
         try:
-            proc = await asyncio.to_thread(
-                subprocess.run, cmd, capture_output=True, text=True, timeout=120
-            )
+            proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
             out = Path(output_path)
             if proc.returncode == 0 and out.exists() and out.stat().st_size > 10_000:
                 logger.info(
@@ -1970,13 +1967,13 @@ class OsiaOrchestrator:
                 "-i",
                 video_path,
                 "-t",
-                str(_GEMINI_MAX_SECS),       # hard cap at 3 minutes
+                str(_GEMINI_MAX_SECS),  # hard cap at 3 minutes
                 "-vf",
-                "scale='min(720,iw)':-2",    # 720p max — sufficient for content analysis
+                "scale='min(720,iw)':-2",  # 720p max — sufficient for content analysis
                 "-b:v",
-                "500k",                       # 500 kbps video — readable text/faces at 720p
+                "500k",  # 500 kbps video — readable text/faces at 720p
                 "-b:a",
-                "128k",                       # 128 kbps audio — sufficient for verbatim transcription
+                "128k",  # 128 kbps audio — sufficient for verbatim transcription
                 "-preset",
                 "fast",
                 "-movflags",
@@ -2054,9 +2051,7 @@ class OsiaOrchestrator:
                 )
                 return response.text, engagement_counts
             except Exception as gc_err:
-                logger.warning(
-                    "Gemini generate_content failed: %s — trying Reka fallback.", gc_err
-                )
+                logger.warning("Gemini generate_content failed: %s — trying Reka fallback.", gc_err)
                 return await self._analyse_video_reka(upload_path, engagement_counts)
         finally:
             try:
@@ -2146,9 +2141,13 @@ class OsiaOrchestrator:
             probe = await asyncio.to_thread(
                 subprocess.run,
                 [
-                    "ffprobe", "-v", "quiet",
-                    "-show_entries", "format=duration",
-                    "-of", "csv=p=0",
+                    "ffprobe",
+                    "-v",
+                    "quiet",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "csv=p=0",
                     upload_path,
                 ],
                 capture_output=True,
@@ -2164,16 +2163,19 @@ class OsiaOrchestrator:
         # Skipped for videos longer than 60s — Tier 2 handles those in full.
         if openrouter_key and video_duration <= _OR_MAX_SECS:
             _OR_MAX_SECS = 60
-            trimmed_path = str(
-                Path(upload_path).with_name(Path(upload_path).stem + "_reka60.mp4")
-            )
+            trimmed_path = str(Path(upload_path).with_name(Path(upload_path).stem + "_reka60.mp4"))
             try:
                 ff = await asyncio.to_thread(
                     subprocess.run,
                     [
-                        "ffmpeg", "-y", "-i", upload_path,
-                        "-t", str(_OR_MAX_SECS),
-                        "-c", "copy",
+                        "ffmpeg",
+                        "-y",
+                        "-i",
+                        upload_path,
+                        "-t",
+                        str(_OR_MAX_SECS),
+                        "-c",
+                        "copy",
                         trimmed_path,
                     ],
                     capture_output=True,
@@ -2208,9 +2210,7 @@ class OsiaOrchestrator:
                     logger.info("Reka video analysis succeeded via OpenRouter (60s clip).")
                     return analysis, engagement_counts
             except Exception as or_err:
-                logger.warning(
-                    "Reka via OpenRouter failed: %s — trying Reka Vision API.", or_err
-                )
+                logger.warning("Reka via OpenRouter failed: %s — trying Reka Vision API.", or_err)
             finally:
                 try:
                     Path(trimmed_path).unlink(missing_ok=True)
@@ -2219,10 +2219,7 @@ class OsiaOrchestrator:
 
         # ── Tier 2: Reka Vision API — full video, any duration ────────────────
         if not reka_key:
-            logger.error(
-                "REKA_API_KEY not set — cannot use Vision API. "
-                "All video analysis providers exhausted."
-            )
+            logger.error("REKA_API_KEY not set — cannot use Vision API. All video analysis providers exhausted.")
             return None, engagement_counts
 
         _VISION_BASE = "https://vision-agent.api.reka.ai"
@@ -2262,13 +2259,9 @@ class OsiaOrchestrator:
                     if status == "indexed":
                         break
                     if status == "failed":
-                        raise RuntimeError(
-                            f"Reka Vision indexing failed (video_id={video_id})"
-                        )
+                        raise RuntimeError(f"Reka Vision indexing failed (video_id={video_id})")
                 else:
-                    raise TimeoutError(
-                        "Reka Vision indexing did not complete within 5 minutes"
-                    )
+                    raise TimeoutError("Reka Vision indexing did not complete within 5 minutes")
 
                 # Q&A — API uses messages array (chat format), not a bare "question" field
                 qa_resp = await http.post(
@@ -2295,9 +2288,7 @@ class OsiaOrchestrator:
                     try:
                         cr = json.loads(chat_response_raw)
                         sections = cr.get("sections", [])
-                        analysis = "\n\n".join(
-                            s["markdown"] for s in sections if s.get("markdown")
-                        ).strip() or None
+                        analysis = "\n\n".join(s["markdown"] for s in sections if s.get("markdown")).strip() or None
                     except (json.JSONDecodeError, TypeError, KeyError):
                         # Fallback: use the raw string directly if it isn't JSON
                         analysis = chat_response_raw.strip() or None
@@ -2308,9 +2299,7 @@ class OsiaOrchestrator:
                         str(qa_data)[:300],
                     )
                     raise ValueError(f"Unrecognised Reka Q&A response shape: {list(qa_data.keys())}")
-                logger.info(
-                    "Reka Vision API analysis succeeded (video_id=%s).", video_id
-                )
+                logger.info("Reka Vision API analysis succeeded (video_id=%s).", video_id)
                 return analysis, engagement_counts
 
         except Exception as vision_err:
@@ -2501,13 +2490,11 @@ class OsiaOrchestrator:
         # Immediate acknowledgement — let the operative know OSIA has the task
         # before any slow processing (ADB capture, research loop etc.) begins.
         if source.startswith("signal:"):
-            _recipient = source[len("signal:"):]
+            _recipient = source[len("signal:") :]
             _ack_url_match = re.search(r"(https?://[^\s]+)", original_query)
-            _ack_url = (_ack_url_match.group(1).lower() if _ack_url_match else "")
+            _ack_url = _ack_url_match.group(1).lower() if _ack_url_match else ""
             if any(d in _ack_url for d in MEDIA_DOMAINS):
-                _platform = next(
-                    d.split(".")[0].capitalize() for d in MEDIA_DOMAINS if d in _ack_url
-                )
+                _platform = next(d.split(".")[0].capitalize() for d in MEDIA_DOMAINS if d in _ack_url)
                 _ack_msg = (
                     f"⬛ OSIA TASKED ⬛\n"
                     f"{_platform} reel intercepted — media extraction initiated.\n"
@@ -2515,21 +2502,13 @@ class OsiaOrchestrator:
                 )
             elif any(d in _ack_url for d in YOUTUBE_DOMAINS):
                 _ack_msg = (
-                    "⬛ OSIA TASKED ⬛\n"
-                    "YouTube video detected — transcript extraction initiated.\n"
-                    "INTSUM incoming."
+                    "⬛ OSIA TASKED ⬛\nYouTube video detected — transcript extraction initiated.\nINTSUM incoming."
                 )
             elif _ack_url:
-                _ack_msg = (
-                    "⬛ OSIA TASKED ⬛\n"
-                    "URL received — research and analysis initiated.\n"
-                    "INTSUM incoming."
-                )
+                _ack_msg = "⬛ OSIA TASKED ⬛\nURL received — research and analysis initiated.\nINTSUM incoming."
             else:
                 _ack_msg = (
-                    "⬛ OSIA TASKED ⬛\n"
-                    "Query received — research loop and desk analysis initiated.\n"
-                    "INTSUM incoming."
+                    "⬛ OSIA TASKED ⬛\nQuery received — research loop and desk analysis initiated.\nINTSUM incoming."
                 )
             await self.send_signal_message(_recipient, _ack_msg)
 
