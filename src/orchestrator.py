@@ -2510,7 +2510,7 @@ class OsiaOrchestrator:
                 )
                 _ack_msg = (
                     f"⬛ OSIA TASKED ⬛\n"
-                    f"{_platform} reel detected — ADB screen capture initiated.\n"
+                    f"{_platform} reel intercepted — media extraction initiated.\n"
                     f"Stand by for full INTSUM (~2–3 min)."
                 )
             elif any(d in _ack_url for d in YOUTUBE_DOMAINS):
