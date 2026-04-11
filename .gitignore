@@ -65,3 +65,6 @@ CLAUDE.md
 *.mp3
 *.wav
 osia_capture.*
+
+# Local data sources (large files ingested locally, not committed)
+sources/
