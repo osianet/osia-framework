@@ -117,7 +117,7 @@ def detect_file_type(df: pd.DataFrame) -> str:
 
 
 def file_redis_key(path: Path) -> str:
-    h = hashlib.md5(path.name.encode()).hexdigest()[:12]
+    h = hashlib.md5(path.name.encode(), usedforsecurity=False).hexdigest()[:12]
     return f"{FILE_DONE_KEY_PREFIX}{h}"
 
 
@@ -145,9 +145,18 @@ def _ts_from_year_month(year, month=None) -> int | None:
         m = 1
         if month and not pd.isna(month):
             month_map = {
-                "January": 1, "February": 2, "March": 3, "April": 4,
-                "May": 5, "June": 6, "July": 7, "August": 8,
-                "September": 9, "October": 10, "November": 11, "December": 12,
+                "January": 1,
+                "February": 2,
+                "March": 3,
+                "April": 4,
+                "May": 5,
+                "June": 6,
+                "July": 7,
+                "August": 8,
+                "September": 9,
+                "October": 10,
+                "November": 11,
+                "December": 12,
             }
             if isinstance(month, str):
                 m = month_map.get(month, 1)
@@ -464,11 +473,7 @@ class AcledFileIngestor:
             if len(self._upsert_buffer) >= self.upsert_batch_size:
                 await self._flush_upsert_buffer(stats)
 
-            if (
-                self.enqueue_notable
-                and file_type == "regional"
-                and self._is_notable(row.to_dict())
-            ):
+            if self.enqueue_notable and file_type == "regional" and self._is_notable(row.to_dict()):
                 await self._maybe_enqueue(row.to_dict(), stats)
 
             if self.limit and stats.rows_processed >= self.limit:
@@ -530,14 +535,16 @@ class AcledFileIngestor:
             if fat >= NOTABLE_FATALITY_THRESHOLD:
                 topic += f" — {fat} fatalities"
 
-            job = json.dumps({
-                "job_id": str(uuid.uuid4()),
-                "topic": topic,
-                "desk": "geopolitical-and-security-desk",
-                "priority": "normal",
-                "triggered_by": "acled_files_ingest",
-                "metadata": {"country": country, "event_type": event_type, "fatalities": fat},
-            })
+            job = json.dumps(
+                {
+                    "job_id": str(uuid.uuid4()),
+                    "topic": topic,
+                    "desk": "geopolitical-and-security-desk",
+                    "priority": "normal",
+                    "triggered_by": "acled_files_ingest",
+                    "metadata": {"country": country, "event_type": event_type, "fatalities": fat},
+                }
+            )
             await self._redis.rpush(RESEARCH_QUEUE_KEY, job)
             await self._redis.set(dedup_key, "1", ex=60 * 60 * 24 * 30)
             stats.events_enqueued += 1
@@ -560,10 +567,10 @@ class AcledFileIngestor:
             stats.points_upserted += len(points)
 
     async def _embed_all(self, texts: list[str]) -> list[list[float]]:
-        batches = [texts[i: i + self.embed_batch_size] for i in range(0, len(texts), self.embed_batch_size)]
+        batches = [texts[i : i + self.embed_batch_size] for i in range(0, len(texts), self.embed_batch_size)]
         results: list[list[float]] = []
         for group_start in range(0, len(batches), self.embed_concurrency):
-            group = batches[group_start: group_start + self.embed_concurrency]
+            group = batches[group_start : group_start + self.embed_concurrency]
             group_results = await asyncio.gather(*[self._embed_batch(b) for b in group])
             for batch_vecs in group_results:
                 results.extend(batch_vecs)
