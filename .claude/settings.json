@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "qdrant@qdrant": true
+  }
+}

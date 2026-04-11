@@ -136,9 +136,6 @@ class EntityExtractor:
             logger.warning("No AI API key configured or all providers failed — skipping entity extraction")
             return []
 
-        if raw is None:
-            return []
-
         # Strip markdown code fences if present
         if raw.startswith("```"):
             lines = raw.splitlines()

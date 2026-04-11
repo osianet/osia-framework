@@ -187,8 +187,8 @@ html, body {
     font-weight: 700;
     color: #00dd55;
     line-height: 1.2;
-    margin-top: 36px;
-    margin-bottom: 36px;
+    margin-top: 24px;
+    margin-bottom: 24px;
     letter-spacing: -0.01em;
     position: relative;
     z-index: 2;
@@ -196,10 +196,9 @@ html, body {
 
 /* ── Key findings ──────────────────────────────────────────────── */
 .findings {
-    flex: 1;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 14px;
     position: relative;
     z-index: 2;
 }
@@ -207,8 +206,8 @@ html, body {
 .finding-item {
     display: flex;
     align-items: flex-start;
-    gap: 14px;
-    padding: 16px 20px;
+    gap: 12px;
+    padding: 12px 18px;
     background: rgba(0, 180, 60, 0.04);
     border-left: 3px solid #ff8c00;
     border-radius: 0 4px 4px 0;
@@ -216,24 +215,20 @@ html, body {
 
 .finding-marker {
     color: #ff8c00;
-    font-size: 22px;
+    font-size: 18px;
     line-height: 1.4;
     flex-shrink: 0;
 }
 
 .finding-text {
-    font-size: 20px;
-    line-height: 1.5;
+    font-size: 18px;
+    line-height: 1.45;
     color: #b8d4b0;
-}
-
-/* ── Spacer ────────────────────────────────────────────────────── */
-.spacer {
-    flex: 1;
 }
 
 /* ── Footer ────────────────────────────────────────────────────── */
 .card-footer {
+    margin-top: auto;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -304,9 +299,6 @@ html, body {
     </div>
     {% endfor %}
   </div>
-
-  <!-- Spacer pushes footer down -->
-  <div class="spacer"></div>
 
   <!-- Footer -->
   <div class="card-footer">
