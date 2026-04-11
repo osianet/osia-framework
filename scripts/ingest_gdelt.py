@@ -373,6 +373,7 @@ class GdeltIngestor:
         self.embed_batch_size: int = args.embed_batch_size
         self.embed_concurrency: int = args.embed_concurrency
         self.upsert_batch_size: int = args.upsert_batch_size
+        self.upsert_delay: float = args.upsert_delay
         self.resume: bool = args.resume
 
         self._qdrant = AsyncQdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, port=None)
@@ -645,6 +646,8 @@ class GdeltIngestor:
         if not self.dry_run:
             await self._qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
             logger.debug("Upserted %d points.", len(points))
+            if self.upsert_delay > 0:
+                await asyncio.sleep(self.upsert_delay)
         if stats is not None:
             stats.points_upserted += len(points)
 
@@ -690,6 +693,25 @@ class GdeltIngestor:
             return
         await self._redis.set(CHECKPOINT_KEY, ts_str)
 
+    async def _ensure_collection(self) -> None:
+        if self.dry_run:
+            logger.info("[dry-run] Skipping collection creation.")
+            return
+        exists = await self._qdrant.collection_exists(COLLECTION_NAME)
+        if not exists:
+            await self._qdrant.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config=qdrant_models.VectorParams(
+                    size=EMBEDDING_DIM,
+                    distance=qdrant_models.Distance.COSINE,
+                ),
+                optimizers_config=qdrant_models.OptimizersConfigDiff(indexing_threshold=1000),
+            )
+            logger.info("Created Qdrant collection '%s'.", COLLECTION_NAME)
+        else:
+            info = await self._qdrant.get_collection(COLLECTION_NAME)
+            logger.info("Collection '%s' ready (%d points).", COLLECTION_NAME, info.points_count or 0)
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -709,7 +731,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=0, help="Stop after N events ingested (0=no limit)")
     p.add_argument("--embed-batch-size", type=int, default=48, help="Texts per HF embedding call")
     p.add_argument("--embed-concurrency", type=int, default=3, help="Parallel embedding calls")
-    p.add_argument("--upsert-batch-size", type=int, default=64, help="Points per Qdrant upsert call")
+    p.add_argument("--upsert-batch-size", type=int, default=32, help="Points per Qdrant upsert call")
+    p.add_argument("--upsert-delay", type=float, default=0.5, help="Seconds to sleep after each Qdrant upsert call")
     return p
 
 
