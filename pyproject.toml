@@ -38,7 +38,7 @@ dependencies = [
     "pydub==0.25.1",
     "pymupdf==1.27.2.2",
     "setuptools>=81.0.0",
-    "sentence-transformers>=3.0.0",
+    "sentence-transformers>=5.4.0",
 ]
 
 [project.optional-dependencies]
