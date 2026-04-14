@@ -25,6 +25,7 @@ qdrant:
     - mitre-attack
     - collection-directorate
     - uspto-patents
+    - epa-toxic-releases
   boost_top_k: 2
 
 tools:

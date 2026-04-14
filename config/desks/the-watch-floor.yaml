@@ -29,6 +29,10 @@ qdrant:
     - frus-state-dept
     - church-committee
     - pentagon-papers
+    - gdelt-events
+    - acled-conflict-events
+    - noaa-storm-events
+    - ofac-sanctions
   boost_top_k: 3
 
 tools:

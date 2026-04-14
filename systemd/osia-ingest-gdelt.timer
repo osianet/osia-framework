@@ -3,10 +3,12 @@ Description=Timer for OSIA GDELT Global Events Ingestion — runs daily
 Requires=osia-ingest-gdelt.service
 
 [Timer]
-# Daily at 06:00 UTC — staggered 30min after ACLED
-OnCalendar=*-*-* 06:00:00
-AccuracySec=10min
-RandomizedDelaySec=1h
+# Daily at 05:00 UTC — completes well before the 07:00 SITREP
+# GDELT resume runs process ~96 files (~15-20 min), so this gives
+# a comfortable buffer even if HF embedding is slow.
+OnCalendar=*-*-* 05:00:00
+AccuracySec=5min
+RandomizedDelaySec=10min
 Persistent=true
 
 [Install]

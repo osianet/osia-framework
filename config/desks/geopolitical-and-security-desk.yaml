@@ -32,6 +32,7 @@ qdrant:
     - cia-crest
     - marxists-archive
     - acled-conflict-events
+    - gdelt-events
   boost_top_k: 3
 
 tools:

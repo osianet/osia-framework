@@ -43,6 +43,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -190,9 +191,32 @@ def build_regional_document(row: dict, filename: str) -> tuple[str, int | None]:
             week_str = ts.strftime("%Y-%m-%d")
             event_unix = int(ts.timestamp())
         except Exception:
-            pass
+            pass  # malformed or out-of-range timestamp — week_str/event_unix left empty
+
+    # Pre-compute counts so the narrative sentence can use them
+    try:
+        ev = int(float(events)) if events is not None else 0
+    except (TypeError, ValueError):
+        ev = 0
+    try:
+        fat = int(float(fatalities)) if fatalities is not None else 0
+    except (TypeError, ValueError):
+        fat = 0
+
+    location_parts = [p for p in [admin1, country, region] if p and not (isinstance(p, float) and pd.isna(p))]
 
     lines: list[str] = []
+
+    # Lead with a prose narrative sentence so the embedding model has natural language
+    # to anchor semantic queries on — not just structured key:value fields.
+    if event_type and week_str and location_parts:
+        ev_str = f"{ev} " if ev > 0 else ""
+        fat_suffix = f", resulting in {fat} {'fatality' if fat == 1 else 'fatalities'}" if fat > 0 else ""
+        lines.append(
+            f"In the week of {week_str}, ACLED recorded {ev_str}"
+            f"{event_type.lower()} events in {', '.join(location_parts)}{fat_suffix}."
+        )
+
     if event_type:
         lines.append(f"Event Type: {event_type}" + (f" — {sub_event_type}" if sub_event_type else ""))
     if disorder_type:
@@ -200,7 +224,6 @@ def build_regional_document(row: dict, filename: str) -> tuple[str, int | None]:
     if week_str:
         lines.append(f"Week of: {week_str}")
 
-    location_parts = [p for p in [admin1, country, region] if p and not (isinstance(p, float) and pd.isna(p))]
     if location_parts:
         lines.append(f"Location: {', '.join(location_parts)}")
 
@@ -208,28 +231,19 @@ def build_regional_document(row: dict, filename: str) -> tuple[str, int | None]:
         if lat is not None and lon is not None and not pd.isna(lat) and not pd.isna(lon):
             lines.append(f"Coordinates: {float(lat):.4f}, {float(lon):.4f}")
     except (TypeError, ValueError):
-        pass
+        pass  # malformed lat/lon cell — coordinates omitted from document
 
-    try:
-        ev = int(float(events)) if events is not None else 0
-        if ev > 0:
-            lines.append(f"Events this week: {ev}")
-    except (TypeError, ValueError):
-        pass
-
-    try:
-        fat = int(float(fatalities)) if fatalities is not None else 0
-        if fat > 0:
-            lines.append(f"Fatalities: {fat}")
-    except (TypeError, ValueError):
-        pass
+    if ev > 0:
+        lines.append(f"Events this week: {ev}")
+    if fat > 0:
+        lines.append(f"Fatalities: {fat}")
 
     try:
         pop = int(float(pop_exposure)) if pop_exposure is not None else 0
         if pop > 0:
             lines.append(f"Population Exposure: {pop:,}")
     except (TypeError, ValueError):
-        pass
+        pass  # malformed population exposure cell — field omitted
 
     if len(lines) < 3:
         return "", event_unix
@@ -254,20 +268,34 @@ def build_summary_document(row: dict, stat_label: str) -> tuple[str, int | None]
     if month and not (isinstance(month, float) and pd.isna(month)):
         period = f"{month} {int(year)}"
 
-    lines: list[str] = [f"ACLED Statistics — {stat_label}"]
-    lines.append(f"Country: {country}")
-    lines.append(f"Period: {period}")
-
+    # Pre-compute values for narrative
+    ev_int: int | None = None
+    fat_int: int | None = None
     if events is not None and not (isinstance(events, float) and pd.isna(events)):
         try:
-            lines.append(f"Events: {int(float(events))}")
+            ev_int = int(float(events))
         except (TypeError, ValueError):
-            pass
+            pass  # non-numeric events cell — ev_int stays None
     if fatalities is not None and not (isinstance(fatalities, float) and pd.isna(fatalities)):
         try:
-            lines.append(f"Fatalities: {int(float(fatalities))}")
+            fat_int = int(float(fatalities))
         except (TypeError, ValueError):
-            pass
+            pass  # non-numeric fatalities cell — fat_int stays None
+
+    lines: list[str] = []
+
+    # Lead with a prose narrative sentence for better semantic embedding
+    ev_str = f"{ev_int} events" if ev_int is not None else "events"
+    fat_str = f" and {fat_int} fatalities" if fat_int is not None else ""
+    lines.append(f"{country} reported {ev_str}{fat_str} in {period} according to ACLED ({stat_label}).")
+
+    lines.append(f"ACLED Statistics — {stat_label}")
+    lines.append(f"Country: {country}")
+    lines.append(f"Period: {period}")
+    if ev_int is not None:
+        lines.append(f"Events: {ev_int}")
+    if fat_int is not None:
+        lines.append(f"Fatalities: {fat_int}")
 
     if len(lines) < 3:
         return "", event_unix
@@ -400,6 +428,23 @@ class AcledFileIngestor:
             info = await self._qdrant.get_collection(COLLECTION_NAME)
             logger.info("Collection '%s' ready (%d points).", COLLECTION_NAME, info.points_count or 0)
 
+        # Ensure payload indexes exist (idempotent — safe to call on every run).
+        keyword_fields = ["event_type", "country", "region", "document_type", "provenance"]
+        float_fields = ["fatality_weight", "ingested_at_unix"]
+        for field_name in keyword_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.KEYWORD,
+            )
+        for field_name in float_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.FLOAT,
+            )
+        logger.info("Payload indexes verified for '%s'.", COLLECTION_NAME)
+
     async def _ingest_file(self, path: Path, stats: IngestStats) -> None:
         logger.info("Reading %s ...", path.name)
         try:
@@ -465,6 +510,9 @@ class AcledFileIngestor:
                         payload["fatalities"] = fat
                 except (TypeError, ValueError):
                     fat = 0
+                # Normalised fatality weight [0,1]: log1p-scaled, ceiling at 100 fatalities.
+                # Used by the orchestrator as a score multiplier for boost-collection queries.
+                payload["fatality_weight"] = min(1.0, math.log1p(fat) / math.log1p(100))
 
             self._upsert_buffer.append(
                 qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload)

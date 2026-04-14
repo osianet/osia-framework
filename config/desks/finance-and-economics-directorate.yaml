@@ -27,6 +27,9 @@ qdrant:
     - icij-offshore-leaks
     - yahoo-finance
     - ofac-sanctions
+    - gdelt-events
+    - epa-toxic-releases
+    - noaa-storm-events
   boost_top_k: 3
 
 tools:

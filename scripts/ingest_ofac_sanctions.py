@@ -273,6 +273,14 @@ def build_document(e: dict) -> str:
     name_parts = [p for p in [e["first_name"], e["last_name"]] if p]
     full_name = " ".join(name_parts)
 
+    # Lead with a prose narrative sentence for better semantic embedding
+    if full_name or e["sdn_type"]:
+        entity_desc = full_name if full_name else "an unnamed entity"
+        type_label = e["sdn_type"].lower() if e["sdn_type"] else "entity"
+        prog_str = f" under {', '.join(e['programs'][:3])}" if e["programs"] else ""
+        nat_str = f" of {e['nationalities'][0]} nationality" if e["nationalities"] else ""
+        lines.append(f"{entity_desc} is a US Treasury OFAC-sanctioned {type_label}{nat_str}{prog_str}.")
+
     lines.append(f"OFAC Sanctions Entry — {e['sdn_type']}")
     if full_name:
         lines.append(f"Name: {full_name}")
@@ -458,6 +466,23 @@ class OfacSdnIngestor:
                 COLLECTION_NAME,
                 info.points_count or 0,
             )
+
+        # Ensure payload indexes exist (idempotent — safe to call on every run).
+        keyword_fields = ["sdn_type", "entity_name", "document_type", "provenance"]
+        float_fields = ["ingested_at_unix"]
+        for field_name in keyword_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.KEYWORD,
+            )
+        for field_name in float_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.FLOAT,
+            )
+        logger.info("Payload indexes verified for '%s'.", COLLECTION_NAME)
 
     # ------------------------------------------------------------------
     # XML ingestion

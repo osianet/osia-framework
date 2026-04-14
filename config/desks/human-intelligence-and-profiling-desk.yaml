@@ -29,6 +29,8 @@ qdrant:
     - fbi-vault
     - fec-campaign-finance
     - courtlistener-cases
+    - gdelt-events
+    - ofac-sanctions
   boost_top_k: 3
 
 tools:
