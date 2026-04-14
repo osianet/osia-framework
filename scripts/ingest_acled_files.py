@@ -191,7 +191,7 @@ def build_regional_document(row: dict, filename: str) -> tuple[str, int | None]:
             week_str = ts.strftime("%Y-%m-%d")
             event_unix = int(ts.timestamp())
         except Exception:
-            pass
+            pass  # malformed or out-of-range timestamp — week_str/event_unix left empty
 
     # Pre-compute counts so the narrative sentence can use them
     try:
@@ -231,7 +231,7 @@ def build_regional_document(row: dict, filename: str) -> tuple[str, int | None]:
         if lat is not None and lon is not None and not pd.isna(lat) and not pd.isna(lon):
             lines.append(f"Coordinates: {float(lat):.4f}, {float(lon):.4f}")
     except (TypeError, ValueError):
-        pass
+        pass  # malformed lat/lon cell — coordinates omitted from document
 
     if ev > 0:
         lines.append(f"Events this week: {ev}")
@@ -243,7 +243,7 @@ def build_regional_document(row: dict, filename: str) -> tuple[str, int | None]:
         if pop > 0:
             lines.append(f"Population Exposure: {pop:,}")
     except (TypeError, ValueError):
-        pass
+        pass  # malformed population exposure cell — field omitted
 
     if len(lines) < 3:
         return "", event_unix
@@ -275,12 +275,12 @@ def build_summary_document(row: dict, stat_label: str) -> tuple[str, int | None]
         try:
             ev_int = int(float(events))
         except (TypeError, ValueError):
-            pass
+            pass  # non-numeric events cell — ev_int stays None
     if fatalities is not None and not (isinstance(fatalities, float) and pd.isna(fatalities)):
         try:
             fat_int = int(float(fatalities))
         except (TypeError, ValueError):
-            pass
+            pass  # non-numeric fatalities cell — fat_int stays None
 
     lines: list[str] = []
 

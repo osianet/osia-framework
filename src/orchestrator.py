@@ -2215,7 +2215,7 @@ class OsiaOrchestrator:
                 try:
                     Path(trimmed_path).unlink(missing_ok=True)
                 except Exception:
-                    pass
+                    pass  # best-effort cleanup — ignore if already deleted
 
         # ── Tier 2: Reka Vision API — full video, any duration ────────────────
         if not reka_key:
@@ -2657,7 +2657,7 @@ class OsiaOrchestrator:
                             try:
                                 Path(yt_video_path).unlink(missing_ok=True)
                             except Exception:
-                                pass
+                                pass  # best-effort cleanup — ignore if already deleted
                     else:
                         # Private/login-required or yt-dlp unavailable — fall back to
                         # ADB screenrecord. Metadata was already fetched above.
