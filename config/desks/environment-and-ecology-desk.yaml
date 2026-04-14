@@ -26,6 +26,7 @@ qdrant:
     - epa-toxic-releases
     - wikileaks-cables
     - collection-directorate
+    - gdelt-events
   boost_top_k: 3
 
 tools:

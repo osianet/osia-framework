@@ -2425,7 +2425,22 @@ class OsiaOrchestrator:
 
             async def _search_boost(col: str) -> list:
                 try:
-                    return await self.qdrant.search(col, cross_search_query, boost_top_k, decay_half_life_days=70.0)
+                    # Collections with pre-computed signal-strength weights get a score
+                    # multiplier so high-signal records surface above low-signal noise.
+                    _BOOST_FIELDS = {
+                        "gdelt-events": "mentions_weight",
+                        "acled-conflict-events": "fatality_weight",
+                        "epa-toxic-releases": "release_weight",
+                        "noaa-storm-events": "damage_weight",
+                    }
+                    boost_field = _BOOST_FIELDS.get(col)
+                    return await self.qdrant.search(
+                        col,
+                        cross_search_query,
+                        boost_top_k,
+                        decay_half_life_days=70.0,
+                        payload_boost_field=boost_field,
+                    )
                 except Exception as e:
                     logger.warning("Boost collection '%s' unavailable: %s", col, e)
                     return []
@@ -2647,11 +2662,10 @@ class OsiaOrchestrator:
                         # Private/login-required or yt-dlp unavailable — fall back to
                         # ADB screenrecord. Metadata was already fetched above.
                         logger.info("yt-dlp download unavailable — falling back to ADB screenrecord")
-                        media_result = await self.process_media_link(url)
-                        if isinstance(media_result, BaseException):
-                            logger.error("ADB media interception failed: %s", media_result)
-                        elif media_result is not None:
-                            adb_analysis, screen_counts = media_result
+                        try:
+                            adb_analysis, screen_counts = await self.process_media_link(url)
+                        except Exception as adb_err:
+                            logger.error("ADB media interception failed: %s", adb_err)
 
                     # Merge screen-captured engagement counts into yt-dlp metadata.
                     # Instagram never exposes comment_count via yt-dlp; the screenshot
@@ -2695,6 +2709,21 @@ class OsiaOrchestrator:
                     if context_parts:
                         media_analysis = "\n\n".join(context_parts)
                         query = f"A media intercept from {url} was just ingested. Context:\n{media_analysis}\n\nOriginal Request: {query}"
+                    else:
+                        # Both yt-dlp and ADB failed — nothing to route to a desk.
+                        # Notify the operative and abort rather than forwarding a bare URL.
+                        logger.warning("Media interception produced no content for %s — aborting task.", url)
+                        if source.startswith("signal:"):
+                            _recipient = source[len("signal:") :]
+                            await self.send_signal_message(
+                                _recipient,
+                                f"⚠️ OSIA — Collection failure\n"
+                                f"No content could be extracted from:\n{url}\n\n"
+                                f"yt-dlp: login required or rate-limited\n"
+                                f"ADB: device offline or unavailable\n\n"
+                                f"Resubmit once the ADB device is reconnected and/or cookies are refreshed.",
+                            )
+                        return
                 except Exception as e:
                     logger.error("Media interception failed: %s", e)
 

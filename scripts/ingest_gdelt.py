@@ -6,8 +6,9 @@ Qdrant collection for Information & Psychological Warfare desk RAG retrieval.
 
 GDELT monitors the world's news media in 100+ languages, encoding events using
 the CAMEO taxonomy. Each 15-minute file covers the globe. This script filters
-for information-warfare-relevant events: high-conflict events, media-actor
-events, propaganda/narrative operations, and high-coverage flashpoints.
+for events relevant across multiple OSIA desks: any event that clears the
+min-mentions coverage bar (including cooperation, diplomacy, aid, and conflict),
+plus lower-threshold passes for media-actor events and known infowar CAMEO codes.
 
 Source: https://www.gdeltproject.org/
 Free public data, no authentication required. Updated every 15 minutes.
@@ -16,9 +17,10 @@ CAMEO QuadClass:
   1 = Verbal Cooperation  2 = Material Cooperation
   3 = Verbal Conflict     4 = Material Conflict
 
-Filter (either condition passes):
-  (QuadClass >= 3 AND NumMentions >= 10)  — high-coverage conflict events
-  (Actor is media type "MED" AND NumMentions >= 5)  — media-actor events
+Filter (any condition passes):
+  NumMentions >= min_mentions (default 10)  — any sufficiently covered event
+  Actor is media type "MED" AND NumMentions >= 5  — media-actor events
+  CAMEO infowar root code AND NumMentions >= 5  — statements, coercion, protest, etc.
 
 Usage:
   uv run python scripts/ingest_gdelt.py
@@ -53,6 +55,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -180,6 +183,273 @@ NOTABLE_MIN_QUADCLASS = 4
 CHUNK_SIZE = 400
 CHUNK_OVERLAP_WORDS = 50
 
+# GDELT uses FIPS 10-4 country codes (NOT ISO 3166).  Many differ from ISO:
+# CH=China (not Switzerland), GM=Germany (not Gambia), RS=Russia (not Serbia),
+# AS=Australia (not American Samoa), SF=South Africa, UP=Ukraine, etc.
+FIPS_COUNTRY_NAMES: dict[str, str] = {
+    "AA": "Aruba",
+    "AC": "Antigua and Barbuda",
+    "AF": "Afghanistan",
+    "AG": "Algeria",
+    "AJ": "Azerbaijan",
+    "AL": "Albania",
+    "AM": "Armenia",
+    "AN": "Andorra",
+    "AO": "Angola",
+    "AR": "Argentina",
+    "AS": "Australia",
+    "AU": "Austria",
+    "AV": "Anguilla",
+    "AY": "Antarctica",
+    "BA": "Bahrain",
+    "BB": "Barbados",
+    "BC": "Botswana",
+    "BE": "Belgium",
+    "BF": "Bahamas",
+    "BG": "Bangladesh",
+    "BH": "Belize",
+    "BK": "Bosnia and Herzegovina",
+    "BL": "Bolivia",
+    "BM": "Burma (Myanmar)",
+    "BN": "Benin",
+    "BO": "Belarus",
+    "BP": "Solomon Islands",
+    "BR": "Brazil",
+    "BT": "Bhutan",
+    "BU": "Bulgaria",
+    "BY": "Burundi",
+    "CA": "Canada",
+    "CB": "Cambodia",
+    "CD": "Chad",
+    "CE": "Sri Lanka",
+    "CF": "Congo (Republic)",
+    "CG": "Congo (DRC)",
+    "CH": "China",
+    "CI": "Chile",
+    "CM": "Cameroon",
+    "CN": "Comoros",
+    "CO": "Colombia",
+    "CS": "Costa Rica",
+    "CT": "Central African Republic",
+    "CU": "Cuba",
+    "CV": "Cape Verde",
+    "CY": "Cyprus",
+    "DA": "Denmark",
+    "DJ": "Djibouti",
+    "DO": "Dominica",
+    "DR": "Dominican Republic",
+    "EC": "Ecuador",
+    "EG": "Egypt",
+    "EI": "Ireland",
+    "EK": "Equatorial Guinea",
+    "EN": "Estonia",
+    "ER": "Eritrea",
+    "ES": "El Salvador",
+    "ET": "Ethiopia",
+    "EZ": "Czech Republic",
+    "FI": "Finland",
+    "FJ": "Fiji",
+    "FK": "Falkland Islands",
+    "FM": "Micronesia",
+    "FO": "Faroe Islands",
+    "FR": "France",
+    "GA": "Gambia",
+    "GB": "Gabon",
+    "GG": "Georgia",
+    "GH": "Ghana",
+    "GJ": "Grenada",
+    "GL": "Greenland",
+    "GM": "Germany",
+    "GO": "Gabon",
+    "GP": "Guadeloupe",
+    "GR": "Greece",
+    "GT": "Guatemala",
+    "GV": "Guinea",
+    "GY": "Guyana",
+    "GZ": "Gaza Strip",
+    "HA": "Haiti",
+    "HK": "Hong Kong",
+    "HO": "Honduras",
+    "HR": "Croatia",
+    "HU": "Hungary",
+    "IC": "Iceland",
+    "ID": "Indonesia",
+    "IN": "India",
+    "IR": "Iran",
+    "IS": "Israel",
+    "IT": "Italy",
+    "IV": "Côte d'Ivoire",
+    "IZ": "Iraq",
+    "JA": "Japan",
+    "JM": "Jamaica",
+    "JO": "Jordan",
+    "KE": "Kenya",
+    "KG": "Kyrgyzstan",
+    "KN": "North Korea",
+    "KS": "South Korea",
+    "KU": "Kuwait",
+    "KV": "Kosovo",
+    "KZ": "Kazakhstan",
+    "LA": "Laos",
+    "LE": "Lebanon",
+    "LG": "Latvia",
+    "LI": "Liberia",
+    "LO": "Slovakia",
+    "LT": "Lithuania",
+    "LU": "Luxembourg",
+    "LY": "Libya",
+    "MA": "Madagascar",
+    "MC": "Macau",
+    "MD": "Moldova",
+    "MG": "Mongolia",
+    "MI": "Malawi",
+    "MJ": "Montenegro",
+    "MK": "North Macedonia",
+    "ML": "Mali",
+    "MM": "Malta",
+    "MN": "Monaco",
+    "MO": "Morocco",
+    "MP": "Mauritius",
+    "MR": "Mauritania",
+    "MU": "Oman",
+    "MV": "Maldives",
+    "MX": "Mexico",
+    "MY": "Malaysia",
+    "MZ": "Mozambique",
+    "NG": "Niger",
+    "NH": "Vanuatu",
+    "NI": "Nigeria",
+    "NL": "Netherlands",
+    "NO": "Norway",
+    "NP": "Nepal",
+    "NR": "Nauru",
+    "NS": "Suriname",
+    "NU": "Nicaragua",
+    "NZ": "New Zealand",
+    "PA": "Paraguay",
+    "PE": "Peru",
+    "PK": "Pakistan",
+    "PL": "Poland",
+    "PM": "Panama",
+    "PO": "Portugal",
+    "PP": "Papua New Guinea",
+    "PS": "Palau",
+    "PU": "Guinea-Bissau",
+    "QA": "Qatar",
+    "RI": "Serbia",
+    "RM": "Marshall Islands",
+    "RO": "Romania",
+    "RP": "Philippines",
+    "RS": "Russia",
+    "RW": "Rwanda",
+    "SA": "Saudi Arabia",
+    "SC": "Saint Kitts and Nevis",
+    "SE": "Seychelles",
+    "SF": "South Africa",
+    "SG": "Senegal",
+    "SI": "Slovenia",
+    "SL": "Sierra Leone",
+    "SM": "San Marino",
+    "SN": "Singapore",
+    "SO": "Somalia",
+    "SP": "Spain",
+    "SS": "South Sudan",
+    "ST": "Saint Lucia",
+    "SU": "Sudan",
+    "SW": "Sweden",
+    "SY": "Syria",
+    "SZ": "Switzerland",
+    "TD": "Trinidad and Tobago",
+    "TH": "Thailand",
+    "TI": "Tajikistan",
+    "TN": "Tonga",
+    "TO": "Togo",
+    "TS": "Tunisia",
+    "TT": "Timor-Leste",
+    "TU": "Turkey",
+    "TV": "Tuvalu",
+    "TW": "Taiwan",
+    "TX": "Turkmenistan",
+    "TZ": "Tanzania",
+    "UG": "Uganda",
+    "UK": "United Kingdom",
+    "UP": "Ukraine",
+    "US": "United States",
+    "UV": "Burkina Faso",
+    "UY": "Uruguay",
+    "UZ": "Uzbekistan",
+    "VC": "Saint Vincent and the Grenadines",
+    "VE": "Venezuela",
+    "VM": "Vietnam",
+    "WA": "Namibia",
+    "WE": "West Bank",
+    "WS": "Samoa",
+    "WZ": "Eswatini",
+    "YM": "Yemen",
+    "ZA": "Zambia",
+    "ZI": "Zimbabwe",
+}
+
+# GDELT actor type codes → human-readable labels (used in narrative and payload)
+ACTOR_TYPE_NAMES: dict[str, str] = {
+    "GOV": "government",
+    "MIL": "military",
+    "MED": "media",
+    "IGO": "intergovernmental organization",
+    "NGO": "NGO",
+    "BUS": "business/corporate",
+    "COP": "police/law enforcement",
+    "CVL": "civilian",
+    "CIV": "civilian",
+    "OPP": "opposition group",
+    "JUD": "judiciary",
+    "LAB": "labour group",
+    "AGR": "agricultural sector",
+    "EDU": "education sector",
+    "HLH": "health sector",
+    "LEG": "legislature",
+    "REL": "religious group",
+    "SPY": "intelligence services",
+    "SOC": "social movement",
+    "REB": "rebel/insurgent group",
+    "MOB": "mob/crowd",
+    "REF": "refugee/displaced persons",
+    "IMM": "immigrant community",
+    "ACT": "activist",
+    "MIS": "paramilitary",
+    "SET": "settler",
+    "TRO": "troops/armed forces",
+    "UNK": "unknown actor",
+}
+
+# CAMEO root code → short descriptive label (used in structured fields)
+CAMEO_ROOT_DESC: dict[str, str] = {
+    "01": "Public Statement",
+    "02": "Appeal",
+    "03": "Intent to Cooperate",
+    "04": "Diplomatic Consultation",
+    "05": "Diplomatic Cooperation",
+    "06": "Material Cooperation",
+    "07": "Aid / Assistance",
+    "08": "Yield / Concede",
+    "09": "Investigation",
+    "10": "Demand",
+    "11": "Disapproval / Criticism",
+    "12": "Rejection",
+    "13": "Threat",
+    "14": "Protest / Demonstration",
+    "15": "Military Force Posture",
+    "16": "Reduce / Sever Relations",
+    "17": "Coercion",
+    "18": "Assault",
+    "19": "Armed Conflict",
+    "20": "Mass Violence",
+}
+
+# mentions_weight normalisation ceiling — log1p(200) ≈ 5.3
+# Events with 200+ mentions score 1.0; events at the 10-mention floor score ~0.45
+_MENTIONS_NORM_CEIL = math.log1p(200)
+
 
 # ---------------------------------------------------------------------------
 # Text utilities
@@ -224,26 +494,162 @@ def _date_to_ts_prefix(dt: datetime) -> str:
 # ---------------------------------------------------------------------------
 
 
+# CAMEO root code → natural-language verb phrase for narrative sentences.
+# Covers all 20 root codes; used by build_document() to produce prose the
+# sentence-transformer can embed effectively.
+_CAMEO_VERB: dict[str, str] = {
+    "01": "made a public statement regarding",
+    "02": "appealed to",
+    "03": "expressed intent to cooperate with",
+    "04": "consulted with",
+    "05": "engaged in diplomatic cooperation with",
+    "06": "provided material cooperation to",
+    "07": "provided aid or assistance to",
+    "08": "yielded or conceded to",
+    "09": "investigated",
+    "10": "issued demands toward",
+    "11": "expressed disapproval or criticism of",
+    "12": "rejected or refused",
+    "13": "issued threats against",
+    "14": "staged protests or demonstrations against",
+    "15": "exhibited military force posture toward",
+    "16": "reduced or severed relations with",
+    "17": "used coercive measures against",
+    "18": "carried out an assault on",
+    "19": "engaged in armed fighting with",
+    "20": "committed mass violence against",
+}
+
+
+def _country_name(fips: str) -> str:
+    """Resolve a FIPS country code to its full name, falling back to the code itself."""
+    return FIPS_COUNTRY_NAMES.get(fips.strip().upper(), fips) if fips else ""
+
+
+def _actor_label(name: str, fips_country: str, type_code: str) -> str:
+    """Build a human-readable actor label with full country name and type."""
+    parts = [name] if name else []
+    country = _country_name(fips_country)
+    if country and country not in (name or ""):
+        parts.append(f"({country})")
+    actor_type = ACTOR_TYPE_NAMES.get(type_code.strip().upper(), "") if type_code else ""
+    if actor_type:
+        parts.append(f"[{actor_type}]")
+    return " ".join(parts)
+
+
+def _narrative_sentence(
+    actor1_name: str,
+    actor1_country: str,
+    actor1_type: str,
+    actor2_name: str,
+    actor2_country: str,
+    actor2_type: str,
+    event_root: str,
+    quad_label: str,
+    action_geo: str,
+    date_str: str,
+    num_mentions: str,
+    avg_tone: str,
+    goldstein: str,
+) -> str:
+    """Produce prose sentences summarising the GDELT event for the embedding model."""
+    root = str(event_root or "").zfill(2)
+    verb = _CAMEO_VERB.get(root, f"was involved in a {quad_label.lower()} event with")
+
+    # Subject: name + full country name + actor role
+    a1_country = _country_name(actor1_country)
+    subject = actor1_name or "An unidentified actor"
+    if a1_country and a1_country not in subject:
+        subject += f" ({a1_country})"
+    a1_role = ACTOR_TYPE_NAMES.get((actor1_type or "").strip().upper(), "")
+    if a1_role:
+        subject += f", a {a1_role},"
+
+    # Object: same pattern
+    obj = ""
+    if actor2_name:
+        a2_country = _country_name(actor2_country)
+        obj = actor2_name
+        if a2_country and a2_country not in obj:
+            obj += f" ({a2_country})"
+        a2_role = ACTOR_TYPE_NAMES.get((actor2_type or "").strip().upper(), "")
+        if a2_role:
+            obj += f" [{a2_role}]"
+
+    geo_part = f" in {action_geo}" if action_geo else ""
+    date_part = f" on {date_str}" if date_str else ""
+
+    sentence = f"{subject} {verb}"
+    if obj:
+        sentence += f" {obj}"
+    sentence += f"{geo_part}{date_part}."
+
+    # Coverage descriptor — lets queries like "widely reported" or "major incident" match
+    try:
+        nm = int(num_mentions)
+        if nm >= 100:
+            sentence += f" This was a widely reported major event ({nm} media mentions)."
+        elif nm >= 50:
+            sentence += f" This event received significant media coverage ({nm} mentions)."
+        elif nm >= 20:
+            sentence += f" This event received moderate media coverage ({nm} mentions)."
+        else:
+            sentence += f" This event received limited media coverage ({nm} mentions)."
+    except (ValueError, TypeError):
+        pass
+
+    # Tone descriptor
+    try:
+        tone = float(avg_tone)
+        if tone < -10:
+            sentence += " Media coverage was highly hostile in tone."
+        elif tone < -5:
+            sentence += " Media coverage was hostile in tone."
+        elif tone < 0:
+            sentence += " Media coverage had a negative tone."
+        else:
+            sentence += " Media coverage had a neutral or positive tone."
+    except (ValueError, TypeError):
+        pass
+
+    # Goldstein stability context
+    try:
+        gs = float(goldstein)
+        if gs <= -7:
+            sentence += " This event is highly destabilising for regional stability."
+        elif gs <= -3:
+            sentence += " This event has a destabilising effect on regional stability."
+        elif gs >= 7:
+            sentence += " This event is highly stabilising."
+        elif gs >= 3:
+            sentence += " This event has a stabilising effect."
+    except (ValueError, TypeError):
+        pass
+
+    return sentence
+
+
 def build_document(row: dict) -> tuple[str, int | None]:
-    """Build a narrative document from a GDELT event row."""
+    """Build a narrative + structured document from a GDELT event row."""
     event_id = row.get("GlobalEventID", "")
     day = row.get("Day", "")
-    actor1_name = row.get("Actor1Name", "")
-    actor1_country = row.get("Actor1CountryCode", "")
-    actor1_type = row.get("Actor1Type1Code", "")
-    actor2_name = row.get("Actor2Name", "")
-    actor2_country = row.get("Actor2CountryCode", "")
-    actor2_type = row.get("Actor2Type1Code", "")
-    event_code = row.get("EventCode", "")
-    event_root = row.get("EventRootCode", "")
-    quad_class = row.get("QuadClass", "")
-    goldstein = row.get("GoldsteinScale", "")
-    num_mentions = row.get("NumMentions", "")
-    num_articles = row.get("NumArticles", "")
-    avg_tone = row.get("AvgTone", "")
-    action_geo = row.get("ActionGeo_FullName", "")
-    action_country = row.get("ActionGeo_CountryCode", "")
-    source_url = row.get("SOURCEURL", "")
+    actor1_name = row.get("Actor1Name", "") or ""
+    actor1_country = row.get("Actor1CountryCode", "") or ""
+    actor1_type = row.get("Actor1Type1Code", "") or ""
+    actor2_name = row.get("Actor2Name", "") or ""
+    actor2_country = row.get("Actor2CountryCode", "") or ""
+    actor2_type = row.get("Actor2Type1Code", "") or ""
+    event_code = row.get("EventCode", "") or ""
+    event_root = row.get("EventRootCode", "") or ""
+    quad_class = row.get("QuadClass", "") or ""
+    goldstein = row.get("GoldsteinScale", "") or ""
+    num_mentions = row.get("NumMentions", "") or ""
+    num_articles = row.get("NumArticles", "") or ""
+    avg_tone = row.get("AvgTone", "") or ""
+    action_geo = row.get("ActionGeo_FullName", "") or ""
+    action_country = row.get("ActionGeo_CountryCode", "") or ""
+    source_url = row.get("SOURCEURL", "") or ""
 
     # Parse event date from Day field (YYYYMMDD)
     event_unix: int | None = None
@@ -257,61 +663,96 @@ def build_document(row: dict) -> tuple[str, int | None]:
     if not (actor1_name or actor2_name or action_geo):
         return "", event_unix
 
-    # Map QuadClass to human-readable
     quad_labels = {
         "1": "Verbal Cooperation",
         "2": "Material Cooperation",
         "3": "Verbal Conflict",
         "4": "Material Conflict",
     }
-    quad_label = quad_labels.get(str(quad_class), f"Class {quad_class}")
+    quad_label = quad_labels.get(str(quad_class), f"QuadClass {quad_class}")
 
     date_str = f"{day[:4]}-{day[4:6]}-{day[6:8]}" if day and len(day) == 8 else day
 
+    root = str(event_root).zfill(2)
+    cameo_desc = CAMEO_ROOT_DESC.get(root, f"Event root {event_root}")
+    action_country_name = _country_name(action_country)
+
     lines: list[str] = []
-    lines.append(f"Event Type: GDELT {quad_label} (CAMEO {event_code} / root {event_root})")
+
+    # Lead with prose — gives the embedding model natural language to anchor on
+    narrative = _narrative_sentence(
+        actor1_name,
+        actor1_country,
+        actor1_type,
+        actor2_name,
+        actor2_country,
+        actor2_type,
+        event_root,
+        quad_label,
+        action_geo,
+        date_str,
+        num_mentions,
+        avg_tone,
+        goldstein,
+    )
+    lines.append(narrative)
+    lines.append("")
+
+    # Structured fields — retain FIPS codes alongside full names for completeness
+    lines.append(f"Event Type: {cameo_desc} — GDELT {quad_label} (CAMEO {event_code} / root {event_root})")
     if date_str:
         lines.append(f"Date: {date_str}")
 
-    actors = []
     if actor1_name:
-        a1 = actor1_name
-        if actor1_country:
-            a1 += f" ({actor1_country})"
-        if actor1_type:
-            a1 += f" [type: {actor1_type}]"
-        actors.append(f"Actor 1: {a1}")
+        lines.append(f"Actor 1: {_actor_label(actor1_name, actor1_country, actor1_type)}")
     if actor2_name:
-        a2 = actor2_name
-        if actor2_country:
-            a2 += f" ({actor2_country})"
-        if actor2_type:
-            a2 += f" [type: {actor2_type}]"
-        actors.append(f"Actor 2: {a2}")
-    lines.extend(actors)
+        lines.append(f"Actor 2: {_actor_label(actor2_name, actor2_country, actor2_type)}")
 
     if action_geo:
-        geo = action_geo
+        loc = action_geo
+        if action_country_name and action_country_name not in action_geo:
+            loc += f", {action_country_name}"
         if action_country and action_country not in action_geo:
-            geo += f" ({action_country})"
-        lines.append(f"Location: {geo}")
+            loc += f" [{action_country}]"
+        lines.append(f"Location: {loc}")
 
     try:
-        lines.append(f"Media Coverage: {int(num_mentions)} mentions across {int(num_articles)} articles")
+        nm, na = int(num_mentions), int(num_articles)
+        lines.append(f"Media Coverage: {nm} mentions across {na} articles")
     except (ValueError, TypeError):
-        pass  # numeric fields missing or non-numeric in source row — skip
+        pass
 
     try:
         tone_val = float(avg_tone)
-        tone_desc = "hostile" if tone_val < -5 else "negative" if tone_val < 0 else "positive"
+        if tone_val < -10:
+            tone_desc = "highly hostile"
+        elif tone_val < -5:
+            tone_desc = "hostile"
+        elif tone_val < 0:
+            tone_desc = "negative"
+        else:
+            tone_desc = "positive"
         lines.append(f"Average Tone: {tone_val:.2f} ({tone_desc})")
     except (ValueError, TypeError):
-        pass  # avg_tone missing or non-numeric in source row — skip
+        pass
 
     try:
-        lines.append(f"Goldstein Scale: {float(goldstein):.1f} (stability impact: -10=destabilising, +10=stabilising)")
+        gs = float(goldstein)
+        if gs <= -7:
+            gs_desc = "highly destabilising"
+        elif gs <= -3:
+            gs_desc = "destabilising"
+        elif gs < 0:
+            gs_desc = "mildly destabilising"
+        elif gs < 3:
+            gs_desc = "neutral"
+        elif gs < 7:
+            gs_desc = "stabilising"
+        else:
+            gs_desc = "highly stabilising"
+        lines.append(f"Goldstein Scale: {gs:.1f} ({gs_desc})")
     except (ValueError, TypeError):
-        pass  # goldstein score missing or non-numeric in source row — skip
+        pass
 
     if source_url:
         lines.append(f"Source: {source_url}")
@@ -386,11 +827,15 @@ class GdeltIngestor:
         try:
             await self._ensure_collection()
 
-            cutoff_ts = await self._resolve_cutoff_ts()
-            logger.info("Processing GDELT files newer than ts=%s", cutoff_ts or "none (all)")
+            cutoff_ts, from_checkpoint = await self._resolve_cutoff_ts()
+            logger.info(
+                "Processing GDELT files newer than ts=%s (source=%s)",
+                cutoff_ts or "none (all)",
+                "checkpoint" if from_checkpoint else "days-back",
+            )
 
             stats = IngestStats()
-            file_urls = await self._get_file_urls(cutoff_ts)
+            file_urls = await self._get_file_urls(cutoff_ts, from_checkpoint=from_checkpoint)
             logger.info("Found %d GDELT files to process", len(file_urls))
 
             async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=120.0) as http:
@@ -417,18 +862,32 @@ class GdeltIngestor:
             if self._redis:
                 await self._redis.aclose()
 
-    async def _resolve_cutoff_ts(self) -> str | None:
-        """Return the last processed file timestamp string, or None for full backfill."""
+    async def _resolve_cutoff_ts(self) -> tuple[str | None, bool]:
+        """Return (cutoff_ts, from_checkpoint).
+
+        from_checkpoint=True means the cutoff came from a saved Redis checkpoint,
+        so we can generate file URLs directly (no masterlist download needed).
+        """
         if self.resume and self._redis:
             checkpoint = await self._redis.get(CHECKPOINT_KEY)
             if checkpoint:
                 logger.info("Resuming from checkpoint ts=%s", checkpoint)
-                return checkpoint
+                return checkpoint, True
+            logger.warning("No Redis checkpoint found for --resume; falling back to --days-back %d", self.days_back)
         cutoff_dt = datetime.now(UTC) - timedelta(days=self.days_back)
-        return cutoff_dt.strftime("%Y%m%d%H%M%S")
+        return cutoff_dt.strftime("%Y%m%d%H%M%S"), False
 
-    async def _get_file_urls(self, cutoff_ts: str | None) -> list[tuple[str, str]]:
-        """Download masterfilelist.txt and return (url, ts_str) pairs newer than cutoff."""
+    async def _get_file_urls(self, cutoff_ts: str | None, from_checkpoint: bool = False) -> list[tuple[str, str]]:
+        """Return (url, ts_str) pairs for GDELT files newer than cutoff_ts.
+
+        When from_checkpoint=True the cutoff is recent and we generate URLs
+        directly from the 15-minute GDELT file schedule, avoiding the ~50 MB
+        masterfilelist.txt download entirely.
+        """
+        if from_checkpoint and cutoff_ts:
+            return self._generate_urls_since(cutoff_ts)
+
+        # Full backfill path: download masterfilelist.txt and filter.
         async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=60.0) as http:
             for attempt in range(3):
                 try:
@@ -460,12 +919,43 @@ class GdeltIngestor:
         results.sort(key=lambda x: x[1])
         return results
 
+    @staticmethod
+    def _generate_urls_since(cutoff_ts: str) -> list[tuple[str, str]]:
+        """Generate GDELT export URLs on 15-minute boundaries from cutoff to now.
+
+        GDELT 2.0 files are published as:
+          http://data.gdeltproject.org/gdeltv2/{YYYYMMDDHHMMSS}.export.CSV.zip
+        at :00, :15, :30, :45 past each hour, so we can derive the full list
+        without touching the masterfilelist.
+        """
+        cutoff_dt = datetime.strptime(cutoff_ts, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
+        now = datetime.now(UTC)
+
+        # Snap to the first 15-minute slot strictly after the checkpoint.
+        next_slot_min = (cutoff_dt.minute // 15 + 1) * 15
+        current = cutoff_dt.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=next_slot_min)
+
+        results: list[tuple[str, str]] = []
+        while current <= now:
+            ts_str = current.strftime("%Y%m%d%H%M%S")
+            url = f"http://data.gdeltproject.org/gdeltv2/{ts_str}.export.CSV.zip"
+            results.append((url, ts_str))
+            current += timedelta(minutes=15)
+
+        logger.info("Generated %d direct GDELT file URLs from %s to now.", len(results), cutoff_ts)
+        return results
+
     async def _process_file(self, url: str, ts_str: str, stats: IngestStats, http: httpx.AsyncClient) -> None:
         logger.info("Processing GDELT file %s", ts_str)
 
         for attempt in range(4):
             try:
                 resp = await http.get(url)
+                if resp.status_code == 404:
+                    # File not yet published or no longer available — skip silently.
+                    logger.debug("GDELT file not available (404): %s", ts_str)
+                    stats.files_processed += 1
+                    return
                 if resp.status_code == 429:
                     await asyncio.sleep(30 * (attempt + 1))
                     continue
@@ -517,14 +1007,18 @@ class GdeltIngestor:
         return list(reader)
 
     def _passes_filter(self, row: dict) -> bool:
-        """Return True if this event is information-warfare-relevant."""
+        """Return True if this event is worth ingesting for any OSIA desk.
+
+        The collection serves InfoWar, Geopolitical, Finance, HUMINT, Environment,
+        and Watch Floor desks — not just InfoWar.  The primary gate is media
+        coverage: any event that cleared the min_mentions bar has been deemed
+        newsworthy enough to appear in global news at scale.  QuadClass 1-2
+        (cooperation, aid, diplomacy) are explicitly included because they are
+        intelligence-relevant for Geopolitical and Finance desks.  Lower
+        thresholds are kept for media-actor events and known infowar CAMEO codes.
+        """
         try:
             num_mentions = int(row.get("NumMentions", 0) or 0)
-        except (ValueError, TypeError):
-            return False
-
-        try:
-            quad_class = int(row.get("QuadClass", 0) or 0)
         except (ValueError, TypeError):
             return False
 
@@ -532,11 +1026,14 @@ class GdeltIngestor:
         actor2_type = row.get("Actor2Type1Code", "") or ""
         event_root = str(row.get("EventRootCode", "") or "").zfill(2)
 
-        is_conflict = quad_class >= MIN_QUADCLASS_CONFLICT and num_mentions >= self.min_mentions
-        is_media_event = ("MED" in (actor1_type, actor2_type)) and num_mentions >= 5
-        is_infowar_code = event_root in INFOWAR_ROOT_CODES and num_mentions >= self.min_mentions
+        # Primary gate: any sufficiently covered event, regardless of QuadClass.
+        is_high_coverage = num_mentions >= self.min_mentions
 
-        return is_conflict or is_media_event or is_infowar_code
+        # Lower threshold for media actors and known infowar CAMEO codes.
+        is_media_event = ("MED" in (actor1_type, actor2_type)) and num_mentions >= 5
+        is_infowar_code = event_root in INFOWAR_ROOT_CODES and num_mentions >= 5
+
+        return is_high_coverage or is_media_event or is_infowar_code
 
     async def _process_row(self, row: dict, ts_str: str, stats: IngestStats) -> None:
         event_id = row.get("GlobalEventID", "")
@@ -547,23 +1044,60 @@ class GdeltIngestor:
 
         stats.records_processed += 1
 
+        # --- Numeric fields ---
         try:
             quad_class = int(row.get("QuadClass", 0) or 0)
-            num_mentions = int(row.get("NumMentions", 0) or 0)
-            avg_tone = float(row.get("AvgTone", 0.0) or 0.0)
         except (ValueError, TypeError):
-            quad_class, num_mentions, avg_tone = 0, 0, 0.0
+            quad_class = 0
+        try:
+            num_mentions = int(row.get("NumMentions", 0) or 0)
+        except (ValueError, TypeError):
+            num_mentions = 0
+        try:
+            avg_tone = round(float(row.get("AvgTone", 0.0) or 0.0), 3)
+        except (ValueError, TypeError):
+            avg_tone = 0.0
+        try:
+            goldstein_scale = round(float(row.get("GoldsteinScale", 0.0) or 0.0), 2)
+        except (ValueError, TypeError):
+            goldstein_scale = 0.0
 
-        actor1 = row.get("Actor1Name", "") or ""
-        actor2 = row.get("Actor2Name", "") or ""
-        action_country = row.get("ActionGeo_CountryCode", "") or ""
-        action_geo = row.get("ActionGeo_FullName", "") or ""
-        event_code = row.get("EventCode", "") or ""
-        day = row.get("Day", "") or ""
+        # --- String fields ---
+        actor1_name = (row.get("Actor1Name", "") or "").strip()
+        actor1_fips = (row.get("Actor1CountryCode", "") or "").strip()
+        actor1_type = (row.get("Actor1Type1Code", "") or "").strip()
+        actor2_name = (row.get("Actor2Name", "") or "").strip()
+        actor2_fips = (row.get("Actor2CountryCode", "") or "").strip()
+        actor2_type = (row.get("Actor2Type1Code", "") or "").strip()
+        action_country_fips = (row.get("ActionGeo_CountryCode", "") or "").strip()
+        action_geo = (row.get("ActionGeo_FullName", "") or "").strip()
+        event_root_code = (row.get("EventRootCode", "") or "").strip().zfill(2)
+        source_url = (row.get("SOURCEURL", "") or "").strip()
+        day = (row.get("Day", "") or "").strip()
+
+        # --- Resolved names ---
+        actor1_country_name = _country_name(actor1_fips)
+        actor2_country_name = _country_name(actor2_fips)
+        action_country_name = _country_name(action_country_fips)
 
         pub_date = f"{day[:4]}-{day[4:6]}-{day[6:8]}" if len(day) == 8 else ""
-        entity_tags = [t for t in [actor1, actor2, action_country, action_geo, event_code] if t]
         ingest_unix = event_unix or int(time.time())
+
+        # mentions_weight: log-normalised [0, 1] for score boosting at query time.
+        # Ceiling at 200 mentions → 1.0; 10 mentions → ~0.45; 1 mention → ~0.13
+        mentions_weight = round(min(math.log1p(num_mentions) / _MENTIONS_NORM_CEIL, 1.0), 4)
+
+        # entity_tags: full names only — no FIPS codes, no CAMEO codes.
+        # Used by cross_desk_search entity filtering and for human readability.
+        raw_tags = [
+            actor1_name,
+            actor1_country_name,
+            actor2_name,
+            actor2_country_name,
+            action_geo,
+            action_country_name,
+        ]
+        entity_tags = list(dict.fromkeys(t for t in raw_tags if t))
 
         point_id = str(uuid.UUID(bytes=hashlib.sha256(f"gdelt:{event_id}:{ts_str}".encode()).digest()[:16]))
         payload: dict = {
@@ -574,15 +1108,35 @@ class GdeltIngestor:
             "ingest_date": TODAY,
             "event_id": event_id,
             "file_ts": ts_str,
+            # Event classification
             "quad_class": quad_class,
+            "event_root_code": event_root_code,
+            "cameo_description": CAMEO_ROOT_DESC.get(event_root_code, ""),
+            # Actors — both name and resolved country name; FIPS retained for reference
+            "actor1_name": actor1_name,
+            "actor1_country": actor1_fips,
+            "actor1_country_name": actor1_country_name,
+            "actor1_type": ACTOR_TYPE_NAMES.get(actor1_type.upper(), actor1_type),
+            "actor2_name": actor2_name,
+            "actor2_country": actor2_fips,
+            "actor2_country_name": actor2_country_name,
+            "actor2_type": ACTOR_TYPE_NAMES.get(actor2_type.upper(), actor2_type),
+            # Geography
+            "country": action_country_fips,  # FIPS — retained for backward compat
+            "country_name": action_country_name,  # full name — primary for display/filter
+            "action_geo": action_geo,
+            # Metrics
             "num_mentions": num_mentions,
-            "avg_tone": round(avg_tone, 3),
+            "avg_tone": avg_tone,
+            "goldstein_scale": goldstein_scale,
+            "mentions_weight": mentions_weight,
+            # Temporal
             "pub_date": pub_date,
-            "entity_tags": entity_tags,
             "ingested_at_unix": ingest_unix,
+            # Provenance
+            "source_url": source_url,
+            "entity_tags": entity_tags,
         }
-        if action_country:
-            payload["country"] = action_country
 
         self._upsert_buffer.append(
             qdrant_models.PointStruct(id=point_id, vector=[0.0] * EMBEDDING_DIM, payload=payload)
@@ -711,6 +1265,48 @@ class GdeltIngestor:
         else:
             info = await self._qdrant.get_collection(COLLECTION_NAME)
             logger.info("Collection '%s' ready (%d points).", COLLECTION_NAME, info.points_count or 0)
+
+        # Ensure payload indexes exist for the fields used in filtered searches
+        # and score-boost queries.  create_payload_index is idempotent — safe to
+        # call on every run.
+        keyword_fields = [
+            "quad_class",
+            "event_root_code",
+            "cameo_description",
+            "actor1_name",
+            "actor1_country",
+            "actor1_country_name",
+            "actor1_type",
+            "actor2_name",
+            "actor2_country",
+            "actor2_country_name",
+            "actor2_type",
+            "country",
+            "country_name",
+            "action_geo",
+            "pub_date",
+            "provenance",
+        ]
+        float_fields = [
+            "num_mentions",
+            "avg_tone",
+            "goldstein_scale",
+            "mentions_weight",
+            "ingested_at_unix",
+        ]
+        for field_name in keyword_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.KEYWORD,
+            )
+        for field_name in float_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.FLOAT,
+            )
+        logger.info("Payload indexes verified for '%s'.", COLLECTION_NAME)
 
 
 # ---------------------------------------------------------------------------

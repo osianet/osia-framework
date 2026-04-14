@@ -29,6 +29,7 @@ qdrant:
     - fbi-vault
     - marxists-archive
     - gdelt-events
+    - acled-conflict-events
   boost_top_k: 2
 
 tools:

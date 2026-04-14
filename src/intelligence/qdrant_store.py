@@ -240,12 +240,19 @@ class QdrantStore:
         top_k: int,
         filters: dict | None = None,
         decay_half_life_days: float | None = None,
+        payload_boost_field: str | None = None,
     ) -> list[SearchResult]:
         """
         Embed query and return top-K semantically similar points.
-        Supports optional payload filters (Qdrant filter dict format).
-        If decay_half_life_days is set, re-scores results by exponential time decay
-        on ingested_at_unix and re-sorts before returning.
+
+        decay_half_life_days: if set, re-scores by exponential time decay on
+            ingested_at_unix and re-sorts before returning.
+
+        payload_boost_field: if set, names a float payload field in [0, 1] used
+            to boost scores after retrieval.  Fetches top_k * 4 candidates first,
+            applies score *= (0.3 + 0.7 * field_value), then returns the top_k.
+            Designed for fields like mentions_weight that encode signal strength.
+            Points missing the field are treated as weight=0.5 (no strong penalty).
         """
         vector = await self._embed(query)
 
@@ -260,10 +267,11 @@ class QdrantStore:
             ]
             qdrant_filter = qdrant_models.Filter(must=must_conditions)
 
+        fetch_limit = top_k * 4 if payload_boost_field else top_k
         hits_result = await self._client.query_points(
             collection_name=collection,
             query=vector,
-            limit=top_k,
+            limit=fetch_limit,
             query_filter=qdrant_filter,
             with_payload=True,
         )
@@ -281,6 +289,14 @@ class QdrantStore:
                     metadata=payload,
                 )
             )
+
+        if payload_boost_field:
+            for r in results:
+                weight = float(r.metadata.get(payload_boost_field, 0.5))
+                r.score *= 0.3 + 0.7 * max(0.0, min(1.0, weight))
+            results.sort(key=lambda r: r.score, reverse=True)
+            results = results[:top_k]
+
         if decay_half_life_days:
             results = self._apply_decay(results, decay_half_life_days)
         return results

@@ -9,8 +9,8 @@ TRI is the primary public record for identifying which corporations are releasin
 which toxic chemicals, in what quantities, and where — core intelligence for the
 desk's "Corporate Ecocide Tracking" mandate.
 
-Source: https://www.epa.gov/toxics-release-inventory-tri-program/tri-basic-data-files-calendar-year-datasets
-Annual ZIP downloads, free and public.
+Source: https://data.epa.gov/efservice/downloads/tri/mv_tri_basic_download/
+Annual CSV downloads via EPA Envirofacts, free and public.
 
 Each record covers:
   - Facility name, parent company, DUNS, geographic coordinates
@@ -34,7 +34,7 @@ Options:
   --year-to Y           Last year to ingest (default: 2023)
   --min-release-lbs N   Only ingest facilities releasing >= N lbs total (default: 1000)
   --enqueue-notable     Push top polluters to Environment desk research queue
-  --data-dir            Local cache dir for downloaded ZIP files (default: /tmp/epa_tri)
+  --data-dir            Local cache dir for downloaded CSV files (default: /tmp/epa_tri)
   --embed-batch-size    Texts per HF embedding call (default: 48)
   --embed-concurrency   Parallel embedding calls (default: 3)
   --upsert-batch-size   Points per Qdrant upsert call (default: 64)
@@ -53,10 +53,10 @@ import hashlib
 import io
 import json
 import logging
+import math
 import os
 import time
 import uuid
-import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -88,20 +88,12 @@ COLLECTION_NAME = "epa-toxic-releases"
 EMBEDDING_DIM = 384
 SOURCE_LABEL = "EPA Toxics Release Inventory (TRI)"
 
-# TRI basic data files URL pattern: year is embedded in the filename
-# e.g. https://www.epa.gov/system/files/other-files/2024-11/tri_basic_data_files_calendar_year_2023_v1.zip
-# The year in the URL path (2024) is the publication year; the calendar year (2023) is the data year.
-# We construct URLs for a range of data years.
-TRI_URL_TEMPLATE = (
-    "https://www.epa.gov/system/files/other-files/{pub_year}-01/tri_basic_data_files_calendar_year_{data_year}_v1.zip"
-)
-# Alternative URL pattern used for older years
-TRI_URL_TEMPLATE_ALT = (
-    "https://www.epa.gov/system/files/other-files/{pub_year}-11/tri_basic_data_files_calendar_year_{data_year}_v1.zip"
-)
+# EPA Envirofacts bulk CSV download — national data by year.
+# Available years: 1987–present. Geography "US" = all US facilities.
+TRI_CSV_URL_TEMPLATE = "https://data.epa.gov/efservice/downloads/tri/mv_tri_basic_download/{year}_US/csv"
 
 USER_AGENT = "OSIA-Framework/1.0 (open-source intelligence research; +https://osia.dev)"
-DOWNLOAD_DELAY = 2.0  # seconds between downloads
+DOWNLOAD_DELAY = 2.0  # seconds between year downloads
 
 HF_EMBEDDING_URL = (
     "https://router.huggingface.co/hf-inference/models/"
@@ -118,11 +110,8 @@ NOTABLE_RELEASE_THRESHOLD_LBS = 1_000_000  # 1 million lbs
 
 
 # ---------------------------------------------------------------------------
-# TRI CSV column mapping
+# TRI CSV column mapping (Envirofacts mv_tri_basic_download schema)
 # ---------------------------------------------------------------------------
-
-# TRI 1a file (facility + chemical totals) column names vary slightly by year.
-# We use flexible fallback keys.
 
 _COL_YEAR = "YEAR"
 _COL_FACILITY = "FACILITY NAME"
@@ -134,16 +123,19 @@ _COL_LATITUDE = "LATITUDE"
 _COL_LONGITUDE = "LONGITUDE"
 _COL_INDUSTRY_SECTOR = "INDUSTRY SECTOR"
 _COL_CHEMICAL = "CHEMICAL"
-_COL_CAS = "CAS #"
+_COL_CAS = "CAS#"  # no space in Envirofacts schema (vs "CAS #" in old ZIP files)
 _COL_CLASSIFICATION = "CLASSIFICATION"
 _COL_UNIT = "UNIT OF MEASURE"
-_COL_AIR_RELEASES = "TOTAL AIR RELEASES"
-_COL_WATER_RELEASES = "TOTAL WATER RELEASES"
-_COL_LAND_RELEASES = "TOTAL LAND RELEASES"
-_COL_UNDERGROUND = "TOTAL UNDERGROUND INJECTION ON-SITE"
-_COL_TOTAL_RELEASES = "TOTAL RELEASES"
-_COL_OFFSITE_TRANSFERS = "TOTAL TRANSFERS OFF-SITE"
 _COL_CARCINOGEN = "CARCINOGEN"
+
+# Release columns — Envirofacts uses section numbers, no pre-computed media totals
+_COL_FUGITIVE_AIR = "5.1 - FUGITIVE AIR"
+_COL_STACK_AIR = "5.2 - STACK AIR"
+_COL_WATER_RELEASES = "5.3 - WATER"
+_COL_UNDERGROUND = "5.4 - UNDERGROUND"
+_COL_ONSITE_TOTAL = "ON-SITE RELEASE TOTAL"
+_COL_OFFSITE_TOTAL = "OFF-SITE RELEASE TOTAL"
+_COL_TOTAL_RELEASES = "TOTAL RELEASES"  # grand total (on-site + off-site releases)
 
 
 def _col(row: dict, *keys: str, default: str = "") -> str:
@@ -182,17 +174,24 @@ def build_document(row: dict) -> tuple[str, int | None]:
     lon = _col(row, _COL_LONGITUDE, "LONG")
     industry = _col(row, _COL_INDUSTRY_SECTOR, "INDUSTRY SECTOR CODE")
     chemical = _col(row, _COL_CHEMICAL, "CHEMICAL NAME")
-    cas = _col(row, _COL_CAS, "CAS NUMBER")
+    cas = _col(row, _COL_CAS, "CAS #", "CAS NUMBER")
     classification = _col(row, _COL_CLASSIFICATION)
     carcinogen = _col(row, _COL_CARCINOGEN)
     unit = _col(row, _COL_UNIT, "UNIT")
 
-    total_air = _float(_col(row, _COL_AIR_RELEASES, "AIR RELEASES"))
-    total_water = _float(_col(row, _COL_WATER_RELEASES, "WATER RELEASES"))
-    total_land = _float(_col(row, _COL_LAND_RELEASES, "LAND RELEASES"))
-    total_underground = _float(_col(row, _COL_UNDERGROUND, "UNDERGROUND INJECTION"))
-    total_releases = _float(_col(row, _COL_TOTAL_RELEASES, "TOTAL RELEASES"))
-    offsite = _float(_col(row, _COL_OFFSITE_TRANSFERS, "OFF-SITE TRANSFERS"))
+    # Air releases: sum fugitive + stack (Envirofacts splits what old ZIP had as one total)
+    total_air = _float(_col(row, _COL_FUGITIVE_AIR)) + _float(_col(row, _COL_STACK_AIR))
+    # Fallback: if old-format column present (cached files from before migration)
+    if total_air == 0.0:
+        total_air = _float(_col(row, "TOTAL AIR RELEASES", "AIR RELEASES"))
+
+    total_water = _float(_col(row, _COL_WATER_RELEASES, "TOTAL WATER RELEASES", "WATER RELEASES"))
+    total_underground = _float(
+        _col(row, _COL_UNDERGROUND, "TOTAL UNDERGROUND INJECTION ON-SITE", "UNDERGROUND INJECTION")
+    )
+    total_onsite = _float(_col(row, _COL_ONSITE_TOTAL, "TOTAL RELEASES"))
+    total_offsite = _float(_col(row, _COL_OFFSITE_TOTAL, "TOTAL TRANSFERS OFF-SITE", "OFF-SITE TRANSFERS"))
+    total_all = _float(_col(row, _COL_TOTAL_RELEASES)) or (total_onsite + total_offsite)
 
     if not facility or not chemical:
         return "", None
@@ -203,9 +202,23 @@ def build_document(row: dict) -> tuple[str, int | None]:
         try:
             report_unix = int(datetime(int(year_str), 1, 1, tzinfo=UTC).timestamp())
         except ValueError:
-            report_unix = None  # malformed year field — leave timestamp unset
+            report_unix = None
 
     lines: list[str] = []
+
+    # Lead with a prose narrative sentence so the embedding model has natural language
+    # to anchor semantic queries on — not just structured key:value fields.
+    if facility and chemical and year_str:
+        # Avoid "CORP (CORP)" when parent and facility names are identical
+        corp = facility if not parent or parent.upper() == facility.upper() else f"{parent} ({facility})"
+        location_str = f"{city}, {state}" if city else state
+        narrative = f"In {year_str}, {corp} released {total_all:,.0f} lbs of {chemical} in {location_str}."
+        if classification:
+            narrative += f" Classified as {classification}."
+        if carcinogen and carcinogen.upper() in ("YES", "Y"):
+            narrative += " Listed carcinogen."
+        lines.append(narrative)
+
     lines.append(f"Facility: {facility}")
     if parent:
         lines.append(f"Parent Corporation: {parent}")
@@ -234,18 +247,14 @@ def build_document(row: dict) -> tuple[str, int | None]:
         lines.append(f"  Air releases: {total_air:,.1f} {unit}")
     if total_water > 0:
         lines.append(f"  Water releases: {total_water:,.1f} {unit}")
-    if total_land > 0:
-        lines.append(f"  Land releases: {total_land:,.1f} {unit}")
     if total_underground > 0:
         lines.append(f"  Underground injection: {total_underground:,.1f} {unit}")
-    if total_releases > 0:
-        lines.append(f"  Total on-site releases: {total_releases:,.1f} {unit}")
-    if offsite > 0:
-        lines.append(f"  Off-site transfers: {offsite:,.1f} {unit}")
-
-    total_all = total_releases + offsite
+    if total_onsite > 0:
+        lines.append(f"  Total on-site releases: {total_onsite:,.1f} {unit}")
+    if total_offsite > 0:
+        lines.append(f"  Off-site releases: {total_offsite:,.1f} {unit}")
     if total_all > 0:
-        lines.append(f"  Combined total (releases + transfers): {total_all:,.1f} {unit}")
+        lines.append(f"  Combined total (on-site + off-site): {total_all:,.1f} {unit}")
 
     if len(lines) < 5:
         return "", report_unix
@@ -321,10 +330,17 @@ class EpaTRIIngestor:
                     continue
 
                 logger.info("Processing TRI year %d...", data_year)
+                seen_before = stats.records_seen
                 try:
                     await self._ingest_year(data_year, stats)
                     await self._flush_upsert_buffer(stats)
-                    await self._mark_year_complete(data_year)
+                    # Only mark complete if we actually read records from this year's file.
+                    # Skipping when records_seen is unchanged prevents a zero-record run
+                    # (e.g. column-name mismatch, empty download) from poisoning the checkpoint.
+                    if stats.records_seen > seen_before:
+                        await self._mark_year_complete(data_year)
+                    else:
+                        logger.warning("Year %d: no records seen — not marking complete.", data_year)
                     stats.log_progress()
                 except Exception as exc:
                     stats.errors += 1
@@ -359,54 +375,67 @@ class EpaTRIIngestor:
             info = await self._qdrant.get_collection(COLLECTION_NAME)
             logger.info("Collection '%s' ready (%d points).", COLLECTION_NAME, info.points_count or 0)
 
+        # Ensure payload indexes exist (idempotent — safe to call on every run).
+        keyword_fields = ["facility", "chemical", "state", "reporting_year", "document_type", "provenance"]
+        float_fields = ["total_releases_lbs", "release_weight", "ingested_at_unix"]
+        for field_name in keyword_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.KEYWORD,
+            )
+        for field_name in float_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.FLOAT,
+            )
+        logger.info("Payload indexes verified for '%s'.", COLLECTION_NAME)
+
     async def _ingest_year(self, data_year: int, stats: IngestStats) -> None:
-        """Download the TRI ZIP for one data year, extract the 1a CSV, and ingest."""
-        cache_path = self.data_dir / f"tri_{data_year}.zip"
+        """Download the TRI CSV for one data year and ingest all records."""
+        cache_path = self.data_dir / f"tri_{data_year}.csv"
 
         if not cache_path.exists():
-            # EPA publication year is typically data_year + 1
-            pub_year = data_year + 1
-            urls_to_try = [
-                TRI_URL_TEMPLATE.format(pub_year=pub_year, data_year=data_year),
-                TRI_URL_TEMPLATE_ALT.format(pub_year=pub_year, data_year=data_year),
-                # Some years are published later
-                TRI_URL_TEMPLATE.format(pub_year=pub_year + 1, data_year=data_year),
-            ]
-
+            url = TRI_CSV_URL_TEMPLATE.format(year=data_year)
             downloaded = False
             async with httpx.AsyncClient(
-                headers={"User-Agent": USER_AGENT}, timeout=180.0, follow_redirects=True
+                headers={"User-Agent": USER_AGENT}, timeout=300.0, follow_redirects=True
             ) as http:
-                for url in urls_to_try:
-                    for attempt in range(3):
-                        try:
-                            logger.info("  Trying: %s", url)
-                            resp = await http.get(url)
-                            if resp.status_code == 404:
-                                logger.info("  404 — trying next URL")
-                                break
+                for attempt in range(3):
+                    try:
+                        logger.info("  Downloading: %s", url)
+                        # Stream to disk — national TRI files can exceed 50 MB
+                        async with http.stream("GET", url) as resp:
+                            if resp.status_code in (404, 410):
+                                logger.warning(
+                                    "  TRI data for year %d not available (%d) — skipping.",
+                                    data_year,
+                                    resp.status_code,
+                                )
+                                return
                             resp.raise_for_status()
-                            cache_path.write_bytes(resp.content)
-                            logger.info(
-                                "  Downloaded %.1f MB for year %d", len(resp.content) / (1024 * 1024), data_year
-                            )
-                            downloaded = True
-                            break
-                        except Exception as exc:
-                            if "404" in str(exc):
-                                break
-                            logger.warning("  Attempt %d failed: %s", attempt + 1, exc)
-                            await asyncio.sleep(10 * (attempt + 1))
-                    if downloaded:
+                            with open(cache_path, "wb") as fh:
+                                async for chunk in resp.aiter_bytes(65536):
+                                    fh.write(chunk)
+                        size_mb = cache_path.stat().st_size / (1024 * 1024)
+                        logger.info("  Downloaded %.1f MB for year %d", size_mb, data_year)
+                        downloaded = True
                         break
+                    except Exception as exc:
+                        logger.warning("  Attempt %d failed: %s", attempt + 1, exc)
+                        if cache_path.exists():
+                            cache_path.unlink()
+                        await asyncio.sleep(10 * (attempt + 1))
 
             if not downloaded:
                 logger.warning("Could not download TRI data for year %d — skipping.", data_year)
                 return
         else:
-            logger.info("  Using cached file: %s", cache_path)
+            size_mb = cache_path.stat().st_size / (1024 * 1024)
+            logger.info("  Using cached file: %s (%.1f MB)", cache_path, size_mb)
 
-        rows = await asyncio.get_event_loop().run_in_executor(None, self._extract_and_parse, cache_path, data_year)
+        rows = await asyncio.get_event_loop().run_in_executor(None, self._parse_csv, cache_path, data_year)
         logger.info("  Parsed %d records from TRI year %d", len(rows), data_year)
 
         for row in rows:
@@ -420,38 +449,34 @@ class EpaTRIIngestor:
             if stats.records_processed % 10_000 == 0 and stats.records_processed > 0:
                 stats.log_progress()
 
-    def _extract_and_parse(self, cache_path: Path, data_year: int) -> list[dict]:
-        """Extract TRI ZIP and parse the 1a (basic data) CSV file."""
-        rows: list[dict] = []
+    def _parse_csv(self, cache_path: Path, data_year: int) -> list[dict]:
+        """Parse TRI CSV file downloaded from Envirofacts.
+
+        Older TRI files (and some cached copies) prefix every column header with a
+        sequence number, e.g. "4. FACILITY NAME" instead of "FACILITY NAME".
+        Strip that prefix so column lookups work regardless of file vintage.
+        """
         try:
-            with zipfile.ZipFile(cache_path) as zf:
-                # Find the 1a file: typically named like tri_<year>_us.txt or similar
-                # TRI 1a files use tab-separated values with .txt extension
-                candidates = [
-                    n
-                    for n in zf.namelist()
-                    if ("1a" in n.lower() or "us." in n.lower()) and (n.endswith(".txt") or n.endswith(".csv"))
-                ]
-                if not candidates:
-                    # Fall back to any .txt file
-                    candidates = [n for n in zf.namelist() if n.endswith(".txt")]
-                if not candidates:
-                    logger.warning("No 1a CSV found in ZIP for year %d. Files: %s", data_year, zf.namelist()[:10])
-                    return rows
+            with open(cache_path, encoding="latin-1", errors="replace") as fh:
+                text = fh.read()
+            # TRI files are comma-separated; detect in case of tab-delimited legacy cache
+            delimiter = "\t" if "\t" in text[:2000] else ","
+            reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+            rows = list(reader)
+            if not rows:
+                return rows
+            # Detect numbered headers: "1. YEAR", "4. FACILITY NAME", etc.
+            sample_key = next(iter(rows[0]))
+            if sample_key and sample_key[0].isdigit() and ". " in sample_key:
+                import re as _re
 
-                # Use the first 1a match, prefer the one named with 'us'
-                target = next((c for c in candidates if "us" in c.lower()), candidates[0])
-                logger.info("  Extracting %s from ZIP", target)
-
-                with zf.open(target) as fh:
-                    text = fh.read().decode("latin-1", errors="replace")
-                    # TRI files can be tab-separated; detect delimiter
-                    delimiter = "\t" if "\t" in text[:2000] else ","
-                    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
-                    rows = list(reader)
-        except zipfile.BadZipFile:
-            logger.error("Bad ZIP file for year %d: %s", data_year, cache_path)
-        return rows
+                _strip = _re.compile(r"^\d+\.\s+")
+                rows = [{_strip.sub("", k): v for k, v in row.items()} for row in rows]
+                logger.info("  Stripped numbered column prefixes from year %d headers.", data_year)
+            return rows
+        except Exception as exc:
+            logger.error("Failed to parse CSV for year %d: %s", data_year, exc)
+            return []
 
     async def _process_row(self, row: dict, stats: IngestStats) -> None:
         facility = _col(row, _COL_FACILITY, "FACILITY")
@@ -463,9 +488,13 @@ class EpaTRIIngestor:
             stats.records_skipped += 1
             return
 
-        total_releases = _float(_col(row, _COL_TOTAL_RELEASES, "TOTAL RELEASES"))
-        offsite = _float(_col(row, _COL_OFFSITE_TRANSFERS, "OFF-SITE TRANSFERS"))
-        total_all = total_releases + offsite
+        # Use grand total (on-site + off-site) for threshold filtering
+        total_all = _float(_col(row, _COL_TOTAL_RELEASES))
+        if total_all == 0.0:
+            # Fallback: sum on-site + off-site separately
+            total_all = _float(_col(row, _COL_ONSITE_TOTAL)) + _float(
+                _col(row, _COL_OFFSITE_TOTAL, "TOTAL TRANSFERS OFF-SITE")
+            )
 
         if total_all < self.min_release_lbs:
             stats.records_skipped += 1
@@ -481,7 +510,7 @@ class EpaTRIIngestor:
         parent = _col(row, _COL_PARENT, "PARENT COMPANY")
         city = _col(row, _COL_CITY)
         county = _col(row, _COL_COUNTY)
-        cas = _col(row, _COL_CAS, "CAS NUMBER")
+        cas = _col(row, _COL_CAS, "CAS #", "CAS NUMBER")
         carcinogen = _col(row, _COL_CARCINOGEN)
 
         # Stable ID: hash of facility+chemical+year
@@ -490,6 +519,10 @@ class EpaTRIIngestor:
 
         entity_tags = [t for t in [facility, parent, chemical, city, state, county] if t]
         ingest_unix = report_unix or int(time.time())
+
+        # Normalised release weight [0,1]: log1p-scaled, ceiling at 10 million lbs.
+        # Used by the orchestrator as a score multiplier for boost-collection queries.
+        release_weight = min(1.0, math.log1p(total_all) / math.log1p(10_000_000)) if total_all > 0 else 0.0
 
         payload: dict = {
             "text": doc,
@@ -504,6 +537,7 @@ class EpaTRIIngestor:
             "entity_tags": entity_tags,
             "ingested_at_unix": ingest_unix,
             "total_releases_lbs": total_all,
+            "release_weight": release_weight,
         }
         if parent:
             payload["parent_company"] = parent

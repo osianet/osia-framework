@@ -1,9 +1,9 @@
 """
 OSIA USPTO Patent Data Ingestion
 
-Fetches strategic technology patent records from the PatentsView API
-(USPTO data) into the 'uspto-patents' Qdrant collection for the
-Science, Technology & Commercial desk RAG retrieval.
+Fetches strategic technology patent records from the Lens.org patent API
+(USPTO + international data) into the 'uspto-patents' Qdrant collection for
+the Science, Technology & Commercial desk RAG retrieval.
 
 Patent data reveals who is developing which technologies, maps corporate
 R&D strategies, exposes dual-use research, and tracks the transfer of
@@ -18,8 +18,9 @@ Filtered to strategically relevant CPC sections by default:
   B64 — Aerospace / aircraft / spacecraft
   A61 — Medical / pharmaceutical / biodefence
 
-Source: https://api.patentsview.org/
-Free public API, no authentication required. USPTO data 1976-present.
+Source: https://api.lens.org/
+Free API key from https://www.lens.org/lens/user/subscriptions (Scholarly API).
+Covers USPTO grants 1976-present plus international patents.
 
 Usage:
   uv run python scripts/ingest_uspto.py
@@ -31,7 +32,7 @@ Usage:
 
 Options:
   --dry-run             Parse and embed but skip Qdrant writes and Redis updates
-  --resume              Resume from last Redis checkpoint (last processed patent date)
+  --resume              Resume from last Redis checkpoint (last processed month)
   --date-from YYYY-MM-DD  Start date (default: 2 years ago)
   --date-to YYYY-MM-DD    End date (default: today)
   --cpc-sections        CPC section codes to include (default: G H C12 B64 A61)
@@ -42,6 +43,7 @@ Options:
   --upsert-batch-size   Points per Qdrant upsert call (default: 64)
 
 Environment variables (from .env):
+  LENS_API_KEY          Lens.org API key (required; free from lens.org)
   HF_TOKEN              HuggingFace token (required for embeddings)
   QDRANT_URL            Qdrant URL (default: https://qdrant.osia.dev)
   QDRANT_API_KEY        Qdrant API key
@@ -78,6 +80,7 @@ logger = logging.getLogger("osia.uspto_ingest")
 # Config
 # ---------------------------------------------------------------------------
 
+LENS_API_KEY = os.getenv("LENS_API_KEY", "")
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "") or None
@@ -85,19 +88,19 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 COLLECTION_NAME = "uspto-patents"
 EMBEDDING_DIM = 384
-SOURCE_LABEL = "USPTO Patent Database (PatentsView)"
+SOURCE_LABEL = "USPTO Patent Database (Lens.org)"
 
-PATENTSVIEW_URL = "https://api.patentsview.org/patents/query"
+LENS_API_URL = "https://api.lens.org/patent/search"
 USER_AGENT = "OSIA-Framework/1.0 (open-source intelligence research; +https://osia.dev)"
-PAGE_SIZE = 100
-REQUEST_DELAY = 1.5
+PAGE_SIZE = 500  # Lens.org supports up to 1000 per request
+REQUEST_DELAY = 1.0
 
 HF_EMBEDDING_URL = (
     "https://router.huggingface.co/hf-inference/models/"
     "sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 )
 
-CHECKPOINT_KEY = "osia:uspto:last_date"
+CHECKPOINT_KEY = "osia:uspto:last_month"
 RESEARCH_QUEUE_KEY = "osia:research_queue"
 
 TODAY = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -165,39 +168,57 @@ def _parse_date_unix(date_str: str) -> int | None:
         return None
 
 
+def _first_en(items: list[dict], key: str = "text") -> str:
+    """Return the 'en' entry from a Lens.org localised list, falling back to first."""
+    if not items:
+        return ""
+    en = next((i[key] for i in items if i.get("lang") == "en" and i.get(key)), None)
+    return en or items[0].get(key, "")
+
+
 # ---------------------------------------------------------------------------
 # Document builder
 # ---------------------------------------------------------------------------
 
 
 def build_document(patent: dict) -> tuple[str, int | None]:
-    """Build a narrative document from a PatentsView patent record."""
-    patent_id = patent.get("patent_id", "")
-    title = patent.get("patent_title", "")
-    date = patent.get("patent_date", "")
-    abstract = patent.get("patent_abstract", "")
-    num_claims = patent.get("patent_num_claims", "")
-    kind = patent.get("patent_kind", "")
+    """Build a narrative document from a Lens.org patent record."""
+    lens_id = patent.get("lens_id", "")
+    doc_number = patent.get("doc_number", "")
+    kind = patent.get("kind", "")
 
-    inventors = patent.get("inventors", []) or []
-    assignees = patent.get("assignees", []) or []
-    cpcs = patent.get("cpcs", []) or []
+    # title / abstract are lists of {"text": "...", "lang": "..."}
+    title = _first_en(patent.get("title") or [])
+    abstract = _first_en(patent.get("abstract") or [])
 
-    patent_unix = _parse_date_unix(date)
+    # grant date lives under legal_status
+    legal_status = patent.get("legal_status") or {}
+    grant_date = legal_status.get("grant_date", "")
 
+    # inventors: extracted_name.value
+    inventors = patent.get("inventor") or []
     inventor_names = [
-        f"{inv.get('inventor_first_name', '')} {inv.get('inventor_last_name', '')}".strip() for inv in inventors[:5]
+        inv.get("extracted_name", {}).get("value", "")
+        for inv in inventors[:5]
+        if inv.get("extracted_name", {}).get("value")
     ]
-    assignee_names = [
-        a.get("assignee_organization", "")
-        or f"{a.get('assignee_first_name', '')} {a.get('assignee_last_name', '')}".strip()
-        for a in assignees[:5]
-    ]
-    assignee_names = [a for a in assignee_names if a]
-    assignee_countries = list({a.get("assignee_country", "") for a in assignees if a.get("assignee_country")})
 
-    cpc_groups = list({c.get("cpc_subgroup_id", "") for c in cpcs if c.get("cpc_subgroup_id")})[:8]
-    cpc_sections = list({c.get("cpc_section_id", "") for c in cpcs if c.get("cpc_section_id")})
+    # applicants (assignees): extracted_name.value + residence
+    applicants = patent.get("applicant") or []
+    assignee_names = [
+        app.get("extracted_name", {}).get("value", "")
+        for app in applicants[:5]
+        if app.get("extracted_name", {}).get("value")
+    ]
+    assignee_countries = list({app.get("residence", "") for app in applicants if app.get("residence")})
+
+    # CPC classifications
+    cpc_data = patent.get("classifications_cpc") or {}
+    cpc_list = cpc_data.get("classifications") or []
+    cpc_symbols = list({c.get("symbol", "") for c in cpc_list if c.get("symbol")})[:8]
+    cpc_sections = list({s[0] for s in cpc_symbols if s})
+
+    patent_unix = _parse_date_unix(grant_date)
 
     if not title and not abstract:
         return "", patent_unix
@@ -205,26 +226,26 @@ def build_document(patent: dict) -> tuple[str, int | None]:
     lines: list[str] = []
     if title:
         lines.append(f"Patent Title: {title}")
-    if patent_id:
-        lines.append(f"Patent Number: US{patent_id}")
-        lines.append(f"USPTO Record: https://patents.google.com/patent/US{patent_id}")
-    if date:
-        lines.append(f"Grant Date: {date}")
+    if doc_number:
+        lines.append(f"Patent Number: US{doc_number}")
+        lines.append(f"USPTO Record: https://patents.google.com/patent/US{doc_number}")
+    if lens_id:
+        lines.append(f"Lens ID: {lens_id}")
+    if grant_date:
+        lines.append(f"Grant Date: {grant_date}")
     if kind:
         lines.append(f"Kind: {kind}")
-    if num_claims:
-        lines.append(f"Claims: {num_claims}")
 
     if assignee_names:
         lines.append(f"Assignee(s): {'; '.join(assignee_names)}")
     if assignee_countries:
-        lines.append(f"Assignee Country: {', '.join(assignee_countries)}")
+        lines.append(f"Assignee Country: {', '.join(sorted(assignee_countries))}")
     if inventor_names:
         lines.append(f"Inventor(s): {'; '.join(inventor_names)}")
     if cpc_sections:
         lines.append(f"CPC Sections: {', '.join(sorted(cpc_sections))}")
-    if cpc_groups:
-        lines.append(f"CPC Groups: {', '.join(cpc_groups)}")
+    if cpc_symbols:
+        lines.append(f"CPC Groups: {', '.join(cpc_symbols)}")
 
     if abstract:
         lines.append(f"\nAbstract:\n{abstract}")
@@ -295,13 +316,22 @@ class UsptoIngestor:
         self._upsert_buffer: list[qdrant_models.PointStruct] = []
 
     async def run(self) -> None:
+        if not LENS_API_KEY:
+            logger.error(
+                "LENS_API_KEY must be set in .env (get a free key at https://www.lens.org/lens/user/subscriptions)"
+            )
+            return
+
         self._redis = aioredis.from_url(REDIS_URL, decode_responses=True)
         try:
             await self._ensure_collection()
 
             date_from = await self._resolve_date_from()
             logger.info(
-                "Fetching patents from %s to %s (CPC: %s)", date_from, self.date_to, ", ".join(self.cpc_sections)
+                "Fetching US patents from %s to %s (CPC: %s)",
+                date_from,
+                self.date_to,
+                ", ".join(self.cpc_sections),
             )
 
             stats = IngestStats()
@@ -340,106 +370,130 @@ class UsptoIngestor:
             info = await self._qdrant.get_collection(COLLECTION_NAME)
             logger.info("Collection '%s' ready (%d points).", COLLECTION_NAME, info.points_count or 0)
 
+    # ------------------------------------------------------------------
+    # Month-by-month pagination
+    # Lens.org offset pagination is capped at 10K records per query, so
+    # we chunk by calendar month to keep each query well under that limit.
+    # ------------------------------------------------------------------
+
     async def _ingest(self, stats: IngestStats, date_from: str) -> None:
-        # Build CPC filter: OR across all sections
-        cpc_criteria = [{"cpc_subgroup_id": {"begins_with": section}} for section in self.cpc_sections]
-        cpc_filter = {"_or": cpc_criteria} if len(cpc_criteria) > 1 else cpc_criteria[0]
+        current = datetime.strptime(date_from[:7], "%Y-%m")
+        end_dt = datetime.strptime(self.date_to[:7], "%Y-%m")
+
+        while current <= end_dt:
+            if self.limit and stats.records_processed >= self.limit:
+                break
+
+            # Last day of the current month
+            next_month = (current.replace(day=1) + timedelta(days=32)).replace(day=1)
+            month_end = (next_month - timedelta(days=1)).strftime("%Y-%m-%d")
+            month_start = current.strftime("%Y-%m-01")
+
+            logger.info("Processing month %s…", current.strftime("%Y-%m"))
+            await self._ingest_month(stats, month_start, month_end)
+            await self._save_checkpoint(month_start)
+
+            current = next_month
+            await asyncio.sleep(REQUEST_DELAY)
+
+    async def _ingest_month(self, stats: IngestStats, date_from: str, date_to: str) -> None:
+        """Fetch all matching patents for a single calendar month."""
+        # CPC section filter: any symbol starting with one of our section codes
+        cpc_should = [{"prefix": {"class_cpc.symbol": section}} for section in self.cpc_sections]
 
         query = {
-            "_and": [
-                {"patent_date": {"gte": date_from}},
-                {"patent_date": {"lte": self.date_to}},
-                cpc_filter,
-            ]
+            "bool": {
+                "must": [
+                    {"term": {"jurisdiction": "US"}},
+                    {"term": {"legal_status.patent_status": "GRANT"}},
+                ],
+                "filter": [
+                    {"range": {"legal_status.grant_date": {"gte": date_from, "lte": date_to}}},
+                    {"bool": {"should": cpc_should, "minimum_should_match": 1}},
+                ],
+            }
         }
 
-        fields = [
-            "patent_id",
-            "patent_title",
-            "patent_date",
-            "patent_abstract",
-            "patent_num_claims",
-            "patent_kind",
-            "inventors.inventor_first_name",
-            "inventors.inventor_last_name",
-            "inventors.inventor_city",
-            "inventors.inventor_country",
-            "assignees.assignee_organization",
-            "assignees.assignee_first_name",
-            "assignees.assignee_last_name",
-            "assignees.assignee_country",
-            "cpcs.cpc_section_id",
-            "cpcs.cpc_subgroup_id",
+        include_fields = [
+            "lens_id",
+            "doc_number",
+            "kind",
+            "title",
+            "abstract",
+            "legal_status",
+            "inventor",
+            "applicant",
+            "classifications_cpc",
         ]
 
-        page = 1
-        latest_date = date_from
+        offset = 0
+        headers = {
+            "Authorization": f"Bearer {LENS_API_KEY}",
+            "Content-Type": "application/json",
+            "User-Agent": USER_AGENT,
+        }
 
-        async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=60.0) as http:
+        async with httpx.AsyncClient(headers=headers, timeout=60.0) as http:
             while True:
+                if self.limit and stats.records_processed >= self.limit:
+                    break
+
                 payload = {
-                    "q": query,
-                    "f": fields,
-                    "o": {"per_page": PAGE_SIZE, "page": page, "sort": [{"patent_date": "asc"}]},
+                    "query": query,
+                    "include": include_fields,
+                    "size": PAGE_SIZE,
+                    "from": offset,
+                    "sort": [{"legal_status.grant_date": "asc"}],
                 }
 
                 for attempt in range(4):
                     try:
-                        resp = await http.post(
-                            PATENTSVIEW_URL,
-                            json=payload,
-                            headers={"Content-Type": "application/json"},
-                        )
+                        resp = await http.post(LENS_API_URL, json=payload)
                         if resp.status_code == 429:
                             wait = 60 * (attempt + 1)
-                            logger.warning("PatentsView 429 — waiting %ds", wait)
+                            logger.warning("Lens.org 429 — waiting %ds", wait)
                             await asyncio.sleep(wait)
                             continue
                         resp.raise_for_status()
                         data = resp.json()
                         break
                     except Exception as exc:
-                        logger.warning("PatentsView attempt %d failed (page=%d): %s", attempt + 1, page, exc)
+                        logger.warning("Lens.org attempt %d failed (offset=%d): %s", attempt + 1, offset, exc)
                         await asyncio.sleep(10 * (attempt + 1))
                 else:
-                    logger.error("Giving up at page %d.", page)
+                    logger.error("Giving up at offset %d for %s–%s.", offset, date_from, date_to)
                     break
 
-                patents = data.get("patents") or []
+                patents = data.get("data") or []
+                total = data.get("total", 0)
+
                 if not patents:
-                    logger.info("No more patents at page %d — done.", page)
                     break
 
-                total_patent_count = data.get("total_patent_count", "?")
-                logger.info("Page %d: %d patents (total=%s)", page, len(patents), total_patent_count)
+                logger.info("  offset=%d patents=%d total=%s", offset, len(patents), total)
 
                 for patent in patents:
                     stats.records_seen += 1
                     try:
-                        patent_date = patent.get("patent_date", "")
-                        if patent_date and patent_date > latest_date:
-                            latest_date = patent_date
                         await self._process_patent(patent, stats)
                     except Exception as exc:
                         stats.errors += 1
                         logger.debug("Patent error: %s", exc)
 
                     if self.limit and stats.records_processed >= self.limit:
-                        await self._save_checkpoint(latest_date)
                         return
 
                     if stats.records_processed % 1000 == 0 and stats.records_processed > 0:
                         stats.log_progress()
 
-                await self._save_checkpoint(latest_date)
-
-                if len(patents) < PAGE_SIZE:
+                offset += len(patents)
+                if offset >= total or len(patents) < PAGE_SIZE:
                     break
-                page += 1
+
                 await asyncio.sleep(REQUEST_DELAY)
 
     async def _process_patent(self, patent: dict, stats: IngestStats) -> None:
-        patent_id = patent.get("patent_id", "")
+        lens_id = patent.get("lens_id", "")
         doc, patent_unix = build_document(patent)
         if not doc.strip():
             stats.records_skipped += 1
@@ -452,30 +506,34 @@ class UsptoIngestor:
 
         stats.records_processed += 1
 
-        title = patent.get("patent_title", "")
-        date = patent.get("patent_date", "")
-        assignees = patent.get("assignees", []) or []
+        title = _first_en(patent.get("title") or [])
+        legal_status = patent.get("legal_status") or {}
+        grant_date = legal_status.get("grant_date", "")
+
+        applicants = patent.get("applicant") or []
         assignee_names = [
-            a.get("assignee_organization", "")
-            or f"{a.get('assignee_first_name', '')} {a.get('assignee_last_name', '')}".strip()
-            for a in assignees[:3]
+            app.get("extracted_name", {}).get("value", "")
+            for app in applicants[:3]
+            if app.get("extracted_name", {}).get("value")
         ]
-        assignee_names = [a for a in assignee_names if a]
-        cpcs = patent.get("cpcs", []) or []
-        cpc_sections = list({c.get("cpc_section_id", "") for c in cpcs if c.get("cpc_section_id")})
+
+        cpc_data = patent.get("classifications_cpc") or {}
+        cpc_list = cpc_data.get("classifications") or []
+        cpc_sections = list({c.get("symbol", "")[0] for c in cpc_list if c.get("symbol")})
+
         entity_tags = [t for t in [title] + assignee_names + cpc_sections if t]
         ingest_unix = patent_unix or int(time.time())
 
         for i, chunk in enumerate(chunks):
-            point_id = str(uuid.UUID(bytes=hashlib.sha256(f"uspto:{patent_id}:{i}".encode()).digest()[:16]))
+            point_id = str(uuid.UUID(bytes=hashlib.sha256(f"lens:{lens_id}:{i}".encode()).digest()[:16]))
             payload: dict = {
                 "text": chunk,
                 "source": SOURCE_LABEL,
                 "document_type": "patent",
-                "provenance": "patentsview",
+                "provenance": "lens_org",
                 "ingest_date": TODAY,
-                "patent_id": patent_id,
-                "pub_date": date,
+                "lens_id": lens_id,
+                "pub_date": grant_date,
                 "entity_tags": entity_tags,
                 "ingested_at_unix": ingest_unix,
             }
@@ -498,14 +556,14 @@ class UsptoIngestor:
         if self.enqueue_notable:
             assignee_lower = " ".join(assignee_names).lower()
             if any(kw in assignee_lower for kw in NOTABLE_ASSIGNEE_KEYWORDS):
-                await self._maybe_enqueue(patent_id, title, assignee_names, date, stats)
+                await self._maybe_enqueue(lens_id, title, assignee_names, grant_date, stats)
 
     async def _maybe_enqueue(
-        self, patent_id: str, title: str, assignees: list[str], date: str, stats: IngestStats
+        self, lens_id: str, title: str, assignees: list[str], date: str, stats: IngestStats
     ) -> None:
         if not self._redis or self.dry_run:
             return
-        redis_key = f"osia:uspto:enqueued:{patent_id}"
+        redis_key = f"osia:uspto:enqueued:{lens_id}"
         if await self._redis.exists(redis_key):
             return
         assignee_str = "; ".join(assignees[:3])
@@ -517,7 +575,7 @@ class UsptoIngestor:
                 "desk": "science-technology-and-commercial-desk",
                 "priority": "normal",
                 "triggered_by": "uspto_ingest",
-                "metadata": {"patent_id": patent_id, "assignees": assignees, "date": date},
+                "metadata": {"lens_id": lens_id, "assignees": assignees, "date": date},
             }
         )
         await self._redis.rpush(RESEARCH_QUEUE_KEY, job)
@@ -575,10 +633,10 @@ class UsptoIngestor:
                     await asyncio.sleep(5 * (attempt + 1))
         return [[0.0] * EMBEDDING_DIM for _ in texts]
 
-    async def _save_checkpoint(self, date: str) -> None:
+    async def _save_checkpoint(self, month_start: str) -> None:
         if self.dry_run or not self._redis:
             return
-        await self._redis.set(CHECKPOINT_KEY, date)
+        await self._redis.set(CHECKPOINT_KEY, month_start)
 
 
 # ---------------------------------------------------------------------------
@@ -592,7 +650,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--dry-run", action="store_true", help="Skip Qdrant writes and Redis updates")
-    p.add_argument("--resume", action="store_true", help="Resume from last Redis checkpoint date")
+    p.add_argument("--resume", action="store_true", help="Resume from last Redis checkpoint month")
     p.add_argument("--date-from", help="Start date YYYY-MM-DD (default: 2 years ago)")
     p.add_argument("--date-to", help="End date YYYY-MM-DD (default: today)")
     p.add_argument("--cpc-sections", nargs="+", default=DEFAULT_CPC_SECTIONS, help="CPC section codes to include")

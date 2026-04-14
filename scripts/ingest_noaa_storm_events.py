@@ -50,6 +50,7 @@ import gzip
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -415,6 +416,23 @@ class NoaaStormIngestor:
             info = await self._qdrant.get_collection(COLLECTION_NAME)
             logger.info("Collection '%s' ready (%d points).", COLLECTION_NAME, info.points_count or 0)
 
+        # Ensure payload indexes exist (idempotent — safe to call on every run).
+        keyword_fields = ["event_type", "state", "pub_date", "document_type", "provenance"]
+        float_fields = ["damage_usd", "damage_weight", "ingested_at_unix"]
+        for field_name in keyword_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.KEYWORD,
+            )
+        for field_name in float_fields:
+            await self._qdrant.create_payload_index(
+                collection_name=COLLECTION_NAME,
+                field_name=field_name,
+                field_schema=qdrant_models.PayloadSchemaType.FLOAT,
+            )
+        logger.info("Payload indexes verified for '%s'.", COLLECTION_NAME)
+
     async def _ingest_year(self, year: int, filename: str, stats: IngestStats) -> None:
         """Download, decompress, and ingest one year's storm events CSV."""
         cache_path = self.data_dir / filename
@@ -490,6 +508,10 @@ class NoaaStormIngestor:
         entity_tags = [t for t in [event_type, state, _safe(row.get("CZ_NAME", ""))] if t]
         ingest_unix = event_unix or int(time.time())
 
+        # Normalised damage weight [0,1]: log1p-scaled, ceiling at $10B damage.
+        # Used by the orchestrator as a score multiplier for boost-collection queries.
+        damage_weight = min(1.0, math.log1p(total_dmg) / math.log1p(10_000_000_000)) if total_dmg > 0 else 0.0
+
         point_id = str(uuid.UUID(bytes=hashlib.sha256(f"noaa:storm:{event_id}".encode()).digest()[:16]))
         payload: dict = {
             "text": doc,
@@ -504,6 +526,7 @@ class NoaaStormIngestor:
             "pub_date": pub_date,
             "entity_tags": entity_tags,
             "ingested_at_unix": ingest_unix,
+            "damage_weight": damage_weight,
         }
         if total_dmg > 0:
             payload["damage_usd"] = total_dmg
