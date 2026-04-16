@@ -245,6 +245,7 @@ class ResearchJob:
     priority: str = "normal"
     directives_lens: bool = True
     triggered_by: str = ""
+    source: str = ""  # set by ingress API (e.g. "api:external"); triggered_by used elsewhere
 
     @classmethod
     def from_dict(cls, d: dict) -> "ResearchJob":
@@ -255,6 +256,7 @@ class ResearchJob:
             priority=d.get("priority", "normal"),
             directives_lens=d.get("directives_lens", True),
             triggered_by=d.get("triggered_by", ""),
+            source=d.get("source", ""),
         )
 
 
@@ -1030,6 +1032,97 @@ def _parse_react(text: str) -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Query expansion — turn a bare topic + context into a focused research brief
+# ---------------------------------------------------------------------------
+
+
+async def _expand_research_query(job: ResearchJob, http: httpx.AsyncClient) -> str:
+    """Build an enriched research prompt from the job's topic and available context.
+
+    URL-sourced topics (triggered_by is a URL): instruct the model to fetch the
+    source article first so it understands the specific angle before searching.
+
+    All other topics: call a cheap model to produce a 1-2 sentence focus statement
+    and 2-3 specific queries, replacing the bare ``Research topic: <word>`` message
+    that leads to single-word tool calls.
+
+    Falls back to plain ``Research topic: {topic}`` if all providers are unavailable.
+    """
+    triggered = job.triggered_by or ""
+    source = job.source or ""
+
+    # For RSS-extracted topics the triggered_by field is the source article URL.
+    # Instead of expanding, tell the model to read the article for context first.
+    if triggered.startswith(("http://", "https://")):
+        logger.debug("URL-sourced topic '%s' — directing model to fetch source article", job.topic)
+        return (
+            f"Research topic: {job.topic}\n\n"
+            f"This topic was extracted from the following article:\n{triggered}\n\n"
+            f"Start by calling fetch_url on that article to understand the specific context in which "
+            f"'{job.topic}' is relevant. Use what you learn to formulate precise follow-up queries "
+            f"rather than generic lookups of '{job.topic}' in isolation."
+        )
+
+    # Build context lines for the expansion prompt
+    context_lines = [f"Topic: {job.topic}", f"Intelligence desk: {job.desk}"]
+    if triggered:
+        context_lines.append(f"Triggered by: {triggered}")
+    if source:
+        context_lines.append(f"Source: {source}")
+
+    expansion_prompt = (
+        "You are an OSINT research planner. A bare topic name has been queued for intelligence research. "
+        "Your job is to turn it into a precise, actionable research brief.\n\n"
+        "Output exactly two lines (no extra text):\n"
+        "FOCUS: <1-2 sentences on what specifically to investigate and why, given the desk and trigger context>\n"
+        "QUERIES: <specific search query 1> | <specific search query 2> | <specific search query 3>\n\n"
+        "Rules: queries must be specific phrases (4+ words), not single words or generic terms. "
+        "Tailor them to the desk's intelligence domain.\n\n" + "\n".join(context_lines)
+    )
+
+    expansion: str | None = None
+
+    if VENICE_API_KEY:
+        try:
+            resp = await http.post(
+                f"{VENICE_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {VENICE_API_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": VENICE_MODEL_DEFAULT,
+                    "messages": [{"role": "user", "content": expansion_prompt}],
+                    "max_tokens": 200,
+                    "temperature": 0.2,
+                },
+                timeout=20.0,
+            )
+            if resp.status_code == 200:
+                expansion = resp.json()["choices"][0]["message"]["content"].strip()
+        except Exception as exc:
+            logger.debug("Query expansion (Venice) failed for '%s': %s", job.topic, exc)
+
+    if not expansion and GEMINI_API_KEY:
+        try:
+            from google import genai
+
+            _gemini = genai.Client(api_key=GEMINI_API_KEY)
+            _resp = await asyncio.to_thread(
+                _gemini.models.generate_content,
+                model=GEMINI_MODEL,
+                contents=expansion_prompt,
+            )
+            expansion = _resp.text.strip()
+        except Exception as exc:
+            logger.debug("Query expansion (Gemini) failed for '%s': %s", job.topic, exc)
+
+    if expansion:
+        logger.info("Expanded query for '%s': %s", job.topic, expansion.replace("\n", " ")[:160])
+        return f"Research topic: {job.topic}\n\n{expansion}"
+
+    # Fallback — no provider available or all failed
+    return f"Research topic: {job.topic}"
+
+
+# ---------------------------------------------------------------------------
 # Message sanitisation
 # ---------------------------------------------------------------------------
 
@@ -1060,6 +1153,7 @@ async def run_research_loop_openai_compat(
     api_key: str,
     extra_headers: dict | None = None,
     model_override: str | None = None,
+    user_message: str | None = None,
 ) -> str:
     model = model_override or _model_for_desk(job.desk)
     _registry = get_tool_registry(job.desk)  # desk-aware: search_intel_kb includes boost collections
@@ -1099,7 +1193,7 @@ async def run_research_loop_openai_compat(
                 "SEARCH_SEMANTIC_SCHOLAR: <query>\nSEARCH_OTX: <query>\nSEARCH_ALEPH: <query>"
             ),
         },
-        {"role": "user", "content": f"Research topic: {job.topic}"},
+        {"role": "user", "content": user_message or f"Research topic: {job.topic}"},
     ]
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -1216,7 +1310,7 @@ async def run_research_loop_openai_compat(
 # ---------------------------------------------------------------------------
 
 
-async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) -> str:
+async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient, user_message: str | None = None) -> str:
     from google import genai
     from google.genai import types
 
@@ -1319,7 +1413,11 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
         "2-3 tool calls total is usually sufficient. "
         "Never run the same query through multiple tools."
     )
-    contents = [types.Content(role="user", parts=[types.Part(text=f"{system}\n\nResearch topic: {job.topic}")])]
+    contents = [
+        types.Content(
+            role="user", parts=[types.Part(text=f"{system}\n\n{user_message or f'Research topic: {job.topic}'}")]
+        )
+    ]
 
     logger.info("Researching (Gemini): %s", job.topic)
 
@@ -1360,11 +1458,18 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
 
 async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
     """Try each configured provider in order; cascade to the next on any failure."""
+    # Expand the bare topic into a focused brief + specific queries before dispatching.
+    # The same expanded message is reused across provider retries so we only pay the
+    # expansion cost once regardless of how many fallbacks are needed.
+    user_message = await _expand_research_query(job, http)
+
     errors: list[str] = []
 
     if VENICE_API_KEY:
         try:
-            return await run_research_loop_openai_compat(job, http, base_url=VENICE_BASE_URL, api_key=VENICE_API_KEY)
+            return await run_research_loop_openai_compat(
+                job, http, base_url=VENICE_BASE_URL, api_key=VENICE_API_KEY, user_message=user_message
+            )
         except Exception as exc:
             logger.warning("Venice failed for '%s' — trying next provider: %s", job.topic, exc)
             errors.append(f"Venice: {exc}")
@@ -1378,6 +1483,7 @@ async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
                 api_key=OPENROUTER_API_KEY,
                 extra_headers={"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Research Worker"},
                 model_override=OPENROUTER_RESEARCH_MODEL,
+                user_message=user_message,
             )
         except Exception as exc:
             logger.warning("OpenRouter failed for '%s' — trying Gemini: %s", job.topic, exc)
@@ -1385,7 +1491,7 @@ async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
 
     if GEMINI_API_KEY:
         try:
-            return await run_research_loop_gemini(job, http)
+            return await run_research_loop_gemini(job, http, user_message=user_message)
         except Exception as exc:
             logger.warning("Gemini failed for '%s': %s", job.topic, exc)
             errors.append(f"Gemini: {exc}")
