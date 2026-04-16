@@ -39,6 +39,8 @@ dependencies = [
     "pymupdf==1.27.2.2",
     "setuptools>=81.0.0",
     "sentence-transformers>=3.0.0",
+    "trafilatura==2.0.0",
+    "curl-cffi==0.15.0",
 ]
 
 [project.optional-dependencies]

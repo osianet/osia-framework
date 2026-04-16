@@ -70,11 +70,11 @@ from src.workers.research_worker import (
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
     REACT_ONLY_MODELS,  # kept for Venice fallback path
-    TOOL_REGISTRY,
     TOOL_SCHEMAS,
     VENICE_API_KEY,
     VENICE_BASE_URL,
     _parse_react,  # kept for Venice fallback path
+    get_tool_registry,
 )
 
 load_dotenv()
@@ -206,10 +206,10 @@ def _filter_tool_schemas(desk_tools: list[str]) -> list[dict]:
     """Return TOOL_SCHEMAS filtered to desk-relevant tools.
 
     search_intel_kb is always included (internal KB check should always run first).
-    search_duckduckgo is always included as a web fallback.
+    search_web is always included as the default web fallback (DuckDuckGo, no quota).
     All other tools are gated by the desk's tools list.
     """
-    always_included = {"search_intel_kb", "search_duckduckgo"}
+    always_included = {"search_intel_kb", "search_web"}
     allowed = always_included | set(desk_tools)
     return [s for s in TOOL_SCHEMAS if s["function"]["name"] in allowed]
 
@@ -292,9 +292,10 @@ def _build_hermes_tools_block(schemas: list[dict]) -> str:
 
 _KNOWN_TOOLS = frozenset(
     {
+        "fetch_url",
         "search_intel_kb",
         "search_web",
-        "search_duckduckgo",
+        "search_tavily",
         "search_wikipedia",
         "search_arxiv",
         "search_semantic_scholar",
@@ -338,7 +339,7 @@ def _parse_hermes_tool_calls(content: str) -> list[tuple[str, str]]:
             data = json.loads(match.group(1).strip())
             name = data.get("name", "")
             args = data.get("arguments", {})
-            query = args.get("query", "") if isinstance(args, dict) else ""
+            query = (args.get("query") or args.get("url") or "") if isinstance(args, dict) else ""
             _add(name, query)
         except (json.JSONDecodeError, AttributeError):
             pass  # malformed JSON in <tool_call> tag — skip this match, try next
@@ -353,7 +354,7 @@ def _parse_hermes_tool_calls(content: str) -> list[tuple[str, str]]:
                 for item in items:
                     name = item.get("name", "")
                     args = item.get("arguments", {})
-                    query = args.get("query", "") if isinstance(args, dict) else ""
+                    query = (args.get("query") or args.get("url") or "") if isinstance(args, dict) else ""
                     _add(name, query)
         except (json.JSONDecodeError, TypeError):
             pass  # regex matched something that looks like a JSON array but isn't — skip
@@ -382,7 +383,7 @@ def _parse_hermes_tool_calls(content: str) -> list[tuple[str, str]]:
     ):
         try:
             args = json.loads(match.group(2).strip())
-            query = args.get("query", "") if isinstance(args, dict) else ""
+            query = (args.get("query") or args.get("url") or "") if isinstance(args, dict) else ""
             _add(match.group(1).lower(), query)
         except (json.JSONDecodeError, AttributeError):
             pass  # <arguments> block matched but contained invalid JSON — skip this match
@@ -433,6 +434,7 @@ async def _run_corroboration_loop_openai_compat(
     extra_headers: dict | None = None,
 ) -> str:
     model, _, _ = _model_for_desk(desk.slug)
+    _registry = get_tool_registry(desk.slug)  # desk-aware: search_intel_kb includes boost collections
     filtered_schemas = _filter_tool_schemas(desk.tools)
     tool_names = " | ".join(s["function"]["name"] for s in filtered_schemas)
     is_hermes = model in _HERMES_MODELS
@@ -579,9 +581,9 @@ async def _run_corroboration_loop_openai_compat(
                     fn_args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
                     fn_args = {}
-                query = fn_args.get("query", "")
+                query = fn_args.get("query") or fn_args.get("url") or ""
                 logger.info("  → tool call: %s(%r)", fn_name, query)
-                tool_fn = TOOL_REGISTRY.get(fn_name)
+                tool_fn = _registry.get(fn_name)
                 result = await tool_fn(query, http) if tool_fn else f"Unknown tool: {fn_name}"
                 logger.info("     result: %.120s", result.replace("\n", " "))
                 tool_call_count += 1
@@ -604,7 +606,7 @@ async def _run_corroboration_loop_openai_compat(
                 response_parts = []
                 for fn_name, query in hermes_calls:
                     logger.info("  → tool call: %s(%r)", fn_name, query)
-                    tool_fn = TOOL_REGISTRY.get(fn_name)
+                    tool_fn = _registry.get(fn_name)
                     result = await tool_fn(query, http) if tool_fn else f"Unknown tool: {fn_name}"
                     logger.info("     result: %.120s", result.replace("\n", " "))
                     tool_call_count += 1
@@ -632,7 +634,7 @@ async def _run_corroboration_loop_openai_compat(
             tool_results = []
             for fn_name, query in react_calls:
                 logger.info("  → tool call: %s(%r)", fn_name, query)
-                tool_fn = TOOL_REGISTRY.get(fn_name)
+                tool_fn = _registry.get(fn_name)
                 result = await tool_fn(query, http) if tool_fn else f"Unknown tool: {fn_name}"
                 logger.info("     result: %.120s", result.replace("\n", " "))
                 tool_call_count += 1
@@ -750,6 +752,7 @@ async def _run_corroboration_loop_gemini(
     from google.genai import types
 
     gemini = genai.Client(api_key=GEMINI_API_KEY)
+    _registry = get_tool_registry(desk.slug)  # desk-aware: search_intel_kb includes boost collections
 
     # Build Gemini-format tool declarations from filtered schemas
     filtered_schemas = _filter_tool_schemas(desk.tools)
@@ -812,9 +815,10 @@ async def _run_corroboration_loop_gemini(
         response_parts = []
         for part in function_calls:
             call = part.function_call
-            query = dict(call.args).get("query", "") if call.args else ""
+            _args = dict(call.args) if call.args else {}
+            query = _args.get("query") or _args.get("url") or ""
             logger.info("Tool: %s(%r)", call.name, query)
-            tool_fn = TOOL_REGISTRY.get(call.name)
+            tool_fn = _registry.get(call.name)
             result_text = await tool_fn(query, http) if tool_fn else f"Unknown tool: {call.name}"
             response_parts.append(
                 types.Part(function_response=types.FunctionResponse(name=call.name, response={"result": result_text}))
