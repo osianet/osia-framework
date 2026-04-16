@@ -432,8 +432,9 @@ async def _run_corroboration_loop_openai_compat(
     base_url: str,
     api_key: str,
     extra_headers: dict | None = None,
+    model_override: str | None = None,
 ) -> str:
-    model, _, _ = _model_for_desk(desk.slug)
+    model = model_override or _model_for_desk(desk.slug)[0]
     _registry = get_tool_registry(desk.slug)  # desk-aware: search_intel_kb includes boost collections
     filtered_schemas = _filter_tool_schemas(desk.tools)
     tool_names = " | ".join(s["function"]["name"] for s in filtered_schemas)
@@ -844,32 +845,54 @@ async def _run_corroboration_loop(
     excerpt: str,
     http: httpx.AsyncClient,
 ) -> str:
-    model, base_url, api_key = _model_for_desk(desk.slug)
+    """Try each configured provider in order; cascade to the next on any failure."""
+    errors: list[str] = []
 
-    if api_key:
-        extra_headers = (
-            {"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Hermes Worker"}
-            if base_url == OPENROUTER_BASE_URL
-            else None
-        )
-        return await _run_corroboration_loop_openai_compat(
-            desk,
-            point_id,
-            topic,
-            source,
-            current_tier,
-            excerpt,
-            http,
-            base_url=base_url,
-            api_key=api_key,
-            extra_headers=extra_headers,
-        )
+    if OPENROUTER_API_KEY:
+        try:
+            return await _run_corroboration_loop_openai_compat(
+                desk,
+                point_id,
+                topic,
+                source,
+                current_tier,
+                excerpt,
+                http,
+                base_url=OPENROUTER_BASE_URL,
+                api_key=OPENROUTER_API_KEY,
+                extra_headers={"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Hermes Worker"},
+                model_override=HERMES_MODEL,
+            )
+        except Exception as exc:
+            logger.warning("OpenRouter failed for desk '%s' — trying Venice: %s", desk.slug, exc)
+            errors.append(f"OpenRouter: {exc}")
+
+    if VENICE_API_KEY:
+        try:
+            return await _run_corroboration_loop_openai_compat(
+                desk,
+                point_id,
+                topic,
+                source,
+                current_tier,
+                excerpt,
+                http,
+                base_url=VENICE_BASE_URL,
+                api_key=VENICE_API_KEY,
+                model_override=VENICE_MODEL_FALLBACK,
+            )
+        except Exception as exc:
+            logger.warning("Venice failed for desk '%s' — trying Gemini: %s", desk.slug, exc)
+            errors.append(f"Venice: {exc}")
 
     if GEMINI_API_KEY:
-        logger.warning("No Venice/OpenRouter key available for desk '%s' — falling back to Gemini", desk.slug)
-        return await _run_corroboration_loop_gemini(desk, point_id, topic, source, current_tier, excerpt, http)
+        try:
+            return await _run_corroboration_loop_gemini(desk, point_id, topic, source, current_tier, excerpt, http)
+        except Exception as exc:
+            logger.warning("Gemini failed for desk '%s': %s", desk.slug, exc)
+            errors.append(f"Gemini: {exc}")
 
-    raise RuntimeError("No API key set: VENICE_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY required")
+    raise RuntimeError(f"All providers failed for desk '{desk.slug}': {'; '.join(errors) or 'no API keys configured'}")
 
 
 # ---------------------------------------------------------------------------
