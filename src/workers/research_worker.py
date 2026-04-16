@@ -21,6 +21,7 @@ Environment variables:
   HF_TOKEN                    — HuggingFace token (for embeddings)
   TAVILY_API_KEY              — Tavily web search API key
   RESEARCH_BATCH_THRESHOLD    — Min queue depth before processing (default: 3)
+  RESEARCH_MAX_JOBS_PER_RUN   — Max jobs processed per run (default: 25)
   RESEARCH_COOLDOWN_HOURS     — Hours before a topic can be re-researched (default: 72)
   VENICE_MODEL_UNCENSORED     — Override uncensored model slug (default: venice-uncensored)
   VENICE_MODEL_CYBER          — Override cyber desk model slug (default: mistral-small-3-2-24b-instruct)
@@ -87,6 +88,10 @@ WIKIPEDIA_USER_AGENT = os.getenv(
 
 BATCH_THRESHOLD = int(os.getenv("RESEARCH_BATCH_THRESHOLD", "3"))
 RESEARCH_COOLDOWN_SECONDS = int(os.getenv("RESEARCH_COOLDOWN_HOURS", "72")) * 3600
+# Maximum jobs processed in a single run.  Keeps each systemd oneshot bounded so
+# the timer can re-fire before the queue is fully drained.  The remaining items
+# stay in Redis and are picked up on the next run.
+MAX_JOBS_PER_RUN = int(os.getenv("RESEARCH_MAX_JOBS_PER_RUN", "25"))
 
 # Tavily is a paid API with a monthly quota.  We track usage in Redis and
 # refuse Tavily calls once the budget is exhausted, falling back to DuckDuckGo.
@@ -1433,9 +1438,10 @@ async def main():
     async with httpx.AsyncClient(timeout=60.0) as http:
         qdrant = QdrantClient(http)
 
-        # Drain the queue
+        # Drain up to MAX_JOBS_PER_RUN items from the queue.
+        # Remaining items stay in Redis and are processed on the next timer fire.
         jobs: list[ResearchJob] = []
-        while True:
+        while len(jobs) < MAX_JOBS_PER_RUN:
             payload = queue.pop()
             if payload is None:
                 break
@@ -1443,7 +1449,8 @@ async def main():
             if job.topic:
                 jobs.append(job)
 
-        logger.info("Drained %d jobs from queue", len(jobs))
+        remaining = queue.depth()
+        logger.info("Loaded %d jobs (cap: %d, remaining in queue: %d)", len(jobs), MAX_JOBS_PER_RUN, remaining)
         if not jobs:
             return
 
