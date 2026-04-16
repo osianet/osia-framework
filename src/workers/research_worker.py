@@ -97,6 +97,11 @@ MAX_JOBS_PER_RUN = int(os.getenv("RESEARCH_MAX_JOBS_PER_RUN", "25"))
 # refuse Tavily calls once the budget is exhausted, falling back to DuckDuckGo.
 TAVILY_MONTHLY_BUDGET = int(os.getenv("TAVILY_MONTHLY_BUDGET", "500"))
 
+# OpenRouter model used when falling back from Venice at runtime.
+# Must be an OpenRouter-compatible model ID — Venice slugs (e.g. venice-uncensored)
+# are not valid on OpenRouter.
+OPENROUTER_RESEARCH_MODEL = os.getenv("RESEARCH_OPENROUTER_MODEL", "google/gemini-2.5-flash")
+
 # Venice model routing per desk
 VENICE_MODEL_UNCENSORED = os.getenv("VENICE_MODEL_UNCENSORED", "venice-uncensored")
 VENICE_MODEL_CYBER = os.getenv("VENICE_MODEL_CYBER", "mistral-small-3-2-24b-instruct")
@@ -1054,8 +1059,9 @@ async def run_research_loop_openai_compat(
     base_url: str,
     api_key: str,
     extra_headers: dict | None = None,
+    model_override: str | None = None,
 ) -> str:
-    model = _model_for_desk(job.desk)
+    model = model_override or _model_for_desk(job.desk)
     _registry = get_tool_registry(job.desk)  # desk-aware: search_intel_kb includes boost collections
     directives = (
         "\n\nAnalytical lens: Apply a decolonial and socialist materialist perspective. "
@@ -1137,6 +1143,19 @@ async def run_research_loop_openai_compat(
                     round_num,
                     e.response.text[:500],
                 )
+                raise
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                if attempt < 2:
+                    wait = 15 * (attempt + 1)
+                    logger.warning(
+                        "Venice connection error on round %d — retrying in %ds (attempt %d/3): %s",
+                        round_num,
+                        wait,
+                        attempt + 1,
+                        e,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
                 raise
 
         data = resp.json()
@@ -1340,21 +1359,38 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
 
 
 async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
+    """Try each configured provider in order; cascade to the next on any failure."""
+    errors: list[str] = []
+
     if VENICE_API_KEY:
-        return await run_research_loop_openai_compat(job, http, base_url=VENICE_BASE_URL, api_key=VENICE_API_KEY)
+        try:
+            return await run_research_loop_openai_compat(job, http, base_url=VENICE_BASE_URL, api_key=VENICE_API_KEY)
+        except Exception as exc:
+            logger.warning("Venice failed for '%s' — trying next provider: %s", job.topic, exc)
+            errors.append(f"Venice: {exc}")
+
     if OPENROUTER_API_KEY:
-        logger.warning("VENICE_API_KEY not set — falling back to OpenRouter")
-        return await run_research_loop_openai_compat(
-            job,
-            http,
-            base_url=OPENROUTER_BASE_URL,
-            api_key=OPENROUTER_API_KEY,
-            extra_headers={"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Research Worker"},
-        )
+        try:
+            return await run_research_loop_openai_compat(
+                job,
+                http,
+                base_url=OPENROUTER_BASE_URL,
+                api_key=OPENROUTER_API_KEY,
+                extra_headers={"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Research Worker"},
+                model_override=OPENROUTER_RESEARCH_MODEL,
+            )
+        except Exception as exc:
+            logger.warning("OpenRouter failed for '%s' — trying Gemini: %s", job.topic, exc)
+            errors.append(f"OpenRouter: {exc}")
+
     if GEMINI_API_KEY:
-        logger.warning("No Venice/OpenRouter key — falling back to Gemini (may refuse sensitive topics)")
-        return await run_research_loop_gemini(job, http)
-    raise RuntimeError("No API key set: VENICE_API_KEY, OPENROUTER_API_KEY, or GEMINI_API_KEY required")
+        try:
+            return await run_research_loop_gemini(job, http)
+        except Exception as exc:
+            logger.warning("Gemini failed for '%s': %s", job.topic, exc)
+            errors.append(f"Gemini: {exc}")
+
+    raise RuntimeError(f"All providers failed for '{job.topic}': {'; '.join(errors) or 'no API keys configured'}")
 
 
 # ---------------------------------------------------------------------------
