@@ -54,6 +54,9 @@ logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger("osia.research_worker")
+# ddgs logs INFO-level engine fallbacks (Yahoo → other engines) which are noisy
+# and not actionable — the library handles retries internally.
+logging.getLogger("ddgs").setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Config
