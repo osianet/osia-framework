@@ -182,7 +182,9 @@ class RSSIngress:
                         entities = []
 
                     # 2. Enqueue research jobs for extracted entities
-                    await entity_extractor.enqueue_research_jobs(entities, triggered_by=url)
+                    # Pass the article link (not the feed url) so the research worker
+                    # can fetch the source article for context when forming queries.
+                    await entity_extractor.enqueue_research_jobs(entities, triggered_by=link)
 
                     # 3. Upsert into Qdrant collection-directorate (long-term vector store)
                     try:
