@@ -16,6 +16,7 @@ Environment variables:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -255,6 +256,12 @@ class EntityExtractor:
                 normalised = entity.name.lower().strip()
 
                 already_seen = await redis.sismember(SEEN_TOPICS_KEY, normalised)
+                if not already_seen:
+                    # Also check the worker's TTL-based cooldown key so that a Redis
+                    # restart (which clears seen_topics) doesn't re-enqueue recently
+                    # processed topics while their cooldown window is still active.
+                    topic_md5 = hashlib.md5(normalised.encode(), usedforsecurity=False).hexdigest()
+                    already_seen = bool(await redis.exists(f"osia:research:seen:{topic_md5}"))
                 if already_seen:
                     logger.debug("Skipping already-seen entity: %r", entity.name)
                     continue

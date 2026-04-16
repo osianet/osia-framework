@@ -287,8 +287,11 @@ class RedisQueue:
     def is_seen(self, key: str) -> bool:
         return bool(self._r.exists(f"osia:research:seen:{key}"))
 
-    def mark_seen(self, key: str):
+    def mark_seen(self, key: str, topic: str = "") -> None:
         self._r.set(f"osia:research:seen:{key}", "1", ex=RESEARCH_COOLDOWN_SECONDS)
+        if topic:
+            # Keep seen_topics in sync so entity_extractor dedup survives Redis restarts.
+            self._r.sadd("osia:research:seen_topics", topic.lower().strip())
 
 
 # ---------------------------------------------------------------------------
@@ -1623,7 +1626,7 @@ async def main():
                 failed += 1
                 continue
 
-            queue.mark_seen(topic_key)
+            queue.mark_seen(topic_key, topic=job.topic)
             succeeded += 1
             await asyncio.sleep(2)  # brief pause between jobs to stay within Venice rate limits
 
