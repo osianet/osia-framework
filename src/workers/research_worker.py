@@ -1051,21 +1051,15 @@ async def _expand_research_query(job: ResearchJob, http: httpx.AsyncClient) -> s
     triggered = job.triggered_by or ""
     source = job.source or ""
 
-    # For RSS-extracted topics the triggered_by field is the source article URL.
-    # Instead of expanding, tell the model to read the article for context first.
-    if triggered.startswith(("http://", "https://")):
-        logger.debug("URL-sourced topic '%s' — directing model to fetch source article", job.topic)
-        return (
-            f"Research topic: {job.topic}\n\n"
-            f"This topic was extracted from the following article:\n{triggered}\n\n"
-            f"Start by calling fetch_url on that article to understand the specific context in which "
-            f"'{job.topic}' is relevant. Use what you learn to formulate precise follow-up queries "
-            f"rather than generic lookups of '{job.topic}' in isolation."
-        )
-
-    # Build context lines for the expansion prompt
+    # Build context lines for the expansion prompt.
+    # For RSS-extracted topics triggered_by is the article URL — the article has
+    # already been fetched and stored in Qdrant by the RSS ingress, so we pass
+    # the URL as context for the expansion model only and never ask the research
+    # model to re-fetch it.
     context_lines = [f"Topic: {job.topic}", f"Intelligence desk: {job.desk}"]
-    if triggered:
+    if triggered.startswith(("http://", "https://")):
+        context_lines.append(f"Extracted from article: {triggered}")
+    elif triggered:
         context_lines.append(f"Triggered by: {triggered}")
     if source:
         context_lines.append(f"Source: {source}")
