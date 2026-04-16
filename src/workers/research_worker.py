@@ -1144,6 +1144,19 @@ async def run_research_loop_openai_compat(
                     e.response.text[:500],
                 )
                 raise
+            except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:
+                if attempt < 2:
+                    wait = 15 * (attempt + 1)
+                    logger.warning(
+                        "Venice connection error on round %d — retrying in %ds (attempt %d/3): %s",
+                        round_num,
+                        wait,
+                        attempt + 1,
+                        e,
+                    )
+                    await asyncio.sleep(wait)
+                    continue
+                raise
 
         data = resp.json()
         choice = data["choices"][0]
