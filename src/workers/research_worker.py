@@ -422,7 +422,7 @@ async def tool_fetch_url(url: str, http: httpx.AsyncClient) -> str:
 async def tool_search_web(query: str, _http: httpx.AsyncClient) -> str:
     """DuckDuckGo web search — no API key, no quota. Default for all web queries."""
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
 
         results = await asyncio.to_thread(lambda: list(DDGS().text(query, max_results=5)))
         if not results:
