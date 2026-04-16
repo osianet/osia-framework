@@ -2100,6 +2100,101 @@ class OsiaOrchestrator:
         return "\n\n".join(parts), tracker
 
     # ------------------------------------------------------------------
+    # Direct article URL fetcher
+    # ------------------------------------------------------------------
+
+    async def _fetch_article_url(self, url: str) -> str | None:
+        """Fetch and extract article text from a URL using browser impersonation.
+
+        Tier 1 — curl_cffi with Chrome TLS fingerprint impersonation.
+            Spoofs the TLS ClientHello signature of a real Chrome browser,
+            defeating fingerprint-based bot detection used by most news sites.
+
+        Tier 2 — httpx with browser-like headers.
+            Covers sites that check headers/UA but not TLS fingerprint.
+
+        Both tiers use trafilatura for article text extraction, with a
+        BeautifulSoup fallback for pages that don't parse cleanly.
+        Returns None if the page is unreachable or yields no extractable text.
+        """
+        import trafilatura
+        from bs4 import BeautifulSoup
+        from curl_cffi.requests import AsyncSession
+
+        _BROWSER_HEADERS = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Cache-Control": "max-age=0",
+        }
+
+        html: str | None = None
+
+        # Tier 1: curl_cffi — Chrome TLS fingerprint impersonation
+        try:
+            async with AsyncSession(impersonate="chrome") as session:
+                resp = await session.get(url, headers=_BROWSER_HEADERS, timeout=20, allow_redirects=True)
+                if resp.status_code == 200:
+                    html = resp.text
+                else:
+                    logger.warning("curl_cffi fetch got HTTP %d for %s", resp.status_code, url)
+        except Exception as e:
+            logger.warning("curl_cffi article fetch failed for %s: %s", url, e)
+
+        # Tier 2: httpx with browser-like headers
+        if not html:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(20.0),
+                    follow_redirects=True,
+                    headers=_BROWSER_HEADERS,
+                ) as client:
+                    resp = await client.get(url)
+                    if resp.status_code == 200:
+                        html = resp.text
+                    else:
+                        logger.warning("httpx article fetch got HTTP %d for %s", resp.status_code, url)
+            except Exception as e:
+                logger.warning("httpx article fetch failed for %s: %s", url, e)
+
+        if not html:
+            return None
+
+        # Primary: trafilatura — best-in-class article extraction
+        text = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=False,
+            favor_recall=True,
+        )
+
+        # Fallback: BeautifulSoup plain-text extraction
+        if not text:
+            soup = BeautifulSoup(html, "html.parser")
+            for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
+                tag.decompose()
+            raw = soup.get_text(separator="\n", strip=True)
+            # Keep only lines with substance (> 40 chars) to strip nav/boilerplate
+            lines = [ln for ln in raw.splitlines() if len(ln.strip()) > 40]
+            text = "\n".join(lines)[:20000] or None
+
+        if text:
+            logger.info("Article fetch extracted %d chars from %s", len(text), url)
+        return text or None
+
+    # ------------------------------------------------------------------
     # Reka video analysis fallback
     # ------------------------------------------------------------------
 
@@ -2499,6 +2594,7 @@ class OsiaOrchestrator:
         research_summary = None
         source_tracker: SourceTracker | None = None
         url: str | None = None
+        _article_fetched = False
 
         logger.info("Received new task from %s: %s", source, query)
 
@@ -2727,12 +2823,29 @@ class OsiaOrchestrator:
                 except Exception as e:
                     logger.error("Media interception failed: %s", e)
 
+            else:
+                # Plain URL (news article, blog, report) — attempt direct fetch
+                # before falling back to Tavily. This bypasses Tavily rate limits
+                # and gives the desk the actual source text, not a search summary.
+                try:
+                    article_text = await self._fetch_article_url(url)
+                    if article_text:
+                        _article_fetched = True
+                        media_analysis = article_text
+                        query = f"## ARTICLE CONTENT\nSource: {url}\n\n{article_text}\n\nOriginal Request: {query}"
+                    else:
+                        logger.warning("Direct article fetch returned no content for %s — Tavily will be used", url)
+                except Exception as e:
+                    logger.error("Direct article fetch raised: %s", e)
+
         # 2. Automated Research (multi-turn tool calling)
         # Skip for social media ADB tasks (Instagram/TikTok/Facebook) — the ADB capture
         # and yt-dlp metadata already constitute the intelligence gathering for these URLs.
         # Running handle_research on a raw social media URL produces useless Tavily results.
+        # Also skip when direct article fetch already supplied the full source text —
+        # the desk has everything it needs and additional Tavily calls risk rate limits.
         _is_social_media_url = url and any(domain in url.lower() for domain in MEDIA_DOMAINS)
-        if not _is_social_media_url:
+        if not _is_social_media_url and not _article_fetched:
             try:
                 research_summary, source_tracker = await self.handle_research(original_query or media_analysis or query)
                 if research_summary:

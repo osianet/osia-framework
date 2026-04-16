@@ -37,9 +37,10 @@ EMBEDDING_DIM = 384
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 HF_EMBEDDING_URL = "https://router.huggingface.co/hf-inference/models/sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
 
-# All desk collections + research cache — used by cross_desk_search.
+# Primary desk collections + broad KBs — always searched by cross_desk_search.
 # Names match desk YAML slugs and the live Qdrant collections.
 DESK_COLLECTIONS: list[str] = [
+    # Desk primary collections
     "collection-directorate",
     "geopolitical-and-security-desk",
     "cultural-and-theological-intelligence-desk",
@@ -47,22 +48,27 @@ DESK_COLLECTIONS: list[str] = [
     "human-intelligence-and-profiling-desk",
     "finance-and-economics-directorate",
     "cyber-intelligence-and-warfare-desk",
+    "information-warfare-desk",
+    "environment-and-ecology-desk",
     "the-watch-floor",
-    "osia_research_cache",  # research worker writes here; no colon, SDK-compatible
+    "osia_research_cache",
+    # Broadly relevant KB collections included in every cross-desk search
     "epstein-files",  # declassified government documents — DOJ, House Oversight, federal courts
-    "cybersecurity-attacks",  # 13K documented global cyber incidents — actors, TTPs, targets (vinitvek/cybersecurityattacks)
-    "hackerone-reports",  # 12.6K publicly disclosed bug bounty reports — CVEs, weaknesses, affected assets (Hacker0x01)
-    "wikileaks-cables",  # 124K US diplomatic cables (1966–2010) — classified embassy traffic, geopolitical intel (fn5/wikileaks-cables)
-    "mitre-attack",  # MITRE ATT&CK: ~700 techniques, ~140 APT group profiles, ~600 malware/tools, mitigations (enterprise + mobile + ICS)
-    "cti-reports",  # 9.7K NER-annotated CTI report texts — malware, threat-actor, IOC entities (mrmoor/cyber-threat-intelligence-splited)
-    "ttp-mappings",  # 20.7K threat report snippets with expert ATT&CK technique ID labels (tumeteor/Security-TTP-Mapping)
-    "cve-database",  # 280K NVD CVEs 1999–2025 — descriptions, CVSS scores, CWE classifications (stasvinokur/cve-and-cwe-dataset-1999-2025)
-    "cti-bench",  # 5.6K analyst benchmark scenarios — malware→ATT&CK, threat actor attribution, CVE→CWE (AI4Sec/cti-bench)
+    "wikileaks-cables",  # 124K US diplomatic cables (1966–2010) — classified embassy traffic, geopolitical intel
+    "ofac-sanctions",  # OFAC SDN list — 18K+ sanctioned individuals, entities, vessels
+    "icij-offshore-leaks",  # 810K+ offshore entities — Panama/Pandora/Paradise Papers, beneficial owners
+    "yahoo-finance",  # Yahoo Finance news articles, earnings call transcripts, company profiles
+    # Cyber-focused KBs (relevant broadly for threat context)
+    "mitre-attack",  # MITRE ATT&CK: ~700 techniques, ~140 APT group profiles, ~600 malware/tools
+    "cti-reports",  # 9.7K NER-annotated CTI report texts — malware, threat-actor, IOC entities
+    "ttp-mappings",  # 20.7K threat report snippets with expert ATT&CK technique ID labels
+    "cve-database",  # 280K NVD CVEs 1999–2025 — descriptions, CVSS scores, CWE classifications
+    "cti-bench",  # 5.6K analyst benchmark scenarios
+    "cybersecurity-attacks",  # 13K documented global cyber incidents
+    "hackerone-reports",  # 12.6K publicly disclosed bug bounty reports
+    # Cultural / ideological KBs
     "etymology-database",  # historical origin and evolution of words, terms, and concepts
-    "icij-offshore-leaks",  # 810K+ offshore entities from Panama Papers, Pandora Papers, Paradise Papers, Bahamas Leaks, Offshore Leaks — beneficial owners, intermediaries, jurisdictions
-    "yahoo-finance",  # Yahoo Finance news articles, earnings call transcripts, and company profiles
-    "ofac-sanctions",  # OFAC Specially Designated Nationals (SDN) list — 18K+ sanctioned individuals, entities, vessels across all programs
-    "marxists-archive",  # Marxists Internet Archive — curated political theory, ideology, propaganda analysis, revolutionary history (marxists.org)
+    "marxists-archive",  # Marxists Internet Archive — political theory, ideology, revolutionary history
 ]
 
 # ---------------------------------------------------------------------------
@@ -311,11 +317,17 @@ class QdrantStore:
         top_k: int,
         entity_tags: list[str] | None = None,
         decay_half_life_days: float | None = None,
+        collections: list[str] | None = None,
     ) -> list[SearchResult]:
         """
-        Fan out across all registered desk collections + osia:research_cache.
-        Rank by score descending, deduplicate by point ID.
-        If decay_half_life_days is set, applies exponential recency decay before final ranking.
+        Fan out across desk collections, rank by score, deduplicate by point ID.
+
+        collections: explicit list of collection names to search. Defaults to
+        DESK_COLLECTIONS when None. Pass a desk-specific superset (DESK_COLLECTIONS
+        + boost collections) for richer, context-aware retrieval.
+
+        If decay_half_life_days is set, applies exponential recency decay before
+        final ranking.
         """
         vector = await self._embed(query)
 
@@ -362,9 +374,10 @@ class QdrantStore:
                 logger.warning("cross_desk_search: collection '%s' unavailable: %s", col, exc)
                 return []
 
-        # Fan out concurrently
+        # Fan out concurrently across the requested collection set
+        target_collections = collections if collections is not None else DESK_COLLECTIONS
         all_pairs: list[tuple[str, SearchResult]] = []
-        tasks = [_search_one(col) for col in DESK_COLLECTIONS]
+        tasks = [_search_one(col) for col in target_collections]
         for pairs in await asyncio.gather(*tasks):
             all_pairs.extend(pairs)
 

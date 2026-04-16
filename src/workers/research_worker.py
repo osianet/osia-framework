@@ -88,6 +88,10 @@ WIKIPEDIA_USER_AGENT = os.getenv(
 BATCH_THRESHOLD = int(os.getenv("RESEARCH_BATCH_THRESHOLD", "3"))
 RESEARCH_COOLDOWN_SECONDS = int(os.getenv("RESEARCH_COOLDOWN_HOURS", "72")) * 3600
 
+# Tavily is a paid API with a monthly quota.  We track usage in Redis and
+# refuse Tavily calls once the budget is exhausted, falling back to DuckDuckGo.
+TAVILY_MONTHLY_BUDGET = int(os.getenv("TAVILY_MONTHLY_BUDGET", "500"))
+
 # Venice model routing per desk
 VENICE_MODEL_UNCENSORED = os.getenv("VENICE_MODEL_UNCENSORED", "venice-uncensored")
 VENICE_MODEL_CYBER = os.getenv("VENICE_MODEL_CYBER", "mistral-small-3-2-24b-instruct")
@@ -114,6 +118,98 @@ RESEARCH_COLLECTION = "osia_research_cache"
 EMBEDDING_DIM = 384
 CHUNK_SIZE = 400  # words
 MAX_ROUNDS = 6
+
+# ---------------------------------------------------------------------------
+# Desk-aware KB collection resolution
+# ---------------------------------------------------------------------------
+# Load boost_collections from each desk YAML so the research worker automatically
+# picks up any future changes without needing a code update.
+
+
+def _load_desk_boost_collections() -> dict[str, list[str]]:
+    """Parse every config/desks/*.yaml and return desk_slug → boost_collections."""
+    import pathlib
+
+    import yaml
+
+    result: dict[str, list[str]] = {}
+    desk_dir = pathlib.Path(__file__).parent.parent.parent / "config" / "desks"
+    for yaml_path in sorted(desk_dir.glob("*.yaml")):
+        try:
+            with yaml_path.open() as fh:
+                cfg = yaml.safe_load(fh) or {}
+            slug = cfg.get("qdrant", {}).get("collection", "")
+            boost = cfg.get("qdrant", {}).get("boost_collections") or []
+            if slug:
+                result[slug] = list(boost)
+        except Exception as exc:
+            logger.warning("Could not load desk YAML %s: %s", yaml_path.name, exc)
+    return result
+
+
+_DESK_BOOST: dict[str, list[str]] = _load_desk_boost_collections()
+
+
+def _collections_for_desk(desk: str) -> list[str]:
+    """Return the ordered, deduplicated list of Qdrant collections for a desk.
+
+    Always includes the full DESK_COLLECTIONS baseline (all desk primaries + broad
+    KBs). Appends desk-specific boost collections on top, so the research worker
+    searches exactly the same specialised sources as the orchestrator's RAG layer.
+    """
+    from src.intelligence.qdrant_store import DESK_COLLECTIONS
+
+    extras = _DESK_BOOST.get(desk, [])
+    seen: set[str] = set()
+    result: list[str] = []
+    for col in DESK_COLLECTIONS + extras:
+        if col not in seen:
+            seen.add(col)
+            result.append(col)
+    return result
+
+
+def _make_kb_tool(desk: str):
+    """Return a desk-aware search_intel_kb tool function.
+
+    The returned coroutine searches DESK_COLLECTIONS plus any boost collections
+    declared in the desk's YAML — giving the research worker the same Qdrant
+    coverage as the orchestrator's RAG context block.
+    """
+    collections = _collections_for_desk(desk)
+
+    async def _tool(query: str, _http) -> str:
+        try:
+            from src.intelligence.qdrant_store import QdrantStore
+
+            async with QdrantStore() as store:
+                results = await store.cross_desk_search(query, top_k=5, collections=collections)
+            results = [r for r in results if r.score >= 0.45]
+            if not results:
+                return "No relevant intel found in the knowledge base for this query."
+            parts = []
+            for r in results:
+                source = r.metadata.get("source", r.collection)
+                date = r.metadata.get("collected_at", r.metadata.get("date", ""))
+                header = f"[KB: {r.collection} | score={r.score:.2f} | source={source}"
+                if date:
+                    header += f" | {date[:10]}"
+                header += "]"
+                parts.append(f"{header}\n{r.text[:600]}")
+            return "\n\n---\n\n".join(parts)
+        except Exception as e:
+            return f"Intel KB search error: {e}"
+
+    return _tool
+
+
+def get_tool_registry(desk: str) -> dict:
+    """Return a tool registry with a desk-specific search_intel_kb.
+
+    All other tools are shared; only search_intel_kb is overridden to include
+    the desk's boost collections in its Qdrant fan-out.
+    """
+    return {**TOOL_REGISTRY, "search_intel_kb": _make_kb_tool(desk)}
 
 
 def _model_for_desk(desk: str) -> str:
@@ -247,8 +343,79 @@ async def embed_texts(texts: list[str], http: httpx.AsyncClient) -> list[list[fl
 # ---------------------------------------------------------------------------
 
 
-async def tool_search_duckduckgo(query: str, _http: httpx.AsyncClient) -> str:
-    """DuckDuckGo web search — no API key required."""
+async def tool_fetch_url(url: str, http: httpx.AsyncClient) -> str:
+    """Fetch and extract full article text from a URL using browser impersonation.
+
+    Tier 1: curl_cffi with Chrome TLS fingerprint — defeats most bot detection.
+    Tier 2: httpx with browser-like headers — basic UA/header spoofing fallback.
+    Extraction: trafilatura (best-in-class) → BeautifulSoup plain-text fallback.
+    """
+    import trafilatura
+    from bs4 import BeautifulSoup
+    from curl_cffi.requests import AsyncSession
+
+    if not url or not url.startswith(("http://", "https://")):
+        return "Error: fetch_url requires a full http:// or https:// URL."
+
+    _BROWSER_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
+    }
+
+    html: str | None = None
+
+    try:
+        async with AsyncSession(impersonate="chrome") as session:
+            resp = await session.get(url, headers=_BROWSER_HEADERS, timeout=20, allow_redirects=True)
+            if resp.status_code == 200:
+                html = resp.text
+    except Exception as e:
+        logger.debug("curl_cffi fetch failed for %s: %s", url, e)
+
+    if not html:
+        try:
+            resp = await http.get(url, headers=_BROWSER_HEADERS, timeout=20.0)
+            if resp.status_code == 200:
+                html = resp.text
+        except Exception as e:
+            logger.debug("httpx article fetch failed for %s: %s", url, e)
+
+    if not html:
+        return f"Error: could not retrieve content from {url}"
+
+    text = trafilatura.extract(html, include_comments=False, include_tables=False, favor_recall=True)
+
+    if not text:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form"]):
+            tag.decompose()
+        raw = soup.get_text(separator="\n", strip=True)
+        lines = [ln for ln in raw.splitlines() if len(ln.strip()) > 40]
+        text = "\n".join(lines)[:20000] or None
+
+    if not text:
+        return f"Error: page at {url} yielded no extractable text."
+
+    logger.info("fetch_url extracted %d chars from %s", len(text), url)
+    return f"[Source: {url}]\n\n{text[:15000]}"
+
+
+async def tool_search_web(query: str, _http: httpx.AsyncClient) -> str:
+    """DuckDuckGo web search — no API key, no quota. Default for all web queries."""
     try:
         from duckduckgo_search import DDGS
 
@@ -260,11 +427,58 @@ async def tool_search_duckduckgo(query: str, _http: httpx.AsyncClient) -> str:
         return f"DuckDuckGo search error: {e}"
 
 
-async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
-    """Live web search via Tavily (primary) with automatic DuckDuckGo fallback."""
+async def _tavily_within_budget() -> bool:
+    """Increment the monthly Tavily usage counter in Redis and return True if within budget.
+
+    Uses an INCR + EXPIRE pattern so the key self-expires after 35 days.
+    Fails open (returns True) if Redis is unavailable, so a connectivity blip
+    never silently kills Tavily access.
+    """
+    key = f"osia:tavily:usage:{datetime.now(UTC).strftime('%Y-%m')}"
+
+    def _redis_incr() -> int:
+        import redis as _redis
+
+        r = _redis.from_url(REDIS_URL, decode_responses=True)
+        count = r.incr(key)
+        if count == 1:
+            r.expire(key, 35 * 86400)
+        return count
+
+    try:
+        count = await asyncio.to_thread(_redis_incr)
+    except Exception as e:
+        logger.debug("Tavily budget Redis check failed (%s) — allowing call", e)
+        return True
+
+    if count > TAVILY_MONTHLY_BUDGET:
+        logger.warning(
+            "Tavily monthly budget exhausted (%d/%d calls) — routing to DuckDuckGo",
+            count - 1,
+            TAVILY_MONTHLY_BUDGET,
+        )
+        return False
+
+    remaining = TAVILY_MONTHLY_BUDGET - count
+    if remaining < TAVILY_MONTHLY_BUDGET * 0.15:
+        logger.warning("Tavily budget low: %d/%d calls used this month", count, TAVILY_MONTHLY_BUDGET)
+    return True
+
+
+async def tool_search_tavily(query: str, http: httpx.AsyncClient) -> str:
+    """Tavily premium search — reserved for queries where recency is critical.
+
+    Checks the monthly budget before calling Tavily; falls back to search_web
+    (DuckDuckGo) automatically on budget exhaustion, API errors, or quota
+    responses (HTTP 432).
+    """
     if not TAVILY_API_KEY:
         logger.info("TAVILY_API_KEY not set — using DuckDuckGo for web search")
-        return await tool_search_duckduckgo(query, http)
+        return await tool_search_web(query, http)
+
+    if not await _tavily_within_budget():
+        return await tool_search_web(query, http)
+
     try:
         resp = await http.post(
             "https://api.tavily.com/search",
@@ -273,19 +487,19 @@ async def tool_search_web(query: str, http: httpx.AsyncClient) -> str:
         )
         if resp.status_code == 432:
             logger.warning("Tavily quota exhausted (432) — falling back to DuckDuckGo")
-            return await tool_search_duckduckgo(query, http)
+            return await tool_search_web(query, http)
         resp.raise_for_status()
         results = resp.json().get("results", [])
         return "\n\n".join(f"[{r.get('title', '')}]({r.get('url', '')})\n{r.get('content', '')[:500]}" for r in results)
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 432:
             logger.warning("Tavily quota exhausted — falling back to DuckDuckGo")
-            return await tool_search_duckduckgo(query, http)
+            return await tool_search_web(query, http)
         logger.warning("Tavily HTTP error %d — falling back to DuckDuckGo: %s", e.response.status_code, e)
-        return await tool_search_duckduckgo(query, http)
+        return await tool_search_web(query, http)
     except Exception as e:
         logger.warning("Tavily error — falling back to DuckDuckGo: %s", e)
-        return await tool_search_duckduckgo(query, http)
+        return await tool_search_web(query, http)
 
 
 async def tool_search_wikipedia(query: str, http: httpx.AsyncClient) -> str:
@@ -563,9 +777,10 @@ async def tool_search_aleph(query: str, http: httpx.AsyncClient) -> str:
 
 
 TOOL_REGISTRY = {
+    "fetch_url": tool_fetch_url,
     "search_intel_kb": tool_search_intel_kb,
     "search_web": tool_search_web,
-    "search_duckduckgo": tool_search_duckduckgo,
+    "search_tavily": tool_search_tavily,
     "search_wikipedia": tool_search_wikipedia,
     "search_arxiv": tool_search_arxiv,
     "search_semantic_scholar": tool_search_semantic_scholar,
@@ -577,6 +792,23 @@ TOOL_REGISTRY = {
 
 # OpenAI-format tool schemas for OpenRouter
 TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "fetch_url",
+            "description": (
+                "Fetch and extract the full text of a web page or news article from a direct URL. "
+                "Use when a search result returns a URL you want to read in full, or when a specific "
+                "primary source URL is already known. Returns extracted article text (up to 15 000 chars). "
+                "Do not call for social media, YouTube, or login-gated pages."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "Full URL to fetch (http:// or https://)."}},
+                "required": ["url"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -598,9 +830,10 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "search_web",
             "description": (
-                "Live web search (Tavily → DuckDuckGo fallback). "
-                "Use for: current events, recent news, threat activity, market data, product launches, living persons. "
-                "Skip for: well-established facts, historical topics, academic literature."
+                "DEFAULT web search via DuckDuckGo — no quota, use freely. "
+                "Use for: recent news, current events, background context, entity lookups, market data, "
+                "product launches, living persons, and any general web query. "
+                "Prefer this over search_tavily for all routine queries."
             ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
@@ -608,11 +841,12 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
-            "name": "search_duckduckgo",
+            "name": "search_tavily",
             "description": (
-                "DuckDuckGo web search — no quota. "
-                "Use ONLY if search_web already failed or returned poor results for this query. "
-                "Never call both search_web and search_duckduckgo for the same query."
+                "PREMIUM web search via Tavily — limited monthly quota, use sparingly. "
+                "Call ONLY when search_web results are clearly insufficient AND the query requires "
+                "comprehensive, multi-source aggregation of breaking news from the last 24-48 hours. "
+                "Never call if search_web already returned useful results for this query."
             ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
@@ -690,31 +924,34 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
     "cyber-intelligence-and-warfare-desk": (
         "search_intel_kb FIRST (MITRE ATT&CK, CVE database, CTI reports, TTP mappings, HackerOne disclosures are all in the KB). "
         "search_otx for live threat intelligence pulses, IOCs, and campaign reporting when the topic involves an active threat actor or malware campaign. "
-        "search_web for recent CVE news or campaign reporting not covered by KB or OTX. "
+        "search_web for recent CVE news or campaign reporting not covered by KB or OTX; use fetch_url to read full advisories. "
         "search_wikipedia for background on APT groups or malware families. "
         "search_arxiv only for novel malware research or cryptographic vulnerabilities. "
-        "search_semantic_scholar is rarely appropriate."
+        "search_semantic_scholar is rarely appropriate. "
+        "Reserve search_tavily only for breaking threat intelligence not yet indexed by DDG."
     ),
     "human-intelligence-and-profiling-desk": (
         "search_intel_kb FIRST (Epstein files, WikiLeaks cables, and past HUMINT research may surface direct leads), "
         "then search_aleph for the subject in OCCRP leak datasets (Panama Papers, FinCEN Files, Pandora Papers, sanctions lists). "
-        "search_web for current activity, affiliations, recent statements. "
+        "search_web for current activity, affiliations, recent statements; use fetch_url to read full articles. "
         "search_wikipedia for background on subjects, organisations, or related events. "
-        "Academic tools are not appropriate for profiling."
+        "Academic tools are not appropriate for profiling. "
+        "Reserve search_tavily only if DDG results are clearly insufficient for a time-critical query."
     ),
     "cultural-and-theological-intelligence-desk": (
         "search_intel_kb FIRST (past cultural/theological research and Watch Floor INTSUMs may have relevant context), "
         "then search_wikipedia for deep doctrinal or historical background. "
-        "search_web for current movements, recent events, or contemporary actors. "
-        "Academic tools only if the topic is specifically scholarly religious studies."
+        "search_web for current movements, recent events, or contemporary actors; use fetch_url to read primary sources. "
+        "Academic tools only if the topic is specifically scholarly religious studies. "
+        "search_tavily is rarely needed for cultural topics."
     ),
     "geopolitical-and-security-desk": (
         "search_intel_kb FIRST (WikiLeaks cables, past geopolitical INTSUMs, desk archives, and OFAC SDN sanctions list "
         "may have directly relevant intel on state actors, sanctioned individuals, or blocked entities). "
         "search_aleph when the topic involves oligarchs, sanctioned entities, or offshore financial networks. "
-        "search_web for current events, diplomatic developments, conflict reporting. "
+        "search_web for current events, diplomatic developments, conflict reporting; use fetch_url to read full reports. "
         "search_wikipedia for geopolitical context, state actors, historical background. "
-        "Academic tools rarely needed unless the topic involves strategic theory or sanctions research."
+        "Reserve search_tavily only for breaking conflict or sanctions news from the last 24-48h not indexed by DDG."
     ),
     "finance-and-economics-directorate": (
         "search_intel_kb FIRST — the KB contains ICIJ Offshore Leaks (Panama Papers, Pandora Papers, Paradise Papers: "
@@ -722,39 +959,45 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
         "OFAC SDN sanctions list (18K+ sanctioned individuals and entities with aliases, DOB, passports, addresses), "
         "Yahoo Finance news articles and earnings call transcripts, WikiLeaks cables, and Epstein files. "
         "search_aleph for additional corporate ownership, PEP connections, and leak datasets not yet in KB. "
-        "search_web for market news, economic indicators, corporate reporting, recent sanctions updates. "
+        "search_web for market news, economic indicators, corporate reporting; use fetch_url to read full filings or articles. "
         "search_wikipedia for company or institution background. "
-        "search_arxiv for economic research papers or monetary policy studies."
+        "search_arxiv for economic research papers or monetary policy studies. "
+        "Reserve search_tavily only for time-sensitive market-moving news DDG cannot surface."
     ),
     "science-technology-and-commercial-desk": (
         "search_intel_kb FIRST (past science/tech research may already cover this topic), "
         "then search_arxiv and search_semantic_scholar for technical research, patents, emerging science. "
-        "search_web for recent product launches, commercial developments, company news. "
-        "Wikipedia for established technical background."
+        "search_web for recent product launches, commercial developments, company news; use fetch_url to read full articles. "
+        "search_wikipedia for established technical background. "
+        "Reserve search_tavily only if DDG returns insufficient results for a rapidly evolving story."
     ),
     "information-warfare-desk": (
         "search_intel_kb FIRST (WikiLeaks cables and Epstein files may surface funding trails, "
         "personnel links, or documented covert influence programs directly relevant to the topic). "
         "search_web for current influence operations, disinformation campaign reporting, NGO funding disclosures, "
-        "and academic or investigative journalism on propaganda and psyops. "
+        "and investigative journalism on propaganda; use fetch_url to read primary source articles in full. "
         "search_wikipedia for background on organisations, historical psyops operations, or media ownership. "
-        "Academic tools rarely needed unless the topic is formal propaganda studies or media theory."
+        "Academic tools rarely needed unless the topic is formal propaganda studies or media theory. "
+        "Reserve search_tavily only for rapidly developing disinfo campaigns not yet indexed by DDG."
     ),
     "environment-and-ecology-desk": (
         "search_web FIRST for current environmental events: extreme weather, disaster reports, crop failure news, "
-        "corporate pollution incidents, ecocide reporting, and official agency bulletins (NOAA, NASA, WMO, IPCC). "
+        "corporate pollution incidents, ecocide reporting, and official agency bulletins (NOAA, NASA, WMO, IPCC); "
+        "use fetch_url to read full agency reports or news articles. "
         "search_arxiv and search_semantic_scholar for climate science research, ecological studies, "
         "and peer-reviewed environmental impact assessments. "
         "search_intel_kb for past environmental intelligence, WikiLeaks cables on resource negotiations or "
         "corporate environmental lobbying. "
-        "search_wikipedia for background on ecosystems, species, geographic regions, or corporations under investigation."
+        "search_wikipedia for background on ecosystems, species, geographic regions, or corporations under investigation. "
+        "Reserve search_tavily only for breaking disaster news in the last 24h that DDG has not indexed."
     ),
 }
 
 _REACT_TOOL_MAP = {
+    "fetch_url": "fetch_url",
     "search_intel_kb": "search_intel_kb",
     "search_web": "search_web",
-    "search_duckduckgo": "search_duckduckgo",
+    "search_tavily": "search_tavily",
     "search_wikipedia": "search_wikipedia",
     "search_arxiv": "search_arxiv",
     "search_semantic_scholar": "search_semantic_scholar",
@@ -808,6 +1051,7 @@ async def run_research_loop_openai_compat(
     extra_headers: dict | None = None,
 ) -> str:
     model = _model_for_desk(job.desk)
+    _registry = get_tool_registry(job.desk)  # desk-aware: search_intel_kb includes boost collections
     directives = (
         "\n\nAnalytical lens: Apply a decolonial and socialist materialist perspective. "
         "Prioritize labor rights, anti-imperialism, ecological impact, and data sovereignty. "
@@ -828,8 +1072,9 @@ async def run_research_loop_openai_compat(
                 f"Produce a focused intelligence brief with citations.{directives}\n\n"
                 "TOOL SELECTION — be deliberate and conservative:\n"
                 "• search_intel_kb: ALWAYS call this first. Searches all OSIA collections (MITRE ATT&CK, CVEs, CTI, WikiLeaks, Epstein, ICIJ Offshore Leaks, OFAC sanctions, Yahoo Finance, past research). If KB results are sufficient, skip external tools.\n"
-                "• search_web: current events, recent news, live threat data, market updates.\n"
-                "• search_duckduckgo: web fallback only — do NOT call if search_web already ran for the same query.\n"
+                "• search_web: DEFAULT web search (DuckDuckGo) — no quota, use freely for news, current events, entity lookups, background context.\n"
+                "• search_tavily: PREMIUM Tavily search — limited monthly budget. Call ONLY when search_web results are clearly insufficient AND you need multi-source breaking news from the last 24-48h. Never call if search_web already returned useful results.\n"
+                "• fetch_url: fetch full article text from a known URL. Use after search_web returns relevant URLs to read the primary source directly.\n"
                 "• search_wikipedia: background on established entities, concepts, or historical events.\n"
                 "• search_arxiv: novel STEM/ML/security research papers. Not for news or politics.\n"
                 "• search_semantic_scholar: peer-reviewed science. Not for HUMINT, cyber ops, or finance.\n\n"
@@ -838,9 +1083,9 @@ async def run_research_loop_openai_compat(
                 "2-3 tool calls total is usually sufficient; stop as soon as you have enough to write the brief. "
                 "Never run the same query through multiple tools.\n\n"
                 "If native tool calling is unavailable, use the ReAct format:\n"
-                "SEARCH_INTEL_KB: <query>\nSEARCH_WEB: <query>\nSEARCH_DUCKDUCKGO: <query>\n"
-                "SEARCH_WIKIPEDIA: <query>\nSEARCH_ARXIV: <query>\nSEARCH_SEMANTIC_SCHOLAR: <query>\n"
-                "SEARCH_OTX: <query>\nSEARCH_ALEPH: <query>"
+                "FETCH_URL: <url>\nSEARCH_INTEL_KB: <query>\nSEARCH_WEB: <query>\n"
+                "SEARCH_TAVILY: <query>\nSEARCH_WIKIPEDIA: <query>\nSEARCH_ARXIV: <query>\n"
+                "SEARCH_SEMANTIC_SCHOLAR: <query>\nSEARCH_OTX: <query>\nSEARCH_ALEPH: <query>"
             ),
         },
         {"role": "user", "content": f"Research topic: {job.topic}"},
@@ -905,9 +1150,9 @@ async def run_research_loop_openai_compat(
                     fn_args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
                     fn_args = {}
-                query = fn_args.get("query", "")
+                query = fn_args.get("query") or fn_args.get("url") or ""
                 logger.info("Tool: %s(%r)", fn_name, query)
-                tool_fn = TOOL_REGISTRY.get(fn_name)
+                tool_fn = _registry.get(fn_name)
                 result = await tool_fn(query, http) if tool_fn else f"Unknown tool: {fn_name}"
                 messages.append(
                     {
@@ -925,7 +1170,7 @@ async def run_research_loop_openai_compat(
             tool_results = []
             for fn_name, query in react_calls:
                 logger.info("ReAct tool: %s(%r)", fn_name, query)
-                tool_fn = TOOL_REGISTRY.get(fn_name)
+                tool_fn = _registry.get(fn_name)
                 result = await tool_fn(query, http) if tool_fn else f"Unknown tool: {fn_name}"
                 tool_results.append(f"[{fn_name}: {query}]\n{result}")
             messages.append({"role": "user", "content": "\n\n".join(tool_results)})
@@ -952,6 +1197,7 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
     from google.genai import types
 
     gemini = genai.Client(api_key=GEMINI_API_KEY)
+    _registry = get_tool_registry(job.desk)  # desk-aware: search_intel_kb includes boost collections
     directives = (
         "\n\nAnalytical lens: Apply a decolonial and socialist materialist perspective. "
         "Prioritize labor rights, anti-imperialism, ecological impact, and data sovereignty. "
@@ -980,20 +1226,20 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
                 types.FunctionDeclaration(
                     name="search_web",
                     description=(
-                        "Live web search (Tavily → DuckDuckGo fallback). "
-                        "Use for current events, recent news, threat activity, market data. "
-                        "Skip for well-established facts or academic literature."
+                        "DEFAULT web search via DuckDuckGo — no quota, use freely. "
+                        "Use for current events, recent news, background context, entity lookups, market data. "
+                        "Prefer this over search_tavily for all routine queries."
                     ),
                     parameters=types.Schema(
                         type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
                     ),
                 ),
                 types.FunctionDeclaration(
-                    name="search_duckduckgo",
+                    name="search_tavily",
                     description=(
-                        "DuckDuckGo web search — no quota. "
-                        "Use ONLY if search_web already failed for this query. "
-                        "Never call both search_web and search_duckduckgo for the same query."
+                        "PREMIUM web search via Tavily — limited monthly quota, use sparingly. "
+                        "Call ONLY when search_web results are clearly insufficient AND the query requires "
+                        "multi-source breaking news from the last 24-48 hours."
                     ),
                     parameters=types.Schema(
                         type="OBJECT", properties={"query": types.Schema(type="STRING")}, required=["query"]
@@ -1073,9 +1319,10 @@ async def run_research_loop_gemini(job: ResearchJob, http: httpx.AsyncClient) ->
         response_parts = []
         for part in function_calls:
             call = part.function_call
-            query = dict(call.args).get("query", "") if call.args else ""
+            _args = dict(call.args) if call.args else {}
+            query = _args.get("query") or _args.get("url") or ""
             logger.info("Tool: %s(%r)", call.name, query)
-            tool_fn = TOOL_REGISTRY.get(call.name)
+            tool_fn = _registry.get(call.name)
             result_text = await tool_fn(query, http) if tool_fn else f"Unknown tool: {call.name}"
             response_parts.append(
                 types.Part(function_response=types.FunctionResponse(name=call.name, response={"result": result_text}))
