@@ -1,6 +1,7 @@
 slug: environment-and-ecology-desk
 code: TERRA
 name: "Environment & Ecological Intelligence Desk"
+routing_description: "Climate, ecological disasters, extractivism, environmental racism, Indigenous land rights, pollution, resource conflicts, food security, environmental policy."
 prompt_file: templates/prompts/environment-and-ecology-desk.txt
 
 model:

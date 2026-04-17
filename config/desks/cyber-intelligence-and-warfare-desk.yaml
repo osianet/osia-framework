@@ -1,6 +1,7 @@
 slug: cyber-intelligence-and-warfare-desk
 code: PHANTOM
 name: "Cyber Intelligence & Warfare Desk"
+routing_description: "Cyber attacks, malware, nation-state intrusions, CVEs, threat actor TTPs, digital infrastructure threats, network reconnaissance, surveillance technology, hacking."
 prompt_file: templates/prompts/cyber-intelligence-and-warfare-desk.txt
 
 model:

@@ -1,6 +1,7 @@
 slug: information-warfare-desk
 code: MIRAGE
 name: "Information & Psychological Warfare Desk"
+routing_description: "ADVERSARIAL operations ONLY — state/corporate propaganda, manufactured disinformation, coordinated inauthentic behaviour, manosphere radicalization pipelines. Do NOT route aligned accountability content, survivor testimony, feminist content, or grassroots social justice material here."
 prompt_file: templates/prompts/information-warfare-desk.txt
 
 model:

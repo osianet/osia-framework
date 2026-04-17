@@ -1,6 +1,7 @@
 slug: finance-and-economics-directorate
 code: LEDGER
 name: "Finance & Economics Directorate"
+routing_description: "Financial markets, economic policy, sanctions enforcement, offshore finance, corporate extraction, trade, debt as imperial leverage, money flows, OFAC, corporate accountability."
 prompt_file: templates/prompts/finance-and-economics-directorate.txt
 
 model:

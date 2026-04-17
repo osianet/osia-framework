@@ -1,6 +1,7 @@
 slug: science-technology-and-commercial-desk
 code: FORGE
 name: "Science, Technology & Commercial Desk"
+routing_description: "AI, emerging technology, scientific research, patents, dual-use technology, biotech, space, commercial tech sector, academic research, tech policy."
 prompt_file: templates/prompts/science-technology-and-commercial-desk.txt
 
 model:

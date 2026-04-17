@@ -1,6 +1,7 @@
 slug: the-watch-floor
 code: SENTINEL
 name: "The Watch Floor"
+routing_description: "Cross-desk synthesis, SITREP generation, situation overviews, multi-domain queries that span several desks, and general intelligence questions that don't fit a single specialist desk."
 prompt_file: templates/prompts/the-watch-floor.txt
 
 model:

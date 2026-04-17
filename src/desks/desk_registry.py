@@ -89,6 +89,7 @@ class BriefingConfig:
 class DeskConfig:
     slug: str
     name: str
+    routing_description: str  # one-line scope hint used in Chief of Staff routing prompt
     prompt_file: str
     prompt_text: str
     model_primary: ModelConfig
@@ -152,6 +153,7 @@ def _parse_desk_yaml(path: Path, mandate_text: str, citation_protocol: str) -> D
 
     slug: str = raw["slug"]
     name: str = raw["name"]
+    routing_description: str = str(raw.get("routing_description", ""))
     prompt_file: str = raw["prompt_file"]
 
     # Load prompt text
@@ -205,6 +207,7 @@ def _parse_desk_yaml(path: Path, mandate_text: str, citation_protocol: str) -> D
     return DeskConfig(
         slug=slug,
         name=name,
+        routing_description=routing_description,
         prompt_file=prompt_file,
         prompt_text=prompt_text,
         model_primary=model_primary,
