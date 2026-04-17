@@ -802,8 +802,8 @@ class OsiaOrchestrator:
 
         return [
             "geopolitical-and-security-desk",
-            "human-intelligence-and-profiling-desk",
-            "the-watch-floor",
+            "cultural-and-theological-intelligence-desk",
+            "information-warfare-desk",
         ]
 
     async def _cmd_help(self, recipient: str) -> None:
@@ -2893,7 +2893,10 @@ class OsiaOrchestrator:
         directives_path = self.base_dir / "DIRECTIVES.md"
         mandate = directives_path.read_text()
 
-        valid_desks_list = "\n".join(f"- {s}" for s in sorted(self.valid_desks))
+        valid_desks_list = "\n".join(
+            f"- {s} ({self.desk_registry.get(s).name})"
+            for s in sorted(self.valid_desks)
+        )
         plan_prompt = f"""
         {mandate}
 
@@ -2904,7 +2907,7 @@ class OsiaOrchestrator:
         Which of our specialized desks should analyze this? Choose ONE from the following list:
 {valid_desks_list}
 
-        Reply with ONLY the slug of the desk, nothing else.
+        Reply with ONLY the slug of the desk (the part before the parenthesis), nothing else.
         """
 
         try:

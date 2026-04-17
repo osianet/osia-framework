@@ -29,6 +29,8 @@ _SITREP_SEED_QUERIES = [
     ("cyber", "cyber attacks threat actors nation state intrusions malware campaigns"),
     ("finance", "financial market risks economic policy trade sanctions fiscal instability"),
     ("technology", "emerging technology AI developments scientific breakthroughs dual-use"),
+    ("gender_violence", "male violence against women sexual violence occupation detention femicide manosphere misogyny accountability"),
+    ("infowar", "information warfare influence operations propaganda manosphere radicalization disinformation psyops narrative"),
 ]
 _SEED_TOP_K = 3  # results per standing query
 _SEED_MIN_SCORE = 0.45  # discard low-confidence matches
@@ -150,10 +152,19 @@ async def trigger_sitrep():
         f"Intelligence Summary (INTSUM) covering:\n"
         f"1. Global Geopolitics and Security — conflicts, diplomacy, sanctions, military movements\n"
         f"2. Global Financial Markets — market moves, economic policy, trade developments\n"
-        f"3. Emerging Technology and AI — breakthroughs, regulatory changes, notable papers\n\n"
+        f"3. Emerging Technology and AI — breakthroughs, regulatory changes, notable papers\n"
+        f"4. Gender Violence & Feminist Intelligence — male violence against women across scales "
+        f"(conflict-zone/occupation sexual violence, elite trafficking networks, femicide trends), "
+        f"feminist organising and resistance, accountability journalism. Surface trajectory indicators. "
+        f"If no new intelligence exists today, note the standing monitoring status.\n"
+        f"5. Information & Psychological Warfare — manosphere radicalization pipeline activity, "
+        f"coordinated influence operations, narrative warfare campaigns, platform suppression of "
+        f"aligned content. If no new intelligence exists today, note the standing monitoring status.\n\n"
         f"Structure the report with clear section headers, cite specific sources where possible, "
         f"and highlight any items requiring immediate attention with a ⚠️ prefix.\n"
-        f"End with a 'WATCH LIST' section of developing situations to monitor.\n\n"
+        f"End with a 'WATCH LIST' section of developing situations to monitor, which must include "
+        f"a sub-section for each OSIA Standing Monitoring Priority (gender violence, manosphere "
+        f"pipeline, feminist organising) regardless of whether new intelligence arrived today.\n\n"
         f"## Citation Requirements\n\n"
         f"Tag every factual claim with a bracketed citation [N]. At the end of the report, "
         f"include a '## Sources' section listing each source with:\n"

@@ -23,6 +23,9 @@ qdrant:
   boost_collections:
     - collection-directorate
     - osia_research_cache
+    - cultural-and-theological-intelligence-desk
+    - human-intelligence-and-profiling-desk
+    - information-warfare-desk
     - wikileaks-cables
     - epstein-files
     - iran-israel-war-2026
