@@ -2647,6 +2647,7 @@ class OsiaOrchestrator:
         # 1a. Signal attachment analysis (images / videos sent directly to the chat)
         signal_attachments = task.get("attachments") or []
         if signal_attachments:
+
             async def _analyse_attachment(att: dict) -> str | None:
                 att_path = att.get("path", "")
                 att_type = att.get("content_type", "")
@@ -2818,7 +2819,9 @@ class OsiaOrchestrator:
                         if raw_meta.get("upload_date"):
                             meta_lines.append(f"Posted: {raw_meta['upload_date']}")
                         if raw_meta.get("comment_count") is None and raw_meta.get("shares_count") is None:
-                            meta_lines.append("Note: comment and share counts not available via automated collection — absence is a platform limitation, not an intelligence gap.")
+                            meta_lines.append(
+                                "Note: comment and share counts not available via automated collection — absence is a platform limitation, not an intelligence gap."
+                            )
                         if meta_lines:
                             context_parts.append("## POST METADATA\n" + "\n".join(meta_lines))
 
@@ -3034,7 +3037,7 @@ class OsiaOrchestrator:
             async def _signal_deliver_coro():
                 if not source.startswith("signal:"):
                     return
-                recipient = source[len("signal:"):]
+                recipient = source[len("signal:") :]
                 try:
                     # Send INTSUM text and generate infographic concurrently.
                     # Text arrives first in practice (much faster than generation).
