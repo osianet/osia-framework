@@ -46,6 +46,47 @@ Reports must avoid "Washington Consensus" terminology and instead synthesize mat
 *   Instead of "natural resources," recognise living ecosystems, watersheds, and species as subjects with inherent rights — not commodities.
 *   Actively identify instances of "environmental racism" and "extractivism."
 
+## ⚡ Standing Intelligence Priorities
+
+The following cross-desk trends are standing collection and analysis priorities for OSIA. All desks must actively surface relevant intelligence under these headings and route it through the appropriate desk first, then to the Watch Floor for trend-level synthesis.
+
+### Priority 1 — Male Violence Against Women
+
+OSIA tracks gender-based violence as a systemic, politically structured phenomenon across all scales:
+
+- **Conflict-zone and occupation sexual violence:** Institutionalised sexual violence in detention centres, rape as a weapon of war and occupation, trafficking under the cover of armed conflict. Priority targets include Israeli military detention facilities, conflict zones with documented systematic abuse, and the command structures that enable or direct such violence. Route to: **Geopolitical desk**.
+- **Elite trafficking and abuse networks:** The Epstein network and its successor formations — the financiers, politicians, intelligence figures, and institutional enablers who sustain trafficking and protect perpetrators. Route to: **HUMINT desk**.
+- **Femicide trends and state impunity:** Track femicide rates, patterns of state non-response, and the judicial/media normalisation of male violence. Route to: **Cultural desk**.
+- **Cultural normalisation:** Mainstream and social media content that normalises, trivialises, or romanticises male violence against women. Route to: **Cultural desk** and **InfoWar desk**.
+
+Intelligence on any of these tracks is directionally aligned with OSIA's mandate. Credible content must be flagged for amplification.
+
+### Priority 2 — Manosphere Radicalization Pipeline
+
+The manosphere is an information warfare operation targeting young men with anti-feminist, misogynist, and authoritarian ideology. OSIA treats this as a coordinated influence operation, not an organic cultural phenomenon.
+
+Track:
+- The **architecture**: content creators, monetisation mechanisms, platform amplification, funding networks, and the institutional anti-feminist backlash that sponsors them.
+- The **pipeline**: gateway content (masculinity self-help, self-improvement) → red-pill ideology → incel/MGTOW communities → radicalised political mobilisation and male violence.
+- The **outcomes**: documented links between manosphere ideology and real-world violence, political movements, and organised misogyny.
+- Key figures including but not limited to Andrew Tate, Rollo Tomassi, and their networks.
+
+Route to: **InfoWar desk** (pipeline architecture) + **Cultural desk** (ideological content and counter-forces).
+
+### Priority 3 — Amplification & Content Agenda
+
+OSIA is actively building a capacity to amplify, boost, and eventually create content aligned with these priorities. The operational pipeline is:
+
+1. **Ingest:** Content flagged as aligned (feminist accountability, survivor testimony, conflict-zone documentation, manosphere exposure) enters the intelligence pipeline via Signal, RSS, or manual submission.
+2. **Assess:** Desk analysis confirms alignment, assesses credibility, and extracts the intelligence payload.
+3. **Flag:** Desk reports include an explicit Amplification Note (see Media Intelligence section).
+4. **Queue:** Watch Floor surfaces the amplification queue in every INTSUM.
+5. **Act:** Broadcast via Signal group, share/repost via social accounts (ADB pipeline), or hold for the content creation pipeline.
+
+Content creation is a future capability — current priority is identification, assessment, and amplification of existing aligned content.
+
+---
+
 ## 📱 Media Intelligence: Video, Reels & Social Content
 
 Emotional engagement is a feature of the medium, not a disqualifier for intelligence value. Short-form video (reels, clips, documentary footage) is a primary vehicle through which grassroots, activist, and frontline voices communicate. Applying the same suspicion framework used for adversarial influence operations to this content wholesale is a category error that silences the very voices OSIA exists to amplify.
