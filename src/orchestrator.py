@@ -125,12 +125,12 @@ class OsiaOrchestrator:
         self._signal_client = httpx.AsyncClient(timeout=30.0)
 
         # Modern Gemini (media analysis, research loop, image generation)
-        # Timeout of 300s: video generate_content calls can take 60-120s for longer clips;
-        # the default httpx timeout (~60s) causes "Server disconnected" on busy Gemini nodes.
+        # HttpOptions.timeout is in milliseconds. 300_000ms = 300s; video
+        # generate_content calls can take 60-120s for longer clips.
         api_key = os.getenv("GEMINI_API_KEY")
         self.client = genai.Client(
             api_key=api_key,
-            http_options=types.HttpOptions(timeout=300),
+            http_options=types.HttpOptions(timeout=300_000),
         )
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
 
@@ -2471,6 +2471,27 @@ class OsiaOrchestrator:
         )
         return (result.text or "").strip()
 
+    async def _check_content_alignment(self, analysis: str) -> str:
+        """Return 'high', 'medium', 'low', or 'none' based on desk analysis alignment with OSIA directives."""
+        directives_path = self.base_dir / "DIRECTIVES.md"
+        mandate_excerpt = directives_path.read_text()[:800]
+        prompt = (
+            f"OSIA DIRECTIVES (excerpt):\n{mandate_excerpt}\n\n"
+            f"---\n\n"
+            f"A desk just produced this intelligence analysis of a social media post:\n\n"
+            f"{analysis[:1500]}\n\n"
+            f"---\n\n"
+            f"Based on the OSIA directives, how well does this post's content align with OSIA's values and mission? "
+            f"Reply with ONLY one word: high, medium, low, or none."
+        )
+        try:
+            result = await self._route_to_desk(prompt)
+            verdict = result.strip().lower().split()[0] if result.strip() else "none"
+            return verdict if verdict in ("high", "medium", "low", "none") else "none"
+        except Exception as e:
+            logger.warning("Alignment check failed: %s", e)
+            return "none"
+
     # ------------------------------------------------------------------
     # Qdrant context injection
     # ------------------------------------------------------------------
@@ -2626,18 +2647,18 @@ class OsiaOrchestrator:
         # 1a. Signal attachment analysis (images / videos sent directly to the chat)
         signal_attachments = task.get("attachments") or []
         if signal_attachments:
-            attach_parts: list[str] = []
-            for att in signal_attachments:
+
+            async def _analyse_attachment(att: dict) -> str | None:
                 att_path = att.get("path", "")
                 att_type = att.get("content_type", "")
                 if not att_path or not Path(att_path).exists():
-                    continue
+                    return None
                 try:
                     logger.info("Uploading Signal attachment to Gemini: %s (%s)", att_path, att_type)
-                    att_file = self.client.files.upload(file=att_path)
+                    att_file = await asyncio.to_thread(self.client.files.upload, file=att_path)
                     while att_file.state.name == "PROCESSING":
                         await asyncio.sleep(2)
-                        att_file = self.client.files.get(name=att_file.name)
+                        att_file = await asyncio.to_thread(self.client.files.get, name=att_file.name)
 
                     if att_type.startswith("image/"):
                         att_prompt = (
@@ -2653,15 +2674,16 @@ class OsiaOrchestrator:
                             "and summarise the core message or intelligence value."
                         )
 
-                    att_response = self.client.models.generate_content(
+                    att_response = await asyncio.to_thread(
+                        self.client.models.generate_content,
                         model=self.model_id,
                         contents=[att_file, att_prompt],
                     )
-                    attach_parts.append(f"[{att_type}]\n{att_response.text.strip()}")
+                    return f"[{att_type}]\n{att_response.text.strip()}"
                 except Exception as _att_err:
                     logger.error("Signal attachment analysis failed (%s): %s", att_path, _att_err)
+                    return None
                 finally:
-                    # Clean up temp file
                     try:
                         Path(att_path).unlink(missing_ok=True)
                     except Exception as cleanup_err:
@@ -2670,6 +2692,9 @@ class OsiaOrchestrator:
                             att_path,
                             cleanup_err,
                         )
+
+            att_results = await asyncio.gather(*(_analyse_attachment(a) for a in signal_attachments))
+            attach_parts = [r for r in att_results if r]
 
             if attach_parts:
                 attach_block = "\n\n".join(attach_parts)
@@ -2793,6 +2818,10 @@ class OsiaOrchestrator:
                             meta_lines.append(f"Shares: {raw_meta['shares_count']}")
                         if raw_meta.get("upload_date"):
                             meta_lines.append(f"Posted: {raw_meta['upload_date']}")
+                        if raw_meta.get("comment_count") is None and raw_meta.get("shares_count") is None:
+                            meta_lines.append(
+                                "Note: comment and share counts not available via automated collection — absence is a platform limitation, not an intelligence gap."
+                            )
                         if meta_lines:
                             context_parts.append("## POST METADATA\n" + "\n".join(meta_lines))
 
@@ -2877,19 +2906,13 @@ class OsiaOrchestrator:
                 except Exception as fallback_err:
                     logger.error("Direct-tool research fallback also failed: %s", fallback_err)
 
-        # 3. Entity extraction + research job enqueuing
-        entities = []
-        entity_names: list[str] = []
+        # 3 + 4. Entity extraction and desk routing run in parallel.
+        # plan_prompt is pure computation (no I/O) so we build it first, then
+        # fire both coroutines concurrently — _build_context_block (step 5)
+        # needs both results, so it waits until gather completes.
         text_for_extraction = research_summary or media_analysis or original_query
         triggered_by = url or (source[len("signal:") :] if source.startswith("signal:") else source)
-        try:
-            entities = await self.entity_extractor.extract(text_for_extraction, "collection-directorate")
-            entity_names = [e.name for e in entities]
-            await self.entity_extractor.enqueue_research_jobs(entities, triggered_by=triggered_by)
-        except Exception as e:
-            logger.error("Entity extraction/enqueuing failed: %s", e)
 
-        # 4. Chief of Staff routes to the appropriate desk
         directives_path = self.base_dir / "DIRECTIVES.md"
         mandate = directives_path.read_text()
 
@@ -2913,26 +2936,50 @@ class OsiaOrchestrator:
         Reply with ONLY the slug of the desk (the part before the parenthesis), nothing else.
         """
 
-        try:
+        async def _extract_entities_coro() -> list:
+            try:
+                ents = await self.entity_extractor.extract(text_for_extraction, "collection-directorate")
+                await self.entity_extractor.enqueue_research_jobs(ents, triggered_by=triggered_by)
+                return ents
+            except Exception as e:
+                logger.error("Entity extraction/enqueuing failed: %s", e)
+                return []
+
+        async def _route_desk_coro() -> str:
             pinned_desk = task.get("desk")
             if pinned_desk and pinned_desk in self.valid_desks:
-                assigned_desk = pinned_desk
-                logger.info("Task desk pre-assigned to '%s' (bypassing AI routing)", assigned_desk)
-            else:
-                if pinned_desk:
-                    logger.warning("Pre-assigned desk '%s' is not valid — falling back to AI routing", pinned_desk)
-                assigned_desk = await self._route_to_desk(plan_prompt)
+                logger.info("Task desk pre-assigned to '%s' (bypassing AI routing)", pinned_desk)
+                return pinned_desk
+            if pinned_desk:
+                logger.warning("Pre-assigned desk '%s' is not valid — falling back to AI routing", pinned_desk)
+            desk = await self._route_to_desk(plan_prompt)
+            if desk not in self.valid_desks:
+                logger.warning(
+                    "Routing returned invalid desk '%s', falling back to '%s'",
+                    desk,
+                    self.default_desk,
+                )
+                desk = self.default_desk
+            return desk
 
-                if assigned_desk not in self.valid_desks:
-                    logger.warning(
-                        "Gemini returned invalid desk '%s', routing to default '%s'",
-                        assigned_desk,
-                        self.default_desk,
-                    )
-                    assigned_desk = self.default_desk
+        entities_result, assigned_desk = await asyncio.gather(
+            _extract_entities_coro(),
+            _route_desk_coro(),
+            return_exceptions=True,
+        )
 
-            logger.info("Task routed to: %s", assigned_desk)
+        if isinstance(entities_result, BaseException):
+            logger.error("Entity extraction raised: %s", entities_result)
+            entities_result = []
+        if isinstance(assigned_desk, BaseException):
+            logger.error("Desk routing raised: %s — falling back to default", assigned_desk)
+            assigned_desk = self.default_desk
 
+        entities = entities_result
+        entity_names: list[str] = [e.name for e in entities]
+        logger.info("Task routed to: %s", assigned_desk)
+
+        try:
             # 5. Qdrant context injection
             context_block = await self._build_context_block(assigned_desk, original_query, entity_names)
 
@@ -2963,53 +3010,86 @@ class OsiaOrchestrator:
             # Audit citations and append source quality summary
             analysis += audit_report(analysis, source_tracker)
 
-            # 7. Store desk analysis in Qdrant for future context retrieval
-            try:
-                desk_cfg = self.desk_registry.get(assigned_desk)
-                desk_collection = desk_cfg.qdrant.collection
-                await self.qdrant.upsert(
-                    desk_collection,
-                    analysis,
-                    metadata={
-                        "desk": assigned_desk,
-                        "topic": (original_query or "")[:200],
-                        "source": source,
-                        "reliability_tier": "A",
-                        "timestamp": datetime.now(UTC).isoformat(),
-                        "entity_tags": entity_names,
-                        "triggered_by": triggered_by,
-                        "model_used": model_id_used,
-                    },
-                )
-                logger.debug("Stored analysis in Qdrant collection '%s'", desk_collection)
-            except Exception as e:
-                logger.warning("Failed to store analysis in Qdrant for desk '%s': %s", assigned_desk, e)
+            # 7. Post-analysis side effects — all independent, run concurrently.
 
-            if source.startswith("signal:"):
-                recipient = source[len("signal:") :]
-                await self.send_signal_message(recipient, analysis)
+            async def _qdrant_upsert_coro():
                 try:
-                    infographic_b64 = await generate_infographic(
-                        self.client,
-                        self.model_id,
+                    desk_cfg = self.desk_registry.get(assigned_desk)
+                    desk_collection = desk_cfg.qdrant.collection
+                    await self.qdrant.upsert(
+                        desk_collection,
                         analysis,
-                        assigned_desk,
+                        metadata={
+                            "desk": assigned_desk,
+                            "topic": (original_query or "")[:200],
+                            "source": source,
+                            "reliability_tier": "A",
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "entity_tags": entity_names,
+                            "triggered_by": triggered_by,
+                            "model_used": model_id_used,
+                        },
+                    )
+                    logger.debug("Stored analysis in Qdrant collection '%s'", desk_collection)
+                except Exception as e:
+                    logger.warning("Failed to store analysis in Qdrant for desk '%s': %s", assigned_desk, e)
+
+            async def _signal_deliver_coro():
+                if not source.startswith("signal:"):
+                    return
+                recipient = source[len("signal:") :]
+                try:
+                    # Send INTSUM text and generate infographic concurrently.
+                    # Text arrives first in practice (much faster than generation).
+                    async def _gen_infographic():
+                        try:
+                            return await generate_infographic(self.client, self.model_id, analysis, assigned_desk)
+                        except Exception as img_err:
+                            logger.warning("Infographic generation failed (non-fatal): %s", img_err)
+                            return None
+
+                    _, infographic_b64 = await asyncio.gather(
+                        self.send_signal_message(recipient, analysis),
+                        _gen_infographic(),
                     )
                     if infographic_b64:
                         await self.send_signal_image(recipient, infographic_b64, caption="📊 OSIA Intelligence Brief")
-                except Exception as img_err:
-                    logger.warning("Infographic delivery failed (non-fatal): %s", img_err)
+                except Exception as sig_err:
+                    logger.warning("Signal delivery failed (non-fatal): %s", sig_err)
 
-            # Archive a PDF copy of every completed analysis
-            if os.getenv("OSIA_DEBUG_PDF", "false").lower() == "true":
-                logger.info("Attempting PDF archival for desk %s, source %s", assigned_desk, source)
-            try:
-                await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: generate_intsum_pdf(analysis, assigned_desk, source),
-                )
-            except Exception as pdf_err:
-                logger.warning("PDF archival failed (non-fatal): %s", pdf_err)
+            async def _pdf_archive_coro():
+                if os.getenv("OSIA_DEBUG_PDF", "false").lower() == "true":
+                    logger.info("Attempting PDF archival for desk %s, source %s", assigned_desk, source)
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: generate_intsum_pdf(analysis, assigned_desk, source),
+                    )
+                except Exception as pdf_err:
+                    logger.warning("PDF archival failed (non-fatal): %s", pdf_err)
+
+            async def _instagram_share_coro():
+                _is_instagram = url and urlparse(url).hostname in ("instagram.com", "www.instagram.com")
+                if not _is_instagram:
+                    return
+                try:
+                    alignment = await self._check_content_alignment(analysis)
+                    logger.info("Instagram content alignment verdict: %s — %s", alignment, url)
+                    if alignment == "high":
+                        share_result = await self.social_agent.share_post(url)
+                        if share_result.success:
+                            logger.info("Successfully shared aligned Instagram post: %s", url)
+                        else:
+                            logger.info("Instagram share failed (non-fatal): %s", share_result.error)
+                except Exception as share_err:
+                    logger.warning("Instagram alignment share raised (non-fatal): %s", share_err)
+
+            await asyncio.gather(
+                _qdrant_upsert_coro(),
+                _signal_deliver_coro(),
+                _pdf_archive_coro(),
+                _instagram_share_coro(),
+            )
 
         except Exception as e:
             logger.exception("Orchestration or desk analysis failed: %s", e)

@@ -727,6 +727,19 @@ Rules:
         )
         return await self._run_goal(goal, pre_url=post_url)
 
+    async def share_post(self, post_url: str) -> ActionResult:
+        """Navigate to a post and repost/share it via the Instagram share sheet."""
+        goal = (
+            "Find and tap the Share/Send button on this post (paper plane icon or arrow icon). "
+            "For REELS: the share icon is in the vertical action bar on the RIGHT side rail. "
+            "For FEED posts: the share icon is in the interaction bar at the BOTTOM. "
+            "Once the share sheet opens, tap 'Repost' if visible, otherwise tap 'Share' or 'Add to story'. "
+            "If a confirmation dialog appears, confirm it. "
+            "Once the share/repost action is confirmed, use 'done'. "
+            "If no share option is available or the post is already reposted, use 'done'."
+        )
+        return await self._run_goal(goal, pre_url=post_url)
+
     async def follow_account(self, profile_url: str) -> ActionResult:
         """Navigate to a profile and follow the account."""
         goal = (
