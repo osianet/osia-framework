@@ -3069,7 +3069,7 @@ class OsiaOrchestrator:
                     logger.warning("PDF archival failed (non-fatal): %s", pdf_err)
 
             async def _instagram_share_coro():
-                _is_instagram = url and "instagram.com" in url.lower()
+                _is_instagram = url and urlparse(url).hostname in ("instagram.com", "www.instagram.com")
                 if not _is_instagram:
                     return
                 try:
