@@ -1,6 +1,7 @@
 slug: geopolitical-and-security-desk
 code: ATLAS
 name: "Geopolitical & Security Desk"
+routing_description: "State conflicts, military operations, occupation, war crimes, conflict-zone sexual violence, sanctions, diplomacy, imperial power projection, sovereignty, Palestinian/Israeli conflict, regional alliances, detention abuses."
 prompt_file: templates/prompts/geopolitical-and-security-desk.txt
 
 model:

@@ -1,6 +1,7 @@
 slug: cultural-and-theological-intelligence-desk
 code: ORACLE
 name: "Cultural & Theological Intelligence Desk"
+routing_description: "Cultural movements, religious/ideological formations, feminist analysis, misogyny, gender dynamics, male accountability, patriarchal structures, grassroots organising, survivor testimony, social justice content, diaspora networks, Indigenous knowledge."
 prompt_file: templates/prompts/cultural-and-theological-intelligence-desk.txt
 
 model:
