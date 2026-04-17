@@ -29,8 +29,14 @@ _SITREP_SEED_QUERIES = [
     ("cyber", "cyber attacks threat actors nation state intrusions malware campaigns"),
     ("finance", "financial market risks economic policy trade sanctions fiscal instability"),
     ("technology", "emerging technology AI developments scientific breakthroughs dual-use"),
-    ("gender_violence", "male violence against women sexual violence occupation detention femicide manosphere misogyny accountability"),
-    ("infowar", "information warfare influence operations propaganda manosphere radicalization disinformation psyops narrative"),
+    (
+        "gender_violence",
+        "male violence against women sexual violence occupation detention femicide manosphere misogyny accountability",
+    ),
+    (
+        "infowar",
+        "information warfare influence operations propaganda manosphere radicalization disinformation psyops narrative",
+    ),
 ]
 _SEED_TOP_K = 3  # results per standing query
 _SEED_MIN_SCORE = 0.45  # discard low-confidence matches

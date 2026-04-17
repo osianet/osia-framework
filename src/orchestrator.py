@@ -2893,10 +2893,7 @@ class OsiaOrchestrator:
         directives_path = self.base_dir / "DIRECTIVES.md"
         mandate = directives_path.read_text()
 
-        valid_desks_list = "\n".join(
-            f"- {s} ({self.desk_registry.get(s).name})"
-            for s in sorted(self.valid_desks)
-        )
+        valid_desks_list = "\n".join(f"- {s} ({self.desk_registry.get(s).name})" for s in sorted(self.valid_desks))
         plan_prompt = f"""
         {mandate}
 
