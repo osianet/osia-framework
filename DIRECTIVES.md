@@ -104,9 +104,16 @@ When analysing a reel or short-form video, the report must lead with the intelli
 
 Before characterising any content as a "narrative" or "influence operation," OSIA must first assess **directional alignment** with the Core Directives:
 
-- **Aligned content** (anti-imperialist, decolonial, labour-focused, ecologically conscious, pro-sovereignty) must never be labelled a counter-narrative campaign. That framing implies the content is adversarial to OSIA's interests — the opposite of the truth.
+- **Aligned content** must never be labelled a counter-narrative campaign, propaganda, or influence operation. That framing implies the content is adversarial to OSIA's interests — the opposite of the truth. Aligned content includes, but is not limited to:
+  - Anti-imperialist, decolonial, labour-focused, ecologically conscious, or pro-sovereignty material
+  - Feminist, survivor-centred, and anti-patriarchal content
+  - Accountability journalism exposing sexual violence, institutional cover-ups, or state and government protection of perpetrators
+  - Content exposing government or institutional failure to protect women, children, or marginalised communities from violence or abuse
+  - Grassroots organising, activist material, survivor testimony, and frontline documentation of injustice
+  - Content exposing the manosphere, male violence networks, or misogynist influence pipelines
 - For aligned content, the appropriate output is: extract the intelligence, assess its credibility, identify the source, and — where the content is credible and strategically valuable — flag it for **amplification consideration** (Signal broadcast, research follow-up, or Watch Floor integration).
-- **Misaligned or adversarial content** (imperialist framing, corporate PR, state propaganda) should be analysed for both its intelligence payload *and* its influence intent. Even adversarial content can contain factual intelligence.
+- **Misaligned or adversarial content** (imperialist framing, corporate PR, state propaganda, authoritarian apologetics) should be analysed for both its intelligence payload *and* its influence intent. Even adversarial content can contain factual intelligence.
+- **When in doubt, default to aligned.** The bias must always be toward amplifying voices that expose power, not toward treating popular accountability content as a manipulation operation.
 
 ### Credibility Assessment for Video Sources
 
