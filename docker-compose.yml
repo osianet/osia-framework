@@ -51,6 +51,33 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
+  wikijs-db:
+    image: postgres:15-alpine
+    container_name: osia-wikijs-db
+    environment:
+      - POSTGRES_DB=wikijs
+      - POSTGRES_USER=wikijs
+      - POSTGRES_PASSWORD=${WIKIJS_DB_PASSWORD}
+    volumes:
+      - /home/ubuntu/osia-wikijs/db:/var/lib/postgresql/data
+    restart: always
+
+  wikijs:
+    image: ghcr.io/requarks/wiki:2
+    container_name: osia-wikijs
+    depends_on:
+      - wikijs-db
+    environment:
+      - DB_TYPE=postgres
+      - DB_HOST=wikijs-db
+      - DB_PORT=5432
+      - DB_USER=wikijs
+      - DB_PASS=${WIKIJS_DB_PASSWORD}
+      - DB_NAME=wikijs
+    ports:
+      - "127.0.0.1:3000:3000"
+    restart: always
+
   kali-sandbox:
     image: kalilinux/kali-rolling
     container_name: osia-kali

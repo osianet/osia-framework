@@ -51,6 +51,16 @@ mcp_servers:
 
 entity_research_target: false
 
+aesthetic:
+  logo: assets/logos/v1_eye_network_1024_transparent.png   # All-seeing eye — synthesis, command, situational awareness
+  badge: assets/aesthetic/badge_the-watch-floor_transparent.png
+  accent_color: "#00dd55"       # Bright OSIA green — command authority, full spectrum
+  accent_secondary: "#1e4a1e"
+  bg_style: bg_hero             # Command/dramatic — the nerve centre
+  wiki_icon: mdi-radar
+  wiki_section: /desks/the-watch-floor
+  css_class: desk-watchfloor
+
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: 29vD33N1CtxCmqQRPOHJ  # Drew — authoritative, calm male

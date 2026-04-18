@@ -48,6 +48,16 @@ mcp_servers:
 
 entity_research_target: true
 
+aesthetic:
+  logo: assets/logos/v5_earth_grid_1024_transparent.png   # Globe/network grid — strategic global scope
+  badge: assets/aesthetic/badge_geopolitical-and-security-desk_transparent.png
+  accent_color: "#00dd55"       # Primary OSIA green — command authority
+  accent_secondary: "#1e4a1e"
+  bg_style: bg_terrain          # Topographic/conflict-mapping texture
+  wiki_icon: mdi-earth
+  wiki_section: /desks/geopolitical-and-security
+  css_class: desk-geopolitical
+
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: pNInz6obpgDQGcFmaJgB  # Adam — deep, authoritative male

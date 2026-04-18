@@ -46,6 +46,16 @@ mcp_servers:
 
 entity_research_target: true
 
+aesthetic:
+  logo: assets/logos/v5_earth_grid_1024_transparent.png   # Earth grid — global capital flows, financial networks
+  badge: assets/aesthetic/badge_finance-and-economics-directorate_transparent.png
+  accent_color: "#ffd060"       # Gold/amber — markets, money, financial ledger
+  accent_secondary: "#3a2000"
+  bg_style: bg_archive          # Document/ledger texture — records, filings
+  wiki_icon: mdi-chart-line
+  wiki_section: /desks/finance-and-economics
+  css_class: desk-finance
+
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: ErXwobaYiN019PkySvjV  # Antoni — professional male

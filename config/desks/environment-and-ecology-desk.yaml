@@ -42,6 +42,16 @@ mcp_servers:
 
 entity_research_target: true
 
+aesthetic:
+  logo: assets/logos/v2_compass_mycelium_1024_transparent.png   # Compass/mycelium — ecological networks, living systems
+  badge: assets/aesthetic/badge_environment-and-ecology-desk_transparent.png
+  accent_color: "#00aa44"       # Deep green — ecology, land, living systems
+  accent_secondary: "#0c1c0c"
+  bg_style: bg_ecological       # Natural/ecological texture
+  wiki_icon: mdi-leaf
+  wiki_section: /desks/environment-and-ecology
+  css_class: desk-ecology
+
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: XB0fDUnXU5powFXDhCwa  # Charlotte — clear, passionate female
