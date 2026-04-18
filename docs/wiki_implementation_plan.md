@@ -8,35 +8,45 @@ it autonomously.
 
 ---
 
-## Session 1 — Docker Setup & Infrastructure
+## Session 1 — Docker Setup & Infrastructure ✅
 **Goal:** `https://wiki.osia.dev` serving Wiki.js, fully TLS-terminated.
 
-- [ ] Add `wikijs` + `wikijs-db` (Postgres 15) services to `docker-compose.yml`
-- [ ] Add `WIKIJS_DB_PASSWORD` to `.env`
-- [ ] Create data directory `/home/ubuntu/osia-wikijs/db`
-- [ ] Create nginx config `wiki.osia.dev.conf`
-- [ ] Issue Let's Encrypt cert for `wiki.osia.dev`
-- [ ] Run initial setup wizard (admin account, site title, Git storage backend optional)
-- [ ] Verify GraphQL API endpoint at `https://wiki.osia.dev/graphql`
+- [x] Add `wikijs` + `wikijs-db` (Postgres 15) services to `docker-compose.yml`
+- [x] Add `WIKIJS_DB_PASSWORD` to `.env`
+- [x] Create data directory `/home/ubuntu/osia-wikijs/db`
+- [x] Create nginx config `wiki.osia.dev.conf`
+- [x] Add `wiki.osia.dev` A record to Cloudflare (ZeroTier IP, DNS-only — private until locked down)
+- [x] Expand Let's Encrypt cert (`osia.dev-0001`) to include `wiki.osia.dev` via DNS challenge
+- [x] Run initial setup wizard (admin account, site title)
+- [x] Verify GraphQL API endpoint at `https://wiki.osia.dev/graphql`
+- [x] Add `WIKIJS_API_KEY` to `.env`
 
 ---
 
-## Session 2 — OSIA Aesthetic Customisation
-**Goal:** Wiki matches OSIA visual identity (dark intel-agency aesthetic).
+## Session 2 — OSIA Aesthetic Customisation & Base Structure ✅
+**Goal:** Wiki matches OSIA visual identity and has complete page scaffolding.
 
-- [ ] Inject custom CSS via Wiki.js Admin → Theme
-- [ ] Upload OSIA logo as site logo
-- [ ] Configure navigation sidebar (Entities, INTSUMs, Desks, Declassified KBs)
-- [ ] Set up initial folder/namespace structure:
+- [x] Inject custom CSS (`assets/wiki/osia_wiki.css`) — dark terminal aesthetic, Ubuntu fonts, green primary
+- [x] Upload `osia_logo_sm.png` as site logo
+- [x] Set site title, description, robots noindex/nofollow (private)
+- [x] Configure navigation sidebar (OSIA, Intelligence Desks, Entities, Knowledge Base)
+- [x] Add `aesthetic:` block to all 9 desk YAMLs (logo variant, accent colour, bg style, wiki icon, css class, path)
+- [x] Bootstrap 61 base pages via `scripts/wiki_bootstrap.py` (idempotent, re-runnable):
   ```
-  /entities/persons/
-  /entities/organisations/
-  /entities/locations/
-  /intsums/<desk-slug>/
-  /desks/<desk-slug>/
-  /kb/declassified/
+  /home                          Wiki home
+  /desks/<slug>/                 9 desk landing pages
+  /desks/<slug>/intsums          INTSUM archive per desk
+  /desks/<slug>/standing-assessments
+  /desks/<slug>/watchlist
+  /entities/{persons,organisations,locations,networks}
+  /intsums                       Cross-desk Watch Floor products
+  /sitrep                        Daily SITREP archive
+  /operations                    Named investigations scaffold
+  /kb/declassified/<collection>  7 declassified KB collections
+  /kb/{sources,thematic,methodology}
+  /kb/methodology/{entity-dossier-template,intsum-format,wiki-conventions}
   ```
-- [ ] Create a template page for entity dossiers
+- [x] AI-maintainable sections fenced with `<!-- OSIA:AUTO:section-name -->` markers
 
 ---
 
