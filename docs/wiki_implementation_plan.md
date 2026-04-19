@@ -50,35 +50,80 @@ it autonomously.
 
 ---
 
-## Session 3 — MCP Server
+## Session 3 — MCP Server ✅
 **Goal:** Clean tool surface for AI to read/write wiki pages.
 
-File: `src/mcp/wiki_mcp.py`
+Repo: `git@github.com:osianet/wiki-js-mcp.git` (`/home/ubuntu/wiki-js-mcp`)
 
 Tools:
 | Tool | Description |
 |------|-------------|
 | `wiki_create_page` | Create new page at path with markdown content |
-| `wiki_update_page` | Overwrite or append to existing page |
-| `wiki_get_page` | Read page content by path or ID |
-| `wiki_search_pages` | Full-text search, returns title/path/snippet/tags |
-| `wiki_list_pages` | List pages under a folder path |
+| `wiki_update_page` | Overwrite or patch AUTO-fenced section or update metadata only |
+| `wiki_get_page` | Read page content by path |
+| `wiki_search_pages` | Full-text search, returns title/path/description/tags |
+| `wiki_list_pages` | List pages, optional path prefix filter |
 | `wiki_move_page` | Rename/restructure a page path |
 
 Error contract: all tools return `{"success": bool, "error": str | null, ...}` — never raise,
 always return structured result so the calling AI can decide how to handle failures.
 
-GraphQL client: `gql` + `aiohttp` transport. API key stored as `WIKIJS_API_KEY` in `.env`.
+GraphQL client: `httpx` (async). API key stored as `WIKIJS_API_KEY` in `.env`.
 
 ---
 
-## Session 4 — Orchestrator Wiring
+## Session 4 — Orchestrator Wiring ✅
 **Goal:** Automatic wiki maintenance as intelligence is produced.
 
-- [ ] INTSUM write-back: after Watch Floor synthesises, write to `/intsums/<desk>/<date>-<slug>`
-- [ ] Entity upsert: after entity extraction, create/update `/entities/persons/<name>` etc.
-- [ ] Research worker: append research summaries to relevant entity pages
-- [ ] Daily SITREP: write to `/intsums/sitrep/<date>`
+- [x] **`src/intelligence/wiki_client.py`** — async Python GraphQL client (mirrors MCP server logic):
+  - `WikiClient` async context manager with `get_page`, `create_page`, `update_page`, `upsert_page`, `patch_section`, `append_to_section`, `search_pages`
+  - Path helpers: `intsum_wiki_path()`, `sitrep_wiki_path()`, `entity_wiki_path()`, `desk_wiki_section()` (reads `aesthetic.wiki_section` from desk YAMLs)
+  - Page builders: `build_intsum_page()`, `build_entity_page()` — AUTO-fenced sections for targeted updates
+
+- [x] **Orchestrator** (`src/orchestrator.py`):
+  - Removed `generate_intsum_pdf` — replaced with `_wiki_publish_coro()` in the post-analysis gather
+  - INTSUM published to `desks/<desk>/intsums/<date>-<topic-slug>` (or `sitrep/<date>` when `original_query` starts with "Generate a Daily SITREP")
+  - `wiki_path` stored in Qdrant payload for Hermes back-reference
+  - Entity pages created/updated: new entities get full dossier scaffold; existing pages get intel-log entry appended
+  - SITREP auto-detected (query prefix) → routed to `/sitrep/<date>` instead of desk intsums
+  - `WIKIJS_API_KEY` guard: wiki publish is a no-op when key is absent
+
+- [x] **Research worker** (`src/workers/research_worker.py`):
+  - After `store_research()`: searches wiki for entity page matching `job.topic`, appends research summary to `<!-- OSIA:AUTO:research-notes -->` section
+  - Falls back to deterministic org-type path if search returns no entity pages
+
+- [x] **Hermes worker** (`src/workers/hermes_worker.py`):
+  - After verdict: if Qdrant payload carries `wiki_path`, patches `<!-- OSIA:AUTO:corroboration -->` section with verdict, confidence, reasoning, and sources
+
+- [x] **`scripts/wiki_import_pdfs.py`** — PDF archive importer:
+  - Parses `reports/*.pdf` filenames (`{date}_{time}_{desk}.pdf`) to derive wiki paths
+  - Extracts text via PyMuPDF (falls back to pypdf)
+  - Creates `desks/<desk>/intsums/<date>-<time>-imported` pages, idempotent
+  - `--dry-run`, `--limit N`, `--desk SLUG` flags
+
+---
+
+## Cross-Linking Strategy
+
+Pages link to each other through four mechanisms:
+
+| Mechanism | How |
+|-----------|-----|
+| INTSUM → entities | Metadata table lists entity wiki links (`[Name](/entities/...)`) |
+| Entity → INTSUMs | `intel-log` section gets a new entry per INTSUM that mentions the entity |
+| Entity → research | `research-notes` section accumulates research worker findings |
+| INTSUM → corroboration | `corroboration` section patched by Hermes after verification |
+
+SITREP pages (`/sitrep/<date>`) are naturally linked to the desk INTSUMs of that day via shared entity pages — any entity mentioned in both a desk INTSUM and the SITREP will have both listed in its intel-log, creating a web of cross-references without explicit SITREP→INTSUM pointers.
+
+**To kick off the archive import:**
+```bash
+# Preview first
+uv run python scripts/wiki_import_pdfs.py --dry-run --limit 10
+
+# Import all (recommended: run in screen/tmux — ~700 PDFs)
+uv run python scripts/wiki_import_pdfs.py
+```
 
 ---
 

@@ -62,6 +62,8 @@ from dotenv import load_dotenv
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qdrant_models
 
+from src.intelligence.wiki_client import WikiClient
+
 # Tool infrastructure — imported from research_worker to avoid duplication.
 # Safe to import: module-level code only loads env vars and defines functions.
 from src.workers.research_worker import (
@@ -974,6 +976,46 @@ async def _patch_payload(
 # ---------------------------------------------------------------------------
 
 
+async def _wiki_update_corroboration(
+    payload: dict,
+    verdict: str,
+    confidence: str,
+    reasoning: str,
+    sources: list[str],
+    checked_at: str,
+    dry_run: bool,
+) -> None:
+    """Update the corroboration section of the INTSUM wiki page referenced in the payload.
+
+    Only runs when WIKIJS_API_KEY is set and the Qdrant payload carries a wiki_path.
+    Non-fatal — logs and returns on any failure.
+    """
+    import os
+
+    if dry_run or not os.getenv("WIKIJS_API_KEY"):
+        return
+    wiki_path: str = payload.get("wiki_path", "")
+    if not wiki_path:
+        return
+
+    icon = {"CORROBORATED": "✅", "CONTRADICTED": "⚠️", "UNVERIFIED": "❓"}.get(verdict, "")
+    sources_str = ", ".join(sources) if sources else "*none found*"
+    section_content = (
+        f"**Verdict:** {icon} {verdict}  \n"
+        f"**Confidence:** {confidence}  \n"
+        f"**Verified:** {checked_at[:10]}  \n"
+        f"**Reasoning:** {reasoning or '*(not recorded)*'}  \n"
+        f"**Sources:** {sources_str}"
+    )
+    try:
+        async with WikiClient() as wiki:
+            ok = await wiki.patch_section(wiki_path, "corroboration", section_content)
+            if ok:
+                logger.info("Wiki: corroboration updated for '%s' → %s", wiki_path, verdict)
+    except Exception as e:
+        logger.warning("Wiki corroboration update failed for '%s' (non-fatal): %s", wiki_path, e)
+
+
 async def process_desk(desk: DeskMeta, limit: int, dry_run: bool) -> tuple[int, int, int]:
     """Corroborate low-confidence points in one desk's collection.
 
@@ -1068,6 +1110,7 @@ async def process_desk(desk: DeskMeta, limit: int, dry_run: bool) -> tuple[int, 
                 unverified += 1
 
             await _patch_payload(client, desk.collection, point_id, patch, dry_run)
+            await _wiki_update_corroboration(payload, verdict, confidence, reasoning, sources, checked_now, dry_run)
             await asyncio.sleep(2)  # rate-limit buffer between points
 
     return corroborated, contradicted, unverified
