@@ -125,10 +125,16 @@ pull the current ACTIVE account's cookie path from Redis rather than the hardcod
   - `--import-cookies <id> <path>` — load existing cookie file into pool
   - `--export-cookies <id>` — dump cookie file path for manual yt-dlp testing
   - `--create-account <country>` — full automated creation via Camoufox (Phase 2)
-- [ ] **1.3** Update orchestrator to use pool manager  ← **LAST STEP — do after pool has accounts**
-  - Replace the two hardcoded `instagram_cookies.txt` references
-  - On yt-dlp 401/429 → call `manager.flag(account_id)`, retry with next account
-  - Log which account_id served each reel download
+- [x] **1.3** Update orchestrator to use pool manager
+  - `_resolve_instagram_cookie()` — tries pool first, falls back to legacy `instagram_cookies.txt`
+  - `_yt_dlp_auth_error()` — detects 401/429/login-required in yt-dlp stderr
+  - `_fetch_yt_dlp_metadata`: uses pool cookie, flags account on auth error
+  - `_download_video_yt_dlp`: same + automatic retry with next ACTIVE account
+  - `source_account` field written to Qdrant payload on every Instagram reel
+- [x] **1.4** `--sync-cookies` command in `ig_pool_admin.py`
+  - Fixes Windows→Linux cookie paths in Redis records
+  - Promotes any WARMING/CREATED account whose cookie file now exists
+  - Run after each batch copy from desktop: `uv run python scripts/ig_pool_admin.py --sync-cookies`
 
 ### Phase 2 — Account Creation (Camoufox)
 - [x] **2.1** Create `src/agents/instagram_creator.py`
@@ -141,19 +147,22 @@ pull the current ACTIVE account's cookie path from Redis rather than the hardcod
   - Integrated directly into `InstagramCreator._switch_vpn()`
   - Parses current wg0.conf endpoint to identify and restore original slug
   - Supported countries: any slug in `/etc/wireguard/countries/` (31 available)
-- [ ] **2.3** End-to-end creation test
-  - `sudo uv run python scripts/ig_pool_admin.py --create-account AU`
-  - Verify cookie file written, account in WARMING state
+- [x] **2.3** End-to-end creation test — complete
+  - Headed mode (`--headed`) used on Windows desktop; browser visible for CAPTCHA solving
+  - OTP space-stripping added to handle SMSPool codes with whitespace
+  - Multiple batches of accounts created and imported; 15 ACTIVE as of 2026-04-19
 
-### Phase 3 — Warm-up Scheduler (ADB + Camoufox)
+### Phase 3 — Warm-up Scheduler (ADB + Camoufox)  ← **NEXT**
 - [ ] **3.1** Create `src/agents/instagram_warmup_agent.py`
   - Inherits/reuses `SocialMediaAgent` ADB patterns
-  - Per-session warm-up routine: open Instagram app, browse feed 3-5 min, like 1-2 posts, optionally follow 1 account
+  - Per-session warm-up routine: open Instagram app, browse feed 3-5 min, like 1-2 posts
+  - **Follow accounts from `osia:ig:intel_sources`** Redis set (395 handles as of 2026-04-19)
+    - Pick a random subset per session (e.g. 2-3 follows) from the set
   - Tracks `warmup_sessions` count on account record
   - After `IG_WARMUP_DAYS` days AND min sessions met → `promote()` to ACTIVE
   - Respects `osia:adb:lock` (will not run if orchestrator holds the lock)
 - [ ] **3.2** Create `src/cron/instagram_pool_health.py`
-  - Runs as a timer job (suggest every 4h)
+  - Runs as a timer job (every 4h)
   - Checks ACTIVE count vs `IG_POOL_ACTIVE_MIN` → triggers creation if low
   - Checks WARMING accounts → runs one warm-up session per WARMING account (if ADB free)
   - Promotes eligible WARMING accounts to ACTIVE
@@ -205,10 +214,10 @@ SMSPOOL_USER=...
 
 ## Open Questions
 
-1. Does Camoufox support headless mode stable enough for unattended creation, or do we need a display (Xvfb)?
-2. What's the SMSPool country code for AU numbers — confirm availability before wiring
-3. Should FLAGGED accounts auto-retry after 48h (sometimes false-positive rate limits) or go straight to RETIRED?
-4. Can we run two ADB warm-up sessions for different accounts on the same device sequentially, or does Instagram's mobile client fingerprint the device itself?
+1. ~~Does Camoufox support headless mode?~~ — Resolved: headless unstable for Instagram signup; use `--headed` on Windows desktop instead
+2. ~~SMSPool AU country code~~ — Resolved: service ID 457, AU works
+3. Should FLAGGED accounts auto-retry after 48h or go straight to RETIRED?
+4. Can we run ADB warm-up sessions for different accounts sequentially on the same device, or does Instagram fingerprint the device itself?
 
 ---
 
@@ -219,4 +228,7 @@ SMSPOOL_USER=...
 | 2026-04-19 | Architecture design, task document created |
 | 2026-04-19 | Phase 1 complete: `instagram_account_manager.py`, `ig_pool_admin.py` |
 | 2026-04-19 | Phase 2 complete: `instagram_creator.py` with Camoufox signup + VPN switching + OTP + cookie export |
-| 2026-04-19 | Orchestrator wiring intentionally deferred — must populate pool first, then wire as last step |
+| 2026-04-19 | Orchestrator wiring complete (Phase 1.3): pool cookie rotation, auth-failure flagging, retry logic |
+| 2026-04-19 | `--sync-cookies` added to `ig_pool_admin.py` — fixes Windows paths + promotes in one command |
+| 2026-04-19 | Social account dossiers: `entities/social-accounts/instagram/<handle>` in wiki; INTSUM pages link to creator dossier; `osia:ig:intel_sources` Redis set populated with 395 handles via text-mine backfill |
+| 2026-04-19 | Pool state: 15 ACTIVE, 2 WARMING (missing cookies), 0 FLAGGED |
