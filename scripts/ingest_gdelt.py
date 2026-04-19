@@ -720,7 +720,9 @@ def build_document(row: dict) -> tuple[str, int | None]:
         nm, na = int(num_mentions), int(num_articles)
         lines.append(f"Media Coverage: {nm} mentions across {na} articles")
     except (ValueError, TypeError):
-        logger.debug("Skipping media coverage — non-numeric values: mentions=%r articles=%r", num_mentions, num_articles)
+        logger.debug(
+            "Skipping media coverage — non-numeric values: mentions=%r articles=%r", num_mentions, num_articles
+        )
 
     try:
         tone_val = float(avg_tone)
