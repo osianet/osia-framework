@@ -44,8 +44,8 @@ def _load_desk_wiki_paths() -> dict[str, str]:
             section = cfg.get("aesthetic", {}).get("wiki_section", "")
             if slug and section:
                 mapping[slug] = section.strip("/")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Skipping %s: %s", yaml_path.name, exc)
     _desk_wiki_cache = mapping
     return mapping
 

@@ -32,9 +32,10 @@ WIKI_URL = "http://localhost:3000/graphql"
 
 def _load_api_key():
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-    for line in open(env_path):
-        if line.startswith("WIKIJS_API_KEY="):
-            return line.split("=", 1)[1].strip()
+    with open(env_path) as f:
+        for line in f:
+            if line.startswith("WIKIJS_API_KEY="):
+                return line.split("=", 1)[1].strip()
     raise RuntimeError("WIKIJS_API_KEY not found in .env")
 
 

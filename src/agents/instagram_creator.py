@@ -370,9 +370,7 @@ class InstagramCreator:
                 missing.append("sitekey not extractable (check logs/ig_debug)")
             if not api_key:
                 missing.append("TWOCAPTCHA_API_KEY not set in .env")
-            raise RuntimeError(
-                f"reCAPTCHA dialog could not be auto-passed: {'; '.join(missing)}"
-            )
+            raise RuntimeError(f"reCAPTCHA dialog could not be auto-passed: {'; '.join(missing)}")
 
         logger.info("Solving reCAPTCHA Enterprise via 2captcha (sitekey=%s)...", sitekey[:20])
         from twocaptcha import TwoCaptcha  # noqa: PLC0415
@@ -529,9 +527,7 @@ async def _wait_for_any_label(page, labels: list[str], timeout: int = 10_000) ->
         for label in labels:
             found = False
             try:
-                await page.get_by_label(label, exact=False).first.wait_for(
-                    state="visible", timeout=timeout
-                )
+                await page.get_by_label(label, exact=False).first.wait_for(state="visible", timeout=timeout)
                 found = True
             except Exception:
                 pass
@@ -699,12 +695,7 @@ async def _click_recaptcha_checkbox(page) -> bool:
                 pass
     # Fallback: try Playwright's frame_locator nesting
     try:
-        checkbox = (
-            page.frame_locator("#captcha-recaptcha")
-            .frame_locator("iframe")
-            .locator("#recaptcha-anchor")
-            .first
-        )
+        checkbox = page.frame_locator("#captcha-recaptcha").frame_locator("iframe").locator("#recaptcha-anchor").first
         if await checkbox.is_visible(timeout=3_000):
             await checkbox.click()
             logger.info("Clicked reCAPTCHA checkbox via frame_locator nesting")
@@ -719,9 +710,7 @@ async def _extract_sitekey(page) -> str | None:
     """Try every known location for the reCAPTCHA sitekey."""
     # Main page DOM
     try:
-        sk = await page.evaluate(
-            "() => document.querySelector('[data-sitekey]')?.dataset.sitekey ?? null"
-        )
+        sk = await page.evaluate("() => document.querySelector('[data-sitekey]')?.dataset.sitekey ?? null")
         if sk:
             return sk
     except Exception:
@@ -729,9 +718,7 @@ async def _extract_sitekey(page) -> str | None:
     # All frames
     for frame in page.frames:
         try:
-            sk = await frame.evaluate(
-                "() => document.querySelector('[data-sitekey]')?.dataset.sitekey ?? null"
-            )
+            sk = await frame.evaluate("() => document.querySelector('[data-sitekey]')?.dataset.sitekey ?? null")
             if sk:
                 logger.info("Sitekey found in frame %s", (frame.url or "")[:60])
                 return sk
