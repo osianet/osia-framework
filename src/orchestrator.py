@@ -36,10 +36,12 @@ from src.intelligence.wiki_client import (
     WikiClient,
     build_entity_page,
     build_intsum_page,
+    build_social_account_page,
     desk_wiki_section,
     entity_wiki_path,
     intsum_wiki_path,
     sitrep_wiki_path,
+    social_account_wiki_path,
 )
 
 logger = logging.getLogger("osia.orchestrator")
@@ -2695,6 +2697,9 @@ class OsiaOrchestrator:
         source_tracker: SourceTracker | None = None
         url: str | None = None
         _article_fetched = False
+        ig_source_handle: str | None = None
+        ig_display_name: str | None = None
+        ig_channel_url: str | None = None
 
         logger.info("Received new task from %s: %s", source, query)
 
@@ -2841,6 +2846,15 @@ class OsiaOrchestrator:
                     if isinstance(raw_meta, BaseException):
                         logger.warning("Social metadata fetch failed: %s", raw_meta)
                         raw_meta = None
+
+                    # Extract source account for dossier + warmup follow list
+                    ig_source_handle: str | None = None
+                    ig_display_name: str | None = None
+                    ig_channel_url: str | None = None
+                    if raw_meta and "instagram.com" in url.lower():
+                        ig_source_handle = raw_meta.get("uploader_id") or raw_meta.get("channel_id")
+                        ig_display_name = raw_meta.get("uploader") or raw_meta.get("channel")
+                        ig_channel_url = raw_meta.get("channel_url") or raw_meta.get("uploader_url")
 
                     adb_analysis = None
                     screen_counts: dict = {}
@@ -3106,21 +3120,20 @@ class OsiaOrchestrator:
                 try:
                     desk_cfg = self.desk_registry.get(assigned_desk)
                     desk_collection = desk_cfg.qdrant.collection
-                    await self.qdrant.upsert(
-                        desk_collection,
-                        analysis,
-                        metadata={
-                            "desk": assigned_desk,
-                            "topic": (original_query or "")[:200],
-                            "source": source,
-                            "reliability_tier": "A",
-                            "timestamp": now.isoformat(),
-                            "entity_tags": entity_names,
-                            "triggered_by": triggered_by,
-                            "model_used": model_id_used,
-                            "wiki_path": wiki_path,
-                        },
-                    )
+                    _meta: dict = {
+                        "desk": assigned_desk,
+                        "topic": (original_query or "")[:200],
+                        "source": source,
+                        "reliability_tier": "A",
+                        "timestamp": now.isoformat(),
+                        "entity_tags": entity_names,
+                        "triggered_by": triggered_by,
+                        "model_used": model_id_used,
+                        "wiki_path": wiki_path,
+                    }
+                    if ig_source_handle:
+                        _meta["source_account"] = ig_source_handle
+                    await self.qdrant.upsert(desk_collection, analysis, metadata=_meta)
                     logger.debug("Stored analysis in Qdrant collection '%s'", desk_collection)
                 except Exception as e:
                     logger.warning("Failed to store analysis in Qdrant for desk '%s': %s", assigned_desk, e)
@@ -3199,6 +3212,38 @@ class OsiaOrchestrator:
                                             tags=["entity", _ENTITY_FOLDER_TAG.get(entity.entity_type, "organisation")],
                                         )
                                     await asyncio.sleep(0.3)
+
+                                # Social account dossier for the content creator
+                                if ig_source_handle:
+                                    try:
+                                        await self.redis.sadd("osia:ig:intel_sources", ig_source_handle)
+                                    except Exception as _re:
+                                        logger.debug("Redis intel_sources stamp failed: %s", _re)
+                                    _sapath = social_account_wiki_path("instagram", ig_source_handle)
+                                    _log_entry = f"- {_date_str} — [{_title}](/{wiki_path})"
+                                    _sa_existing = await wiki.get_page(_sapath)
+                                    if _sa_existing:
+                                        await wiki.append_to_section(_sapath, "intel-log", _log_entry)
+                                        logger.debug("Updated social account dossier: %s", _sapath)
+                                    else:
+                                        _sacontent = build_social_account_page(
+                                            handle=ig_source_handle,
+                                            platform="instagram",
+                                            display_name=ig_display_name or ig_source_handle,
+                                            channel_url=ig_channel_url
+                                            or f"https://www.instagram.com/{ig_source_handle}",
+                                            first_seen=_date_str,
+                                            intsum_path=wiki_path,
+                                            intsum_title=_title,
+                                        )
+                                        await wiki.create_page(
+                                            _sapath,
+                                            f"@{ig_source_handle}",
+                                            _sacontent,
+                                            description=f"Instagram — @{ig_source_handle} — first intel {_date_str}",
+                                            tags=["social-account", "instagram", "intel-source"],
+                                        )
+                                        logger.info("Created social account dossier: @%s", ig_source_handle)
                         except Exception as e:
                             logger.warning("Wiki entity upserts failed (non-fatal): %s", e)
 
