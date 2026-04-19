@@ -41,6 +41,8 @@ dependencies = [
     "sentence-transformers>=3.0.0",
     "trafilatura==2.0.0",
     "curl-cffi==0.15.0",
+    "camoufox[geoip]==0.4.11",
+    "2captcha-python==2.0.6",
 ]
 
 [project.optional-dependencies]

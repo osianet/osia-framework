@@ -28,6 +28,10 @@ storage/
 *.txt.cookies
 *cookies*.txt
 *.cookies
+config/ig_cookies/
+
+# Instagram debug dumps (contain screenshots and HTML with sensitive data)
+logs/ig_debug/
 
 # Temp files
 tmp/

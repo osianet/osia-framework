@@ -96,8 +96,8 @@ def _desk_display_name(slug: str) -> str:
             name = cfg.get("name", slug.replace("-", " ").title())
             _DESK_NAMES[slug] = name
             return name
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Could not load desk name for %s: %s", slug, exc)
     return slug.replace("-", " ").title()
 
 
