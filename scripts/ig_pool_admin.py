@@ -13,6 +13,7 @@ Usage:
     uv run python scripts/ig_pool_admin.py --export-cookies <id>
     uv run python scripts/ig_pool_admin.py --create --username foo --password bar \\
         --email foo@bar.com --phone +61400000000 [--phone-country AU] [--vpn-country AU]
+    uv run python scripts/ig_pool_admin.py --sync-cookies
 """
 
 import argparse
@@ -38,6 +39,28 @@ def _ts(unix: int | None) -> str:
     if not unix:
         return ""
     return datetime.fromtimestamp(unix, UTC).strftime("%Y-%m-%d %H:%M")
+
+
+async def cmd_sync_cookies(mgr: InstagramAccountManager) -> None:
+    """Fix stored cookie paths and promote any account whose file now exists."""
+    cookie_dir = Path(__file__).resolve().parent.parent / "config" / "ig_cookies"
+    accounts = await mgr.list_all()
+    fixed = promoted = skipped = 0
+    for acc in accounts:
+        if acc.state in ("ACTIVE", "RETIRED"):
+            continue
+        expected = cookie_dir / f"{acc.id}.txt"
+        if acc.cookies_path != str(expected):
+            acc.cookies_path = str(expected)
+            await mgr._save(acc)
+            fixed += 1
+        if expected.exists() and acc.state in ("WARMING", "CREATED"):
+            await mgr.promote(acc.id)
+            print(f"Promoted {acc.username} ({acc.id[:8]}…) → ACTIVE")
+            promoted += 1
+        elif not expected.exists():
+            skipped += 1
+    print(f"\nDone. paths_fixed={fixed} promoted={promoted} no_cookie_yet={skipped}")
 
 
 async def cmd_list(mgr: InstagramAccountManager) -> None:
@@ -74,6 +97,12 @@ async def main() -> None:
     group.add_argument("--export-cookies", metavar="ID", dest="export_cookies")
     group.add_argument("--create", action="store_true", help="Register a new account manually")
     group.add_argument(
+        "--sync-cookies",
+        action="store_true",
+        dest="sync_cookies",
+        help="Fix paths + promote accounts whose cookie file exists",
+    )
+    group.add_argument(
         "--create-account",
         metavar="COUNTRY",
         dest="create_account",
@@ -101,7 +130,10 @@ async def main() -> None:
     mgr = InstagramAccountManager(r)
 
     try:
-        if args.list:
+        if args.sync_cookies:
+            await cmd_sync_cookies(mgr)
+
+        elif args.list:
             await cmd_list(mgr)
 
         elif args.promote:
