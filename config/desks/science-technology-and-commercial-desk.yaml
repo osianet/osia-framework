@@ -41,6 +41,16 @@ mcp_servers:
 
 entity_research_target: true
 
+aesthetic:
+  logo: assets/logos/v3_owl_circuit_1024_transparent.png   # Owl/circuit — wisdom, precision, technology
+  badge: assets/aesthetic/badge_science-technology-and-commercial-desk_transparent.png
+  accent_color: "#40c0ff"       # Blue-cyan — innovation, science, digital frontier
+  accent_secondary: "#0a1828"
+  bg_style: bg_data_overlay     # Data/technical overlay
+  wiki_icon: mdi-flask
+  wiki_section: /desks/science-technology-and-commercial
+  css_class: desk-scitech
+
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: TxGEqnHWrfWFTfGW9XjX  # Josh — enthusiastic male

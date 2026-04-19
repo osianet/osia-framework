@@ -45,6 +45,16 @@ mcp_servers:
 
 entity_research_target: true
 
+aesthetic:
+  logo: assets/logos/v1_eye_network_1024_transparent.png   # All-seeing eye/network — watching people, mapping power
+  badge: assets/aesthetic/badge_human-intelligence-and-profiling-desk_transparent.png
+  accent_color: "#cc3333"       # Red — covert, human, danger, exposure
+  accent_secondary: "#3a0000"
+  bg_style: bg_hero             # Dramatic, human-focused — dossier aesthetic
+  wiki_icon: mdi-account-search
+  wiki_section: /desks/human-intelligence-and-profiling
+  css_class: desk-humint
+
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: rk9BD4xwuG39syvDIBQy

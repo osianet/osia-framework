@@ -597,7 +597,7 @@ def _narrative_sentence(
         else:
             sentence += f" This event received limited media coverage ({nm} mentions)."
     except (ValueError, TypeError):
-        pass
+        logger.debug("Skipping mention count — non-numeric value: %r", num_mentions)
 
     # Tone descriptor
     try:
@@ -611,7 +611,7 @@ def _narrative_sentence(
         else:
             sentence += " Media coverage had a neutral or positive tone."
     except (ValueError, TypeError):
-        pass
+        logger.debug("Skipping tone descriptor — non-numeric value: %r", avg_tone)
 
     # Goldstein stability context
     try:
@@ -625,7 +625,7 @@ def _narrative_sentence(
         elif gs >= 3:
             sentence += " This event has a stabilising effect."
     except (ValueError, TypeError):
-        pass
+        logger.debug("Skipping Goldstein descriptor — non-numeric value: %r", goldstein)
 
     return sentence
 
@@ -720,7 +720,9 @@ def build_document(row: dict) -> tuple[str, int | None]:
         nm, na = int(num_mentions), int(num_articles)
         lines.append(f"Media Coverage: {nm} mentions across {na} articles")
     except (ValueError, TypeError):
-        pass
+        logger.debug(
+            "Skipping media coverage — non-numeric values: mentions=%r articles=%r", num_mentions, num_articles
+        )
 
     try:
         tone_val = float(avg_tone)
@@ -734,7 +736,7 @@ def build_document(row: dict) -> tuple[str, int | None]:
             tone_desc = "positive"
         lines.append(f"Average Tone: {tone_val:.2f} ({tone_desc})")
     except (ValueError, TypeError):
-        pass
+        logger.debug("Skipping average tone — non-numeric value: %r", avg_tone)
 
     try:
         gs = float(goldstein)
@@ -752,7 +754,7 @@ def build_document(row: dict) -> tuple[str, int | None]:
             gs_desc = "highly stabilising"
         lines.append(f"Goldstein Scale: {gs:.1f} ({gs_desc})")
     except (ValueError, TypeError):
-        pass
+        logger.debug("Skipping Goldstein scale — non-numeric value: %r", goldstein)
 
     if source_url:
         lines.append(f"Source: {source_url}")

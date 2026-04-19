@@ -1,0 +1,220 @@
+/* ── OSIA Intelligence Wiki — Custom Theme ─────────────────────────── */
+/* Colour palette mirrors intsum_report.html.j2                          */
+
+:root {
+  --osia-bg:          #0A0C0B;
+  --osia-bg-alt:      #0e140e;
+  --osia-bg-card:     #0c150c;
+  --osia-bg-sidebar:  #080a08;
+  --osia-green:       #00dd55;
+  --osia-green-dim:   #00aa44;
+  --osia-green-muted: #2a5a2a;
+  --osia-cyan:        #20c0e0;
+  --osia-red:         #8B1A1A;
+  --osia-red-bg:      #5A0C0C;
+  --osia-text:        #D4CFC4;
+  --osia-text-muted:  #8A9688;
+  --osia-text-dim:    #4A5248;
+  --osia-border:      #1e4a1e;
+  --osia-border-dim:  #162016;
+}
+
+/* ── Base & body ── */
+body, .application, #app {
+  background-color: var(--osia-bg) !important;
+  color: var(--osia-text) !important;
+  font-family: 'Ubuntu Sans', 'Ubuntu', sans-serif !important;
+}
+
+/* ── Navigation sidebar ── */
+.v-navigation-drawer,
+.navigation-drawer,
+nav.v-navigation-drawer {
+  background-color: var(--osia-bg-sidebar) !important;
+  border-right: 1px solid var(--osia-border-dim) !important;
+}
+
+.v-navigation-drawer .v-list,
+.v-navigation-drawer .v-list-item,
+.nav-item {
+  background-color: transparent !important;
+  color: var(--osia-text-muted) !important;
+}
+
+.v-navigation-drawer .v-list-item--active,
+.v-navigation-drawer .v-list-item:hover,
+.nav-item.active, .nav-item:hover {
+  background-color: var(--osia-bg-alt) !important;
+  color: var(--osia-green) !important;
+  border-left: 2px solid var(--osia-green) !important;
+}
+
+/* ── Top navbar/toolbar ── */
+.v-toolbar, .v-app-bar,
+header.v-app-bar {
+  background-color: var(--osia-bg-sidebar) !important;
+  border-bottom: 1px solid var(--osia-border) !important;
+}
+
+.v-toolbar__title, .v-app-bar__title {
+  color: var(--osia-green) !important;
+  font-family: 'Ubuntu Mono', 'Courier New', monospace !important;
+  font-weight: bold !important;
+  letter-spacing: 0.05em !important;
+}
+
+/* ── Page content area ── */
+.v-main, .v-content, main {
+  background-color: var(--osia-bg) !important;
+}
+
+.page-header-area {
+  background: linear-gradient(180deg, #0e140e 0%, var(--osia-bg) 100%) !important;
+  border-bottom: 1px solid var(--osia-border) !important;
+}
+
+/* ── Article typography ── */
+.contents-page article,
+.wiki-content,
+.page-contents {
+  color: var(--osia-text) !important;
+}
+
+.contents-page article h1,
+.contents-page article h2,
+.contents-page article h3,
+.contents-page article h4 {
+  color: var(--osia-green) !important;
+  font-family: 'Ubuntu Mono', 'Courier New', monospace !important;
+  font-weight: bold !important;
+  border-bottom: 1px solid var(--osia-border) !important;
+  padding-bottom: 4px !important;
+}
+
+.contents-page article h1 { font-size: 1.6em !important; }
+.contents-page article h2 { font-size: 1.3em !important; color: var(--osia-green-dim) !important; }
+.contents-page article h3 { font-size: 1.1em !important; color: var(--osia-text) !important; border-bottom-color: var(--osia-border-dim) !important; }
+
+.contents-page article a {
+  color: var(--osia-green-dim) !important;
+  text-decoration: none !important;
+  border-bottom: 1px solid var(--osia-green-muted) !important;
+}
+.contents-page article a:hover {
+  color: var(--osia-green) !important;
+  border-bottom-color: var(--osia-green) !important;
+}
+
+/* ── Code blocks ── */
+.contents-page article pre,
+.contents-page article code,
+pre, code {
+  background-color: var(--osia-bg-alt) !important;
+  color: var(--osia-green) !important;
+  font-family: 'Ubuntu Mono', 'Courier New', monospace !important;
+  border: 1px solid var(--osia-border-dim) !important;
+  border-radius: 2px !important;
+}
+
+/* ── Tables ── */
+.contents-page article table {
+  border-collapse: collapse !important;
+  width: 100% !important;
+}
+.contents-page article th {
+  background-color: var(--osia-bg-alt) !important;
+  color: var(--osia-green) !important;
+  font-family: 'Ubuntu Mono', monospace !important;
+  border: 1px solid var(--osia-border) !important;
+  padding: 6px 12px !important;
+  font-size: 0.85em !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+}
+.contents-page article td {
+  border: 1px solid var(--osia-border-dim) !important;
+  padding: 5px 12px !important;
+  color: var(--osia-text) !important;
+}
+.contents-page article tr:nth-child(even) td {
+  background-color: var(--osia-bg-card) !important;
+}
+
+/* ── Blockquotes (use for CLASSIFICATION markers) ── */
+.contents-page article blockquote {
+  border-left: 3px solid var(--osia-red) !important;
+  background-color: var(--osia-red-bg) !important;
+  color: var(--osia-text) !important;
+  padding: 8px 16px !important;
+  margin: 12px 0 !important;
+  font-family: 'Ubuntu Mono', monospace !important;
+  font-size: 0.9em !important;
+}
+
+/* ── Cards / panels ── */
+.v-card, .v-sheet {
+  background-color: var(--osia-bg-card) !important;
+  border: 1px solid var(--osia-border-dim) !important;
+  color: var(--osia-text) !important;
+}
+
+/* ── Buttons ── */
+.v-btn.primary, .v-btn--active,
+.v-btn.v-btn--has-bg {
+  background-color: var(--osia-green-muted) !important;
+  color: var(--osia-bg) !important;
+  font-family: 'Ubuntu Mono', monospace !important;
+  letter-spacing: 0.05em !important;
+}
+.v-btn:hover {
+  background-color: var(--osia-green) !important;
+}
+
+/* ── Search bar ── */
+.v-text-field input,
+.v-text-field .v-input__slot {
+  background-color: var(--osia-bg-alt) !important;
+  color: var(--osia-text) !important;
+  border-color: var(--osia-border) !important;
+}
+
+/* ── TOC (table of contents) ── */
+.toc-container, .page-toc {
+  background-color: var(--osia-bg-sidebar) !important;
+  border: 1px solid var(--osia-border-dim) !important;
+}
+.toc-container a, .page-toc a {
+  color: var(--osia-text-muted) !important;
+}
+.toc-container a:hover, .page-toc a:hover,
+.toc-container a.active, .page-toc a.active {
+  color: var(--osia-green) !important;
+}
+
+/* ── Tags ── */
+.tag-chip, .v-chip {
+  background-color: var(--osia-bg-alt) !important;
+  border: 1px solid var(--osia-green-muted) !important;
+  color: var(--osia-green-dim) !important;
+  font-family: 'Ubuntu Mono', monospace !important;
+  font-size: 0.78em !important;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--osia-bg-sidebar); }
+::-webkit-scrollbar-thumb { background: var(--osia-green-muted); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--osia-green-dim); }
+
+/* ── Classification header bar (top of every page via custom footer/header) ── */
+.osia-classification-bar {
+  background-color: var(--osia-red-bg);
+  color: #fff;
+  font-family: 'Ubuntu Mono', monospace;
+  font-size: 0.75em;
+  font-weight: bold;
+  text-align: center;
+  padding: 2px 0;
+  letter-spacing: 0.15em;
+  border-bottom: 1px solid var(--osia-red);
+}

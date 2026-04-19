@@ -26,14 +26,37 @@ from src.gateways.mcp_dispatcher import MCPDispatcher
 from src.intelligence.entity_extractor import EntityExtractor
 from src.intelligence.infographic_renderer import generate_infographic
 from src.intelligence.qdrant_store import QdrantStore
-from src.intelligence.report_generator import generate_intsum_pdf
 from src.intelligence.source_tracker import (
     SourceTracker,
     audit_report,
     build_citation_protocol,
 )
+from src.intelligence.wiki_client import (
+    WikiClient,
+    build_entity_page,
+    build_intsum_page,
+    desk_wiki_section,
+    entity_wiki_path,
+    intsum_wiki_path,
+    sitrep_wiki_path,
+)
 
 logger = logging.getLogger("osia.orchestrator")
+
+_ENTITY_FOLDER_TAG: dict[str, str] = {
+    "Person": "person",
+    "Organisation": "organisation",
+    "Location": "location",
+    "Network": "network",
+    "Event": "organisation",
+    "Technology": "organisation",
+}
+
+
+def _slugify_tag(text: str) -> str:
+    import re as _re
+
+    return _re.sub(r"[^a-z0-9-]", "", _re.sub(r"\s+", "-", text.lower().strip()))[:30]
 
 
 def _extract_mcp_text(result) -> str:
@@ -3012,6 +3035,17 @@ class OsiaOrchestrator:
 
             # 7. Post-analysis side effects — all independent, run concurrently.
 
+            # Pre-compute wiki path so both Qdrant and wiki coroutines share the same value.
+            now = datetime.now(UTC)
+            _is_sitrep = (original_query or "").startswith("Generate a Daily SITREP")
+            wiki_path = (
+                sitrep_wiki_path(now)
+                if _is_sitrep
+                else intsum_wiki_path(assigned_desk, now, original_query or assigned_desk)
+            )
+            _ref_suffix = assigned_desk[:8].upper().replace("-", "")
+            _ref_number = f"OSIA-{now.strftime('%Y%m%d')}-{_ref_suffix}-{now.strftime('%H%M')}"
+
             async def _qdrant_upsert_coro():
                 try:
                     desk_cfg = self.desk_registry.get(assigned_desk)
@@ -3024,23 +3058,113 @@ class OsiaOrchestrator:
                             "topic": (original_query or "")[:200],
                             "source": source,
                             "reliability_tier": "A",
-                            "timestamp": datetime.now(UTC).isoformat(),
+                            "timestamp": now.isoformat(),
                             "entity_tags": entity_names,
                             "triggered_by": triggered_by,
                             "model_used": model_id_used,
+                            "wiki_path": wiki_path,
                         },
                     )
                     logger.debug("Stored analysis in Qdrant collection '%s'", desk_collection)
                 except Exception as e:
                     logger.warning("Failed to store analysis in Qdrant for desk '%s': %s", assigned_desk, e)
 
+            async def _wiki_publish_coro() -> str:
+                """Publish the INTSUM page and return its public URL (empty string on failure).
+
+                Entity page upserts are dispatched as a background task so they don't
+                delay the Signal reply — the INTSUM URL is what matters for the message.
+                """
+                if not os.getenv("WIKIJS_API_KEY"):
+                    return ""
+                try:
+                    desk_cfg = self.desk_registry.get(assigned_desk)
+                    _desk_name = desk_cfg.name if hasattr(desk_cfg, "name") else assigned_desk
+                    _desk_section = desk_wiki_section(assigned_desk)
+                    _entity_links = [(e.name, entity_wiki_path(e.entity_type, e.name)) for e in entities]
+                    _date_str = now.strftime("%Y-%m-%d")
+
+                    if _is_sitrep:
+                        _title = f"Daily SITREP — {_date_str}"
+                        _tags = ["sitrep", "intsum", "watch-floor"]
+                        _desc = f"OSIA Daily SITREP for {_date_str}"
+                    else:
+                        _short_topic = (original_query or assigned_desk)[:80]
+                        _title = f"{_ref_number} — {_short_topic}"
+                        _desk_tag = (
+                            f"desk-{desk_cfg.code.lower()}"
+                            if hasattr(desk_cfg, "code")
+                            else f"desk-{assigned_desk[:8]}"
+                        )
+                        _tags = ["intsum", _desk_tag, *[_slugify_tag(n) for n in entity_names[:5]]]
+                        _desc = f"{_desk_name} intelligence summary — {_date_str}"
+
+                    _content = build_intsum_page(
+                        analysis=analysis,
+                        desk_name=_desk_name,
+                        desk_section=_desk_section,
+                        ref_number=_ref_number,
+                        timestamp=now.strftime("%Y-%m-%dT%H:%M:%S UTC"),
+                        source=source,
+                        entity_links=_entity_links,
+                    )
+
+                    async with WikiClient() as wiki:
+                        ok = await wiki.upsert_page(wiki_path, _title, _content, _desc, _tags)
+                        if not ok:
+                            logger.warning("Wiki INTSUM publish failed for '%s'", wiki_path)
+                            return ""
+                        logger.info("Wiki INTSUM published: %s", wiki_path)
+
+                    # Entity upserts run in the background — don't hold up Signal delivery.
+                    async def _upsert_entities():
+                        try:
+                            async with WikiClient() as wiki:
+                                for entity in entities:
+                                    _epath = entity_wiki_path(entity.entity_type, entity.name)
+                                    _log_entry = f"- {_date_str} — [{_title}](/{wiki_path})"
+                                    _existing = await wiki.get_page(_epath)
+                                    if _existing:
+                                        await wiki.append_to_section(_epath, "intel-log", _log_entry)
+                                    else:
+                                        _econtent = build_entity_page(
+                                            entity_type=entity.entity_type,
+                                            desk_name=_desk_name,
+                                            desk_section=_desk_section,
+                                            first_seen=_date_str,
+                                            intsum_path=wiki_path,
+                                            intsum_title=_title,
+                                        )
+                                        await wiki.create_page(
+                                            _epath,
+                                            entity.name,
+                                            _econtent,
+                                            description=f"{entity.entity_type} — first seen {_date_str}",
+                                            tags=["entity", _ENTITY_FOLDER_TAG.get(entity.entity_type, "organisation")],
+                                        )
+                                    await asyncio.sleep(0.3)
+                        except Exception as e:
+                            logger.warning("Wiki entity upserts failed (non-fatal): %s", e)
+
+                    asyncio.create_task(_upsert_entities())
+                    return f"https://wiki.osia.dev/{wiki_path}"
+
+                except Exception as wiki_err:
+                    logger.warning("Wiki publish failed (non-fatal): %s", wiki_err)
+                    return ""
+
+            # Publish to wiki first so the URL is available for the Signal message.
+            wiki_url = await _wiki_publish_coro()
+
             async def _signal_deliver_coro():
                 if not source.startswith("signal:"):
                     return
                 recipient = source[len("signal:") :]
                 try:
-                    # Send INTSUM text and generate infographic concurrently.
-                    # Text arrives first in practice (much faster than generation).
+                    signal_text = analysis
+                    if wiki_url:
+                        signal_text += f"\n\n📖 {wiki_url}"
+
                     async def _gen_infographic():
                         try:
                             return await generate_infographic(self.client, self.model_id, analysis, assigned_desk)
@@ -3049,24 +3173,13 @@ class OsiaOrchestrator:
                             return None
 
                     _, infographic_b64 = await asyncio.gather(
-                        self.send_signal_message(recipient, analysis),
+                        self.send_signal_message(recipient, signal_text),
                         _gen_infographic(),
                     )
                     if infographic_b64:
                         await self.send_signal_image(recipient, infographic_b64, caption="📊 OSIA Intelligence Brief")
                 except Exception as sig_err:
                     logger.warning("Signal delivery failed (non-fatal): %s", sig_err)
-
-            async def _pdf_archive_coro():
-                if os.getenv("OSIA_DEBUG_PDF", "false").lower() == "true":
-                    logger.info("Attempting PDF archival for desk %s, source %s", assigned_desk, source)
-                try:
-                    await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda: generate_intsum_pdf(analysis, assigned_desk, source),
-                    )
-                except Exception as pdf_err:
-                    logger.warning("PDF archival failed (non-fatal): %s", pdf_err)
 
             async def _instagram_share_coro():
                 _is_instagram = url and urlparse(url).hostname in ("instagram.com", "www.instagram.com")
@@ -3087,7 +3200,6 @@ class OsiaOrchestrator:
             await asyncio.gather(
                 _qdrant_upsert_coro(),
                 _signal_deliver_coro(),
-                _pdf_archive_coro(),
                 _instagram_share_coro(),
             )
 

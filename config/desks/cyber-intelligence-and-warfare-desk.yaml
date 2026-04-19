@@ -52,6 +52,16 @@ mcp_servers:
 
 entity_research_target: true
 
+aesthetic:
+  logo: assets/logos/v3_owl_circuit_1024_transparent.png   # Owl/circuit — precision, night-vision, digital warfare
+  badge: assets/aesthetic/badge_cyber-intelligence-and-warfare-desk_transparent.png
+  accent_color: "#20c0e0"       # Cyan — digital, network, technical
+  accent_secondary: "#0a3040"
+  bg_style: bg_data_overlay     # Data stream / binary overlay texture
+  wiki_icon: mdi-shield-bug
+  wiki_section: /desks/cyber-intelligence-and-warfare
+  css_class: desk-cyber
+
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: qjx83Y0UcERgVPICvVpl

@@ -47,6 +47,8 @@ from datetime import UTC, datetime
 import httpx
 from dotenv import load_dotenv
 
+from src.intelligence.wiki_client import WikiClient, desk_wiki_section, entity_wiki_path
+
 load_dotenv()
 
 logging.basicConfig(
@@ -1508,6 +1510,43 @@ def _chunk_text(text: str) -> list[str]:
     return [" ".join(words[i : i + CHUNK_SIZE]) for i in range(0, len(words), step) if words[i : i + CHUNK_SIZE]]
 
 
+async def _wiki_append_research_note(job: ResearchJob, text: str, http: httpx.AsyncClient) -> None:
+    """Append a research summary note to the entity wiki page for job.topic.
+
+    Searches for an entity page whose path matches the topic slug, then appends
+    to its research-notes section. Non-fatal — logs and returns on any failure.
+    """
+    if not os.getenv("WIKIJS_API_KEY"):
+        return
+    try:
+        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
+        desk_section = desk_wiki_section(job.desk) if job.desk else "desks"
+        summary = text[:400].replace("\n", " ").strip()
+        if len(text) > 400:
+            summary += "…"
+        note = (
+            f"- **{date_str}** — [{job.desk or 'research-worker'}](/{desk_section}) research on **{job.topic}**\n\n"
+            f"  > {summary}"
+        )
+        async with WikiClient(http) as wiki:
+            # Search wiki for an entity page matching the topic
+            results = await wiki.search_pages(job.topic[:50])
+            entity_page = next(
+                (r for r in results if r.get("path", "").startswith("entities/")),
+                None,
+            )
+            if entity_page:
+                ok = await wiki.append_to_section(entity_page["path"], "research-notes", note)
+                if ok:
+                    logger.info("Wiki: appended research note to '%s'", entity_page["path"])
+            else:
+                # Try the deterministic path directly (org type as best guess)
+                guess_path = entity_wiki_path("Organisation", job.topic)
+                await wiki.append_to_section(guess_path, "research-notes", note)
+    except Exception as e:
+        logger.warning("Wiki research note update failed (non-fatal): %s", e)
+
+
 async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, qdrant: QdrantClient):
     chunks = _chunk_text(text)
     if not chunks:
@@ -1626,6 +1665,7 @@ async def main():
                 failed += 1
                 continue
 
+            await _wiki_append_research_note(job, text, http)
             queue.mark_seen(topic_key, topic=job.topic)
             succeeded += 1
             await asyncio.sleep(2)  # brief pause between jobs to stay within Venice rate limits

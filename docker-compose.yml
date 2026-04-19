@@ -51,6 +51,91 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
+  wikijs-db:
+    image: postgres:15-alpine
+    container_name: osia-wikijs-db
+    environment:
+      - POSTGRES_DB=wikijs
+      - POSTGRES_USER=wikijs
+      - POSTGRES_PASSWORD=${WIKIJS_DB_PASSWORD}
+    volumes:
+      - /home/ubuntu/osia-wikijs/db:/var/lib/postgresql/data
+    restart: always
+
+  wikijs:
+    image: ghcr.io/requarks/wiki:2
+    container_name: osia-wikijs
+    depends_on:
+      - wikijs-db
+    environment:
+      - DB_TYPE=postgres
+      - DB_HOST=wikijs-db
+      - DB_PORT=5432
+      - DB_USER=wikijs
+      - DB_PASS=${WIKIJS_DB_PASSWORD}
+      - DB_NAME=wikijs
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - /home/ubuntu/osia-wikijs/data:/wiki/data
+      - /home/ubuntu/osia-wikijs/repo:/wiki/git
+    restart: always
+
+  authentik-db:
+    image: postgres:15-alpine
+    container_name: osia-authentik-db
+    environment:
+      - POSTGRES_DB=authentik
+      - POSTGRES_USER=authentik
+      - POSTGRES_PASSWORD=${AUTHENTIK_DB_PASSWORD}
+    volumes:
+      - /home/ubuntu/osia-authentik/db:/var/lib/postgresql/data
+    restart: always
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2024.12.3
+    container_name: osia-authentik-server
+    command: server
+    environment:
+      - AUTHENTIK_REDIS__HOST=redis
+      - AUTHENTIK_POSTGRESQL__HOST=authentik-db
+      - AUTHENTIK_POSTGRESQL__USER=authentik
+      - AUTHENTIK_POSTGRESQL__PASSWORD=${AUTHENTIK_DB_PASSWORD}
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_ERROR_REPORTING__ENABLED=false
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9443:9443"
+    volumes:
+      - /home/ubuntu/osia-authentik/media:/media
+      - /home/ubuntu/osia-authentik/certs:/certs
+    depends_on:
+      - authentik-db
+      - redis
+    restart: always
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2024.12.3
+    container_name: osia-authentik-worker
+    command: worker
+    environment:
+      - AUTHENTIK_REDIS__HOST=redis
+      - AUTHENTIK_POSTGRESQL__HOST=authentik-db
+      - AUTHENTIK_POSTGRESQL__USER=authentik
+      - AUTHENTIK_POSTGRESQL__PASSWORD=${AUTHENTIK_DB_PASSWORD}
+      - AUTHENTIK_POSTGRESQL__NAME=authentik
+      - AUTHENTIK_SECRET_KEY=${AUTHENTIK_SECRET_KEY}
+      - AUTHENTIK_ERROR_REPORTING__ENABLED=false
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/ubuntu/osia-authentik/media:/media
+      - /home/ubuntu/osia-authentik/certs:/certs
+    depends_on:
+      - authentik-db
+      - redis
+    restart: always
+
   kali-sandbox:
     image: kalilinux/kali-rolling
     container_name: osia-kali

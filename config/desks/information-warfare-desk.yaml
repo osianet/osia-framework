@@ -43,6 +43,16 @@ mcp_servers:
 
 entity_research_target: true
 
+aesthetic:
+  logo: assets/logos/v4_fist_signal_1024_transparent.png   # Fist/signal waves — broadcasting, narrative warfare, resistance
+  badge: assets/aesthetic/badge_information-warfare-desk_transparent.png
+  accent_color: "#cc3333"       # Red — adversarial, manipulation, warning
+  accent_secondary: "#5A0C0C"
+  bg_style: bg_data_overlay     # Signal/media data overlay — information environment
+  wiki_icon: mdi-broadcast
+  wiki_section: /desks/information-warfare
+  css_class: desk-infowar
+
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: onwK4e9ZLuTAKqWW03F9  # Daniel — measured British male

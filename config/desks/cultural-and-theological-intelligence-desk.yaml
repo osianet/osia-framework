@@ -38,6 +38,16 @@ mcp_servers:
 
 entity_research_target: true
 
+aesthetic:
+  logo: assets/logos/v2_compass_mycelium_1024_transparent.png   # Compass/mycelium — cultural networks, non-Western traditions
+  badge: assets/aesthetic/badge_cultural-and-theological-intelligence-desk_transparent.png
+  accent_color: "#C8860A"       # Warm amber — heritage, spirituality, the sacred
+  accent_secondary: "#3a2000"
+  bg_style: bg_archive          # Ancient records, manuscript texture
+  wiki_icon: mdi-book-open-variant
+  wiki_section: /desks/cultural-and-theological-intelligence
+  css_class: desk-cultural
+
 # Weekly briefing voice & persona (ElevenLabs TTS)
 briefing:
   voice_id: EXAVITQu4vr4xnSDxMaL  # Rachel — warm, articulate female
