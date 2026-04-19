@@ -94,7 +94,7 @@ class InstagramCreator:
             order_id = str(order_data.get("order_id") or order_data.get("orderid", ""))
             if not phone or not order_id:
                 raise RuntimeError(f"Unexpected SMSPool response: {order_data}")
-            logger.info("SMSPool: number=%s order=%s", phone, order_id)
+            logger.info("SMSPool: number=+***%s order=%s", phone[-4:], order_id)
 
             # --- Register bare account record (CREATED state) ---
             account = await self._manager.register(
@@ -134,8 +134,8 @@ class InstagramCreator:
                 try:
                     await self._manager.smspool.cancel_order(order_id)
                     logger.info("Cancelled SMSPool order %s", order_id)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Suppressed: %s", exc)
             raise
 
         finally:
@@ -209,8 +209,8 @@ class InstagramCreator:
         # Wait for React to mount — Instagram is a SPA; DOM-ready fires before JS renders.
         try:
             await page.wait_for_load_state("networkidle", timeout=15_000)
-        except Exception:
-            pass  # networkidle can time out on slow pages — proceed anyway
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)  # networkidle can time out on slow pages — proceed anyway
         await _pause(1.5, 3.0)
         logger.info("Page loaded — URL: %s  title: %s", page.url, await page.title())
 
@@ -222,8 +222,8 @@ class InstagramCreator:
             early_shot = debug_dir / f"{account.id}_loaded.png"
             await page.screenshot(path=str(early_shot), full_page=True)
             logger.info("Early screenshot: %s", early_shot)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
 
         await _dismiss_overlays(page)
 
@@ -343,8 +343,8 @@ class InstagramCreator:
         await _click_action_button(page, ["Next", "Continue"])
         try:
             await page.wait_for_load_state("networkidle", timeout=10_000)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
         await _pause(1.5, 2.5)
 
         try:
@@ -403,8 +403,8 @@ class InstagramCreator:
         # Log current page title/URL to help diagnose where we are
         try:
             logger.info("OTP step — URL: %s  title: %s", page.url, await page.title())
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
 
         # Try label-based selectors first (same approach as signup form), then CSS fallbacks
         otp_field = await _by_label(
@@ -459,8 +459,8 @@ class InstagramCreator:
                 _, ep = _parse_peer(conf)
                 if ep == current_ep:
                     return conf.stem
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
         return None
 
     def _resolve_vpn_slug(self, country: str) -> str:
@@ -511,8 +511,8 @@ async def _find(page, selectors: list[str]):
             el = page.locator(sel).first
             if await el.is_visible(timeout=2_000):
                 return el
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
     return None
 
 
@@ -529,12 +529,12 @@ async def _wait_for_any_label(page, labels: list[str], timeout: int = 10_000) ->
             try:
                 await page.get_by_label(label, exact=False).first.wait_for(state="visible", timeout=timeout)
                 found = True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed: %s", exc)
             if found:
                 return
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Suppressed: %s", exc)
 
 
 async def _by_label(page, labels: list[str]):
@@ -544,8 +544,8 @@ async def _by_label(page, labels: list[str]):
             el = page.get_by_label(label, exact=False).first
             if await el.is_visible(timeout=2_000):
                 return el
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
     return None
 
 
@@ -561,8 +561,8 @@ async def _click_action_button(page, names: list[str], timeout: int = 5_000) -> 
             if await el.is_visible(timeout=timeout):
                 await el.click()
                 return True
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
     return False
 
 
@@ -594,8 +594,8 @@ async def _check_for_block(page) -> None:
             raise RuntimeError("Instagram flagged signup as suspicious — manual intervention required")
     except RuntimeError:
         raise
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Suppressed: %s", exc)
 
 
 _MONTH_NAMES = [
@@ -666,8 +666,8 @@ async def _skip_optional_steps(page) -> None:
                     await el.click()
                     await _pause(0.7, 1.5)
                     continue
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed: %s", exc)
             break
         await _pause(0.7, 1.5)
 
@@ -691,8 +691,8 @@ async def _click_recaptcha_checkbox(page) -> bool:
                     await el.click()
                     logger.info("Clicked reCAPTCHA checkbox in frame %s", url[:60])
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed: %s", exc)
     # Fallback: try Playwright's frame_locator nesting
     try:
         checkbox = page.frame_locator("#captcha-recaptcha").frame_locator("iframe").locator("#recaptcha-anchor").first
@@ -700,8 +700,8 @@ async def _click_recaptcha_checkbox(page) -> bool:
             await checkbox.click()
             logger.info("Clicked reCAPTCHA checkbox via frame_locator nesting")
             return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Suppressed: %s", exc)
     logger.info("reCAPTCHA checkbox not found in any frame")
     return False
 
@@ -713,8 +713,8 @@ async def _extract_sitekey(page) -> str | None:
         sk = await page.evaluate("() => document.querySelector('[data-sitekey]')?.dataset.sitekey ?? null")
         if sk:
             return sk
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Suppressed: %s", exc)
     # All frames
     for frame in page.frames:
         try:
@@ -722,8 +722,8 @@ async def _extract_sitekey(page) -> str | None:
             if sk:
                 logger.info("Sitekey found in frame %s", (frame.url or "")[:60])
                 return sk
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
         try:
             # Some reCAPTCHA builds expose it on window.___grecaptcha_cfg
             sk = await frame.evaluate("""
@@ -741,8 +741,8 @@ async def _extract_sitekey(page) -> str | None:
             """)
             if sk:
                 return sk
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
     return None
 
 
@@ -785,8 +785,8 @@ async def _handle_delivery_choice(page) -> None:
             await _click_action_button(page, ["Next", "Send code", "Send"])
             await page.wait_for_load_state("networkidle", timeout=12_000)
             await _pause(1.0, 2.0)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Suppressed: %s", exc)
 
 
 async def _export_cookies_netscape(page, cookie_path: Path) -> None:

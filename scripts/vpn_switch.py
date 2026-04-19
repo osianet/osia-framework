@@ -85,7 +85,7 @@ def current_slug() -> str | None:
             _, ep = parse_peer_block(conf)
             if ep == active_ep:
                 return conf.stem
-    except Exception:
+    except Exception:  # noqa: BLE001 — best-effort slug detection, failure is non-fatal
         pass
     return None
 
@@ -99,7 +99,7 @@ def current_endpoint() -> str | None:
             parts = line.split()
             if len(parts) >= 2:
                 return parts[1]
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError:  # wg0 not up or wg not installed
         pass
     return None
 

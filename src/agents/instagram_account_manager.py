@@ -34,7 +34,6 @@ _ACTIVE_SET = "osia:ig:pool:active"
 _WARMING_SET = "osia:ig:pool:warming"
 _FLAGGED_SET = "osia:ig:pool:flagged"
 _CURRENT_KEY = "osia:ig:current"
-_WARMUP_QUEUE = "osia:ig:warmup:queue"
 
 _ALL_STATE_SETS = (_ACTIVE_SET, _WARMING_SET, _FLAGGED_SET)
 
@@ -153,8 +152,8 @@ class InstagramAccountManager:
         for v in raw.values():
             try:
                 accounts.append(InstagramAccount.from_dict(json.loads(v)))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Suppressed: %s", exc)
         return sorted(accounts, key=lambda a: a.created_at)
 
     async def register(
