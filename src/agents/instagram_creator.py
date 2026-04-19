@@ -94,7 +94,7 @@ class InstagramCreator:
             order_id = str(order_data.get("order_id") or order_data.get("orderid", ""))
             if not phone or not order_id:
                 raise RuntimeError(f"Unexpected SMSPool response: {order_data}")
-            logger.info("SMSPool: number=+***%s order=%s", phone[-4:], order_id)
+            logger.info("SMSPool order purchased: %s country=%s", order_id, country)
 
             # --- Register bare account record (CREATED state) ---
             account = await self._manager.register(
