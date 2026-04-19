@@ -2,8 +2,9 @@ import asyncio
 import logging
 import os
 
-from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+
+from mcp import ClientSession, StdioServerParameters
 
 logger = logging.getLogger("osia.mcp")
 
