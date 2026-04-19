@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from src.agents.instagram_account_manager import InstagramAccountManager
 from src.agents.social_media_agent import SocialMediaAgent
 from src.desks.desk_registry import DeskRegistry
 from src.desks.hf_endpoint_manager import HFEndpointManager
@@ -172,6 +173,9 @@ class OsiaOrchestrator:
 
         # Load default desk from config/osia.yaml
         self.default_desk = _load_default_desk(self.base_dir)
+
+        # Instagram account pool
+        self._ig_pool = InstagramAccountManager(self.redis)
 
         # Other infrastructure
         self.hf_endpoints = HFEndpointManager()
@@ -1673,6 +1677,36 @@ class OsiaOrchestrator:
     # ADB media capture
     # ------------------------------------------------------------------
 
+    async def _resolve_instagram_cookie(self) -> tuple[str | None, Path | None]:
+        """Return (account_id, cookie_path) from the pool, falling back to the legacy file."""
+        result = await self._ig_pool.get_active_cookie_path()
+        if result:
+            account_id, cookie_path = result
+            if cookie_path.exists():
+                return account_id, cookie_path
+            logger.warning("IG pool cookie file missing for account %s — skipping", account_id)
+        legacy = self.base_dir / "config" / "instagram_cookies.txt"
+        if legacy.exists():
+            return None, legacy
+        return None, None
+
+    @staticmethod
+    def _yt_dlp_auth_error(stderr: str) -> bool:
+        low = stderr.lower()
+        return any(
+            k in low
+            for k in (
+                "login required",
+                "http error 401",
+                "http error 429",
+                "http error 403",
+                "rate-limited",
+                "rate limited",
+                "please log in",
+                "not logged in",
+            )
+        )
+
     async def _fetch_yt_dlp_metadata(self, url: str) -> dict | None:
         """Run yt-dlp --dump-json and return the parsed metadata dict, or None on failure."""
         yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
@@ -1687,17 +1721,19 @@ class OsiaOrchestrator:
             "--extractor-args",
             "youtube:max_comments=50",
         ]
-        # Inject platform-specific cookie files when available
-        _COOKIE_FILES = {
-            "instagram.com": self.base_dir / "config" / "instagram_cookies.txt",
-            "youtube.com": self.base_dir / "config" / "youtube_cookies.txt",
-            "youtu.be": self.base_dir / "config" / "youtube_cookies.txt",
-        }
-        for domain, cookie_path in _COOKIE_FILES.items():
-            if domain in url and cookie_path.exists():
-                cmd.extend(["--cookies", str(cookie_path)])
-                break
+
+        ig_account_id: str | None = None
+        if "instagram.com" in url:
+            ig_account_id, ig_cookie = await self._resolve_instagram_cookie()
+            if ig_cookie:
+                cmd.extend(["--cookies", str(ig_cookie)])
+                logger.debug("yt-dlp metadata: using IG account %s", ig_account_id or "legacy")
+        else:
+            yt_cookie = self.base_dir / "config" / "youtube_cookies.txt"
+            if ("youtube.com" in url or "youtu.be" in url) and yt_cookie.exists():
+                cmd.extend(["--cookies", str(yt_cookie)])
         cmd.append(url)
+
         try:
             proc = await asyncio.to_thread(
                 subprocess.run,
@@ -1708,6 +1744,9 @@ class OsiaOrchestrator:
             )
             if proc.returncode == 0 and proc.stdout.strip():
                 return json.loads(proc.stdout)
+            if ig_account_id and self._yt_dlp_auth_error(proc.stderr or ""):
+                logger.warning("IG account %s flagged: auth error from yt-dlp metadata", ig_account_id)
+                await self._ig_pool.flag(ig_account_id, reason="yt-dlp metadata auth failure")
         except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
             logger.warning("yt-dlp metadata fetch failed: %s", e)
         return None
@@ -1728,50 +1767,67 @@ class OsiaOrchestrator:
 
         output_path = str(self.base_dir / "osia_ytdlp_video.mp4")
 
-        cmd = [
-            str(yt_dlp_bin),
-            "--no-playlist",
-            # Best quality up to 720p with audio; fall back progressively
-            "-f",
-            "bv[height<=720]+ba/b[height<=720]/best[height<=720]/best",
-            "--merge-output-format",
-            "mp4",
-            "-o",
-            output_path,
-            "--socket-timeout",
-            "30",
-        ]
-        # Re-use the same cookie files as the metadata fetcher
-        _COOKIE_FILES = {
-            "instagram.com": self.base_dir / "config" / "instagram_cookies.txt",
-            "youtube.com": self.base_dir / "config" / "youtube_cookies.txt",
-            "youtu.be": self.base_dir / "config" / "youtube_cookies.txt",
-        }
-        for domain, cookie_path in _COOKIE_FILES.items():
-            if domain in url and cookie_path.exists():
-                cmd.extend(["--cookies", str(cookie_path)])
-                break
+        def _base_cmd() -> list[str]:
+            return [
+                str(yt_dlp_bin),
+                "--no-playlist",
+                "-f",
+                "bv[height<=720]+ba/b[height<=720]/best[height<=720]/best",
+                "--merge-output-format",
+                "mp4",
+                "-o",
+                output_path,
+                "--socket-timeout",
+                "30",
+            ]
+
+        ig_account_id: str | None = None
+        cmd = _base_cmd()
+        if "instagram.com" in url:
+            ig_account_id, ig_cookie = await self._resolve_instagram_cookie()
+            if ig_cookie:
+                cmd.extend(["--cookies", str(ig_cookie)])
+                logger.debug("yt-dlp download: using IG account %s", ig_account_id or "legacy")
+        else:
+            yt_cookie = self.base_dir / "config" / "youtube_cookies.txt"
+            if ("youtube.com" in url or "youtu.be" in url) and yt_cookie.exists():
+                cmd.extend(["--cookies", str(yt_cookie)])
         cmd.append(url)
 
-        try:
-            proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
-            out = Path(output_path)
-            if proc.returncode == 0 and out.exists() and out.stat().st_size > 10_000:
+        for attempt in range(2):
+            try:
+                proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
+                out = Path(output_path)
+                if proc.returncode == 0 and out.exists() and out.stat().st_size > 10_000:
+                    logger.info(
+                        "yt-dlp video download succeeded (%d bytes): %s",
+                        out.stat().st_size,
+                        output_path,
+                    )
+                    return output_path
+
+                # Auth failure on a pooled account — flag it and retry with the next one
+                if ig_account_id and self._yt_dlp_auth_error(proc.stderr or "") and attempt == 0:
+                    logger.warning("IG account %s flagged: auth error — retrying with next account", ig_account_id)
+                    await self._ig_pool.flag(ig_account_id, reason="yt-dlp download auth failure")
+                    next_result = await self._ig_pool.get_next_active_cookie_path(ig_account_id)
+                    if next_result:
+                        ig_account_id, ig_cookie = next_result
+                        cmd = _base_cmd()
+                        cmd.extend(["--cookies", str(ig_cookie), url])
+                        continue
+
                 logger.info(
-                    "yt-dlp video download succeeded (%d bytes): %s",
-                    out.stat().st_size,
-                    output_path,
+                    "yt-dlp video download unavailable (rc=%d) — content may require login.\nstderr: %s",
+                    proc.returncode,
+                    proc.stderr[-300:] if proc.stderr else "(empty)",
                 )
-                return output_path
-            logger.info(
-                "yt-dlp video download unavailable (rc=%d) — content may require login.\nstderr: %s",
-                proc.returncode,
-                proc.stderr[-300:] if proc.stderr else "(empty)",
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("yt-dlp video download timed out after 120s")
-        except Exception as e:
-            logger.warning("yt-dlp video download error: %s", e)
+            except subprocess.TimeoutExpired:
+                logger.warning("yt-dlp video download timed out after 120s")
+            except Exception as e:
+                logger.warning("yt-dlp video download error: %s", e)
+            break
+
         return None
 
     async def _detect_video_duration(self, url: str) -> int | None:

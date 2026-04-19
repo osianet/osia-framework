@@ -436,6 +436,7 @@ class InstagramCreator:
         if not otp:
             raise RuntimeError(f"OTP not received within timeout for order {account.smspool_order_id}")
 
+        otp = otp.replace(" ", "")
         logger.info("OTP received: %s", otp)
         await otp_field.click()
         await _type(otp_field, otp)
