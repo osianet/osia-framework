@@ -19,6 +19,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import string
 import subprocess
 from pathlib import Path
@@ -185,7 +186,15 @@ class InstagramCreator:
                     shot = debug_dir / f"{account.id}_failure.png"
                     html = debug_dir / f"{account.id}_failure.html"
                     await page.screenshot(path=str(shot), full_page=True)
-                    html.write_text(await page.content())
+                    raw_html = await page.content()
+                    # Mask password values before writing — logs may be readable by other users
+                    safe_html = re.sub(
+                        r'(<input[^>]+type=["\']password["\'][^>]+value=["\'])[^"\']*(["\'])',
+                        r"\1***\2",
+                        raw_html,
+                        flags=re.IGNORECASE,
+                    )
+                    html.write_text(safe_html)
                     logger.error("Debug screenshot: %s", shot)
                     logger.error("Debug HTML: %s", html)
                 except Exception as dump_err:
@@ -904,4 +913,4 @@ def _gen_full_name() -> str:
 
 def _gen_password() -> str:
     chars = string.ascii_letters + string.digits + "!@#$"
-    return "".join(random.choices(chars, k=16))
+    return "".join(secrets.choice(chars) for _ in range(16))
