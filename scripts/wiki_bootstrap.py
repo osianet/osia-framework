@@ -20,7 +20,6 @@ Usage:
 import argparse
 import json
 import os
-import sys
 import time
 import urllib.error
 import urllib.request
@@ -30,12 +29,14 @@ from textwrap import dedent
 
 WIKI_URL = "http://localhost:3000/graphql"
 
+
 def _load_api_key():
     env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
     for line in open(env_path):
         if line.startswith("WIKIJS_API_KEY="):
             return line.split("=", 1)[1].strip()
     raise RuntimeError("WIKIJS_API_KEY not found in .env")
+
 
 # ── Desk definitions ───────────────────────────────────────────────────────────
 
@@ -326,6 +327,7 @@ DECLASSIFIED_COLLECTIONS = [
 
 # ── GraphQL helpers ────────────────────────────────────────────────────────────
 
+
 def gql(api_key: str, query: str, variables: dict | None = None) -> dict:
     payload = {"query": query}
     if variables:
@@ -342,9 +344,15 @@ def gql(api_key: str, query: str, variables: dict | None = None) -> dict:
         raise RuntimeError(f"HTTP {e.code}: {body[:300]}") from e
 
 
-def create_page(api_key: str, path: str, title: str, content: str,
-                description: str = "", tags: list[str] | None = None,
-                dry_run: bool = False) -> bool:
+def create_page(
+    api_key: str,
+    path: str,
+    title: str,
+    content: str,
+    description: str = "",
+    tags: list[str] | None = None,
+    dry_run: bool = False,
+) -> bool:
     if dry_run:
         print(f"  [DRY-RUN] Would create: /{path}")
         return True
@@ -370,10 +378,17 @@ def create_page(api_key: str, path: str, title: str, content: str,
       }
     }
     """
-    resp = gql(api_key, query, {
-        "path": path, "title": title, "content": content,
-        "description": description, "tags": tags or [],
-    })
+    resp = gql(
+        api_key,
+        query,
+        {
+            "path": path,
+            "title": title,
+            "content": content,
+            "description": description,
+            "tags": tags or [],
+        },
+    )
 
     result = resp["data"]["pages"]["create"]["responseResult"]
     if result["succeeded"]:
@@ -387,12 +402,13 @@ def create_page(api_key: str, path: str, title: str, content: str,
         print(f"  ✗ /{path} — {result['message']} (code: {result['errorCode']})")
         return False
 
+
 # ── Content templates ──────────────────────────────────────────────────────────
+
 
 def home_page() -> str:
     desk_links = "\n".join(
-        f"| {d['icon']} [{d['name']}](/desks/{d['slug']}) | `{d['code']}` | {d['director']} |"
-        for d in DESKS
+        f"| {d['icon']} [{d['name']}](/desks/{d['slug']}) | `{d['code']}` | {d['director']} |" for d in DESKS
     )
     return dedent(f"""\
     > **OSIA INTERNAL — RESTRICTED ACCESS**
@@ -446,12 +462,12 @@ def home_page() -> str:
 def desk_page(desk: dict) -> str:
     focus_list = "\n".join(f"- {f}" for f in desk["focus_areas"])
     return dedent(f"""\
-    > **CLASSIFICATION: OSIA INTERNAL — {desk['code']} DESK**
+    > **CLASSIFICATION: OSIA INTERNAL — {desk["code"]} DESK**
 
-    # {desk['icon']} {desk['name']} | `{desk['code']}`
+    # {desk["icon"]} {desk["name"]} | `{desk["code"]}`
 
-    **Director:** {desk['director']}
-    **Mission:** {desk['mission']}
+    **Director:** {desk["director"]}
+    **Mission:** {desk["mission"]}
 
     ---
 
@@ -495,21 +511,21 @@ def desk_page(desk: dict) -> str:
 
     ## Navigation
 
-    - 📁 [INTSUM Archive](/desks/{desk['slug']}/intsums) — All intelligence summaries from this desk
-    - 📋 [Standing Assessments](/desks/{desk['slug']}/standing-assessments) — Persistent analytical positions
-    - 🎯 [Watchlist](/desks/{desk['slug']}/watchlist) — Entities and topics under active monitoring
+    - 📁 [INTSUM Archive](/desks/{desk["slug"]}/intsums) — All intelligence summaries from this desk
+    - 📋 [Standing Assessments](/desks/{desk["slug"]}/standing-assessments) — Persistent analytical positions
+    - 🎯 [Watchlist](/desks/{desk["slug"]}/watchlist) — Entities and topics under active monitoring
     """)
 
 
 def desk_intsums_index(desk: dict) -> str:
     return dedent(f"""\
-    > **CLASSIFICATION: OSIA INTERNAL — {desk['code']} DESK**
+    > **CLASSIFICATION: OSIA INTERNAL — {desk["code"]} DESK**
 
-    # {desk['icon']} {desk['name']} — INTSUM Archive
+    # {desk["icon"]} {desk["name"]} — INTSUM Archive
 
-    Intelligence summaries produced by the **{desk['name']}**. Each entry represents a
+    Intelligence summaries produced by the **{desk["name"]}**. Each entry represents a
     completed analytical cycle. Pages are created automatically by Hermes at the path
-    `/desks/{desk['slug']}/intsums/YYYY-MM-DD-topic-slug`.
+    `/desks/{desk["slug"]}/intsums/YYYY-MM-DD-topic-slug`.
 
     ---
 
@@ -521,18 +537,18 @@ def desk_intsums_index(desk: dict) -> str:
 
     ---
 
-    *← [Back to {desk['name']}](/desks/{desk['slug']})*
+    *← [Back to {desk["name"]}](/desks/{desk["slug"]})*
     """)
 
 
 def desk_standing_assessments(desk: dict) -> str:
     return dedent(f"""\
-    > **CLASSIFICATION: OSIA INTERNAL — {desk['code']} DESK**
+    > **CLASSIFICATION: OSIA INTERNAL — {desk["code"]} DESK**
 
-    # {desk['icon']} {desk['name']} — Standing Assessments
+    # {desk["icon"]} {desk["name"]} — Standing Assessments
 
     Standing assessments are persistent analytical positions maintained by the
-    **{desk['name']}**. Unlike INTSUMs (which are point-in-time products), standing
+    **{desk["name"]}**. Unlike INTSUMs (which are point-in-time products), standing
     assessments are living documents updated as the situation evolves.
 
     Each assessment carries a **reliability tier** and **last-reviewed date**.
@@ -550,7 +566,7 @@ def desk_standing_assessments(desk: dict) -> str:
 
     ## How to Create a Standing Assessment
 
-    Create a sub-page at `/desks/{desk['slug']}/standing-assessments/your-topic`.
+    Create a sub-page at `/desks/{desk["slug"]}/standing-assessments/your-topic`.
     Use the following structure at minimum:
 
     ```
@@ -569,17 +585,17 @@ def desk_standing_assessments(desk: dict) -> str:
     [Alternative interpretations, if any]
     ```
 
-    *← [Back to {desk['name']}](/desks/{desk['slug']})*
+    *← [Back to {desk["name"]}](/desks/{desk["slug"]})*
     """)
 
 
 def desk_watchlist(desk: dict) -> str:
     return dedent(f"""\
-    > **CLASSIFICATION: OSIA INTERNAL — {desk['code']} DESK**
+    > **CLASSIFICATION: OSIA INTERNAL — {desk["code"]} DESK**
 
-    # {desk['icon']} {desk['name']} — Active Watchlist
+    # {desk["icon"]} {desk["name"]} — Active Watchlist
 
-    Entities and topics under active monitoring by the **{desk['name']}**.
+    Entities and topics under active monitoring by the **{desk["name"]}**.
     This page is maintained by Hermes and updated after each research and INTSUM cycle.
 
     **Priority levels:** 🔴 Critical · 🟡 Elevated · 🟢 Routine
@@ -606,8 +622,8 @@ def desk_watchlist(desk: dict) -> str:
 
     ---
 
-    *← [Back to {desk['name']}](/desks/{desk['slug']})*
-    *↗ [INTSUM Archive](/desks/{desk['slug']}/intsums)*
+    *← [Back to {desk["name"]}](/desks/{desk["slug"]})*
+    *↗ [INTSUM Archive](/desks/{desk["slug"]}/intsums)*
     """)
 
 
@@ -885,15 +901,15 @@ def kb_collection_page(collection: dict) -> str:
     return dedent(f"""\
     > **CLASSIFICATION: OSIA INTERNAL — KNOWLEDGE BASE**
 
-    # {collection['name']}
+    # {collection["name"]}
 
-    {collection['description']}
+    {collection["description"]}
 
     ---
 
     ## Coverage & Usage
 
-    **Qdrant collection:** `{collection['qdrant_collection']}`
+    **Qdrant collection:** `{collection["qdrant_collection"]}`
     **Used as boost collection by:**
     {desk_list}
 
@@ -1141,6 +1157,7 @@ def intsum_format_guide() -> str:
 
 # ── Bootstrap runner ───────────────────────────────────────────────────────────
 
+
 def run(dry_run: bool = False):
     api_key = _load_api_key()
     ok = 0
@@ -1157,20 +1174,24 @@ def run(dry_run: bool = False):
             time.sleep(0.3)  # be gentle with the DB
 
     print("\n── Home ─────────────────────────────────────────────────────")
-    c("home", "OSIA Intelligence Wiki", home_page(),
-      "OSIA wiki home — intelligence products, entity dossiers, SITREP archive",
-      ["osia", "home"])
+    c(
+        "home",
+        "OSIA Intelligence Wiki",
+        home_page(),
+        "OSIA wiki home — intelligence products, entity dossiers, SITREP archive",
+        ["osia", "home"],
+    )
 
     print("\n── Desks index ──────────────────────────────────────────────")
-    desks_index_content = dedent("""\
+    desks_index_content = dedent(
+        """\
     > **CLASSIFICATION: OSIA INTERNAL — RESTRICTED**
 
     # Intelligence Desks
 
-    """ + "\n".join(
-        f"- {d['icon']} [{d['name']}](/desks/{d['slug']}) — `{d['code']}` — {d['director']}"
-        for d in DESKS
-    ))
+    """
+        + "\n".join(f"- {d['icon']} [{d['name']}](/desks/{d['slug']}) — `{d['code']}` — {d['director']}" for d in DESKS)
+    )
     c("desks", "Intelligence Desks", desks_index_content, tags=["index", "desks"])
 
     print("\n── Desk pages ───────────────────────────────────────────────")
@@ -1178,74 +1199,126 @@ def run(dry_run: bool = False):
         slug = desk["slug"]
         code = desk["code"].lower()
         print(f"\n  [{desk['code']}] {desk['name']}")
-        c(f"desks/{slug}", f"{desk['icon']} {desk['name']} | {desk['code']}",
-          desk_page(desk), desk["mission"], ["desk", f"desk-{code}"])
-        c(f"desks/{slug}/intsums", f"{desk['name']} — INTSUM Archive",
-          desk_intsums_index(desk), tags=["intsum", "index", f"desk-{code}"])
-        c(f"desks/{slug}/standing-assessments", f"{desk['name']} — Standing Assessments",
-          desk_standing_assessments(desk), tags=["standing-assessment", "index", f"desk-{code}"])
-        c(f"desks/{slug}/watchlist", f"{desk['name']} — Active Watchlist",
-          desk_watchlist(desk), tags=["watchlist", f"desk-{code}"])
+        c(
+            f"desks/{slug}",
+            f"{desk['icon']} {desk['name']} | {desk['code']}",
+            desk_page(desk),
+            desk["mission"],
+            ["desk", f"desk-{code}"],
+        )
+        c(
+            f"desks/{slug}/intsums",
+            f"{desk['name']} — INTSUM Archive",
+            desk_intsums_index(desk),
+            tags=["intsum", "index", f"desk-{code}"],
+        )
+        c(
+            f"desks/{slug}/standing-assessments",
+            f"{desk['name']} — Standing Assessments",
+            desk_standing_assessments(desk),
+            tags=["standing-assessment", "index", f"desk-{code}"],
+        )
+        c(
+            f"desks/{slug}/watchlist",
+            f"{desk['name']} — Active Watchlist",
+            desk_watchlist(desk),
+            tags=["watchlist", f"desk-{code}"],
+        )
 
     print("\n── Entities ─────────────────────────────────────────────────")
-    c("entities", "Entity Registry", entities_index(),
-      "OSIA entity registry — persons, organisations, locations, networks",
-      ["entity", "index"])
-    c("entities/persons", "Persons",
-      entity_category_index(
-          "Persons", "👤",
-          "Individual dossiers on politicians, executives, operatives, and persons of intelligence interest.",
-          "persons"
-      ), tags=["entity", "person", "index"])
-    c("entities/organisations", "Organisations",
-      entity_category_index(
-          "Organisations", "🏛️",
-          "Profiles on corporate, state, NGO, and criminal organisations of intelligence interest.",
-          "organisations"
-      ), tags=["entity", "organisation", "index"])
-    c("entities/locations", "Locations",
-      entity_category_index(
-          "Locations", "📍",
-          "Geographic locations, facilities, and regions of operational or intelligence significance.",
-          "locations"
-      ), tags=["entity", "location", "index"])
-    c("entities/networks", "Networks",
-      entity_category_index(
-          "Networks", "🕸️",
-          "Mapped relationship networks — elite networks, intelligence alliances, criminal organisations, and power structures.",
-          "networks"
-      ), tags=["entity", "network", "index"])
+    c(
+        "entities",
+        "Entity Registry",
+        entities_index(),
+        "OSIA entity registry — persons, organisations, locations, networks",
+        ["entity", "index"],
+    )
+    c(
+        "entities/persons",
+        "Persons",
+        entity_category_index(
+            "Persons",
+            "👤",
+            "Individual dossiers on politicians, executives, operatives, and persons of intelligence interest.",
+            "persons",
+        ),
+        tags=["entity", "person", "index"],
+    )
+    c(
+        "entities/organisations",
+        "Organisations",
+        entity_category_index(
+            "Organisations",
+            "🏛️",
+            "Profiles on corporate, state, NGO, and criminal organisations of intelligence interest.",
+            "organisations",
+        ),
+        tags=["entity", "organisation", "index"],
+    )
+    c(
+        "entities/locations",
+        "Locations",
+        entity_category_index(
+            "Locations",
+            "📍",
+            "Geographic locations, facilities, and regions of operational or intelligence significance.",
+            "locations",
+        ),
+        tags=["entity", "location", "index"],
+    )
+    c(
+        "entities/networks",
+        "Networks",
+        entity_category_index(
+            "Networks",
+            "🕸️",
+            "Mapped relationship networks — elite networks, intelligence alliances, criminal organisations, and power structures.",
+            "networks",
+        ),
+        tags=["entity", "network", "index"],
+    )
 
     print("\n── INTSUMs & SITREPs ────────────────────────────────────────")
-    c("intsums", "Cross-Desk Intelligence Summaries", intsums_index(),
-      tags=["intsum", "index", "watch-floor"])
-    c("sitrep", "Daily SITREP Archive", sitrep_index(),
-      tags=["sitrep", "index", "watch-floor"])
+    c("intsums", "Cross-Desk Intelligence Summaries", intsums_index(), tags=["intsum", "index", "watch-floor"])
+    c("sitrep", "Daily SITREP Archive", sitrep_index(), tags=["sitrep", "index", "watch-floor"])
 
     print("\n── Operations ───────────────────────────────────────────────")
-    c("operations", "Operations", operations_index(),
-      "Named OSIA multi-desk investigations", ["operation", "index"])
+    c("operations", "Operations", operations_index(), "Named OSIA multi-desk investigations", ["operation", "index"])
 
     print("\n── Knowledge Base ───────────────────────────────────────────")
     c("kb", "Knowledge Base", kb_index(), tags=["kb", "index"])
-    c("kb/declassified", "Declassified Document Collections", kb_declassified_index(),
-      tags=["kb", "declassified", "index"])
+    c(
+        "kb/declassified",
+        "Declassified Document Collections",
+        kb_declassified_index(),
+        tags=["kb", "declassified", "index"],
+    )
 
     print("\n  Declassified collections:")
     for col in DECLASSIFIED_COLLECTIONS:
-        c(f"kb/declassified/{col['slug']}", col["name"],
-          kb_collection_page(col), tags=["kb", "declassified", col["slug"]])
+        c(
+            f"kb/declassified/{col['slug']}",
+            col["name"],
+            kb_collection_page(col),
+            tags=["kb", "declassified", col["slug"]],
+        )
 
     c("kb/sources", "Source Registry", kb_sources_index(), tags=["kb", "sources"])
     c("kb/thematic", "Thematic Analysis", kb_thematic_index(), tags=["kb", "thematic", "index"])
-    c("kb/methodology", "Methodology & Conventions", kb_methodology_index(),
-      tags=["kb", "methodology"])
-    c("kb/methodology/entity-dossier-template", "Entity Dossier Template",
-      entity_dossier_template(), tags=["kb", "methodology", "template"])
-    c("kb/methodology/intsum-format", "INTSUM Format Guide",
-      intsum_format_guide(), tags=["kb", "methodology", "intsum"])
-    c("kb/methodology/wiki-conventions", "Wiki Conventions",
-      wiki_conventions(), tags=["kb", "methodology"])
+    c("kb/methodology", "Methodology & Conventions", kb_methodology_index(), tags=["kb", "methodology"])
+    c(
+        "kb/methodology/entity-dossier-template",
+        "Entity Dossier Template",
+        entity_dossier_template(),
+        tags=["kb", "methodology", "template"],
+    )
+    c(
+        "kb/methodology/intsum-format",
+        "INTSUM Format Guide",
+        intsum_format_guide(),
+        tags=["kb", "methodology", "intsum"],
+    )
+    c("kb/methodology/wiki-conventions", "Wiki Conventions", wiki_conventions(), tags=["kb", "methodology"])
 
     print(f"\n── Done — {ok} created/skipped · {fail} failed ─────────────\n")
 
