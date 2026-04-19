@@ -3168,6 +3168,11 @@ class OsiaOrchestrator:
                         _tags = ["intsum", _desk_tag, *[_slugify_tag(n) for n in entity_names[:5]]]
                         _desc = f"{_desk_name} intelligence summary — {_date_str}"
 
+                    _source_account = (
+                        (ig_source_handle, social_account_wiki_path("instagram", ig_source_handle))
+                        if ig_source_handle
+                        else None
+                    )
                     _content = build_intsum_page(
                         analysis=analysis,
                         desk_name=_desk_name,
@@ -3176,6 +3181,7 @@ class OsiaOrchestrator:
                         timestamp=now.strftime("%Y-%m-%dT%H:%M:%S UTC"),
                         source=source,
                         entity_links=_entity_links,
+                        source_account=_source_account,
                     )
 
                     async with WikiClient() as wiki:

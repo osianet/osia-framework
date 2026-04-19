@@ -111,9 +111,14 @@ def build_intsum_page(
     timestamp: str,
     source: str,
     entity_links: list[tuple[str, str]],
+    source_account: tuple[str, str] | None = None,
 ) -> str:
-    """Build INTSUM wiki page markdown with AUTO-fenced sections."""
+    """Build INTSUM wiki page markdown with AUTO-fenced sections.
+
+    source_account: optional (handle, wiki_path) for the content creator dossier link.
+    """
     entity_str = ", ".join(f"[{name}](/{path})" for name, path in entity_links) or "*None identified*"
+    creator_row = f"| **Content creator** | [@{source_account[0]}](/{source_account[1]}) |\n" if source_account else ""
     return (
         f"<!-- OSIA:AUTO:metadata -->\n"
         f"| Field | Value |\n"
@@ -122,6 +127,7 @@ def build_intsum_page(
         f"| **Date** | {timestamp} |\n"
         f"| **Desk** | [{desk_name}](/{desk_section}) |\n"
         f"| **Source** | {source} |\n"
+        f"{creator_row}"
         f"| **Reliability** | A |\n"
         f"| **Entities** | {entity_str} |\n"
         f"<!-- /OSIA:AUTO:metadata -->\n\n"
