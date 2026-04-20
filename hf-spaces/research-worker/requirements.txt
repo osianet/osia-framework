@@ -2,4 +2,4 @@
 # Exact pins mean a compromised upstream release can be compared against
 # what was actually deployed. Update intentionally via PR.
 httpx==0.28.1
-huggingface-hub==1.10.1
+huggingface-hub==1.11.0
