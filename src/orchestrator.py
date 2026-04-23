@@ -1680,13 +1680,15 @@ class OsiaOrchestrator:
     # ------------------------------------------------------------------
 
     async def _resolve_instagram_cookie(self) -> tuple[str | None, Path | None]:
-        """Return (account_id, cookie_path) from the pool, falling back to the legacy file."""
+        """
+        Return (account_id, cookie_path) for yt-dlp.
+
+        Tries the pool first — get_active_cookie_path() reads content from Redis and
+        materialises it to a temp file. Falls back to the legacy on-disk file.
+        """
         result = await self._ig_pool.get_active_cookie_path()
         if result:
-            account_id, cookie_path = result
-            if cookie_path.exists():
-                return account_id, cookie_path
-            logger.warning("IG pool cookie file missing for account %s — skipping", account_id)
+            return result
         legacy = self.base_dir / "config" / "instagram_cookies.txt"
         if legacy.exists():
             return None, legacy

@@ -152,24 +152,32 @@ pull the current ACTIVE account's cookie path from Redis rather than the hardcod
   - OTP space-stripping added to handle SMSPool codes with whitespace
   - Multiple batches of accounts created and imported; 15 ACTIVE as of 2026-04-19
 
-### Phase 3 — Warm-up Scheduler (ADB + Camoufox)  ← **NEXT**
-- [ ] **3.1** Create `src/agents/instagram_warmup_agent.py`
-  - Inherits/reuses `SocialMediaAgent` ADB patterns
-  - Per-session warm-up routine: open Instagram app, browse feed 3-5 min, like 1-2 posts
-  - **Follow accounts from `osia:ig:intel_sources`** Redis set (395 handles as of 2026-04-19)
-    - Pick a random subset per session (e.g. 2-3 follows) from the set
-  - Tracks `warmup_sessions` count on account record
-  - After `IG_WARMUP_DAYS` days AND min sessions met → `promote()` to ACTIVE
-  - Respects `osia:adb:lock` (will not run if orchestrator holds the lock)
-- [ ] **3.2** Create `src/cron/instagram_pool_health.py`
-  - Runs as a timer job (every 4h)
-  - Checks ACTIVE count vs `IG_POOL_ACTIVE_MIN` → triggers creation if low
-  - Checks WARMING accounts → runs one warm-up session per WARMING account (if ADB free)
-  - Promotes eligible WARMING accounts to ACTIVE
-  - Alerts to Signal if ACTIVE pool drops to 0
-- [ ] **3.3** Wire up systemd timer
-  - `osia-instagram-pool-health.service` + `.timer` (every 4h)
-  - Add to `osia.sh`
+### Phase 3 — Warm-up Scheduler (Camoufox browser)  ← **COMPLETE**
+
+**Design note:** ADB/phone approach abandoned — Android ID is unavoidable shared fingerprint
+across all accounts on a single device and cannot be changed without root. Camoufox browser
+warm-up is strictly better: cookie reuse means no "new device" login challenge, Camoufox
+spoofs canvas/WebGL/audio fingerprints per session, runs on any GUI machine (Windows or Linux),
+and the fresh cookie export after each session keeps yt-dlp access alive.
+
+- [x] **3.1** Create `src/agents/instagram_warmup_agent.py`
+  - `InstagramWarmupSession` class using `AsyncCamoufox`
+  - Loads existing cookies → no re-login / no 2FA
+  - Per-session: browse feed 3-6 min, like 1-2 posts, follow 2-3 intel sources
+  - Detects suspended accounts → auto-flags them
+  - Uploads DiceBear avatar on first session (`has_profile_pic` flag)
+  - Exports fresh cookies after every session (keeps yt-dlp access live)
+  - `record_warmup_session()` → increments counter + stamps `last_warmed_at`
+- [x] **3.2** Create `src/cron/instagram_pool_health.py`
+  - Every 4h timer: warm all WARMING accounts in sequence (15 min gap between each)
+  - Promotes accounts meeting `IG_WARMUP_DAYS` + `IG_WARMUP_MIN_SESSIONS` thresholds
+  - Signal alert if ACTIVE=0 (emergency) or ACTIVE < `IG_POOL_ACTIVE_MIN` (warning)
+- [x] **3.3** Wire up systemd timer
+  - `osia-instagram-pool-health.service` + `.timer` (fires every 4h at :30)
+  - Added to `osia.sh` TIMERS array
+- [x] **3.4** `--warm` / `--warm-all` commands in `ig_pool_admin.py`
+  - `--warm <id> [--headed] [--no-avatar]` — single account, headed for desktop GUI
+  - `--warm-all [--headed]` — all WARMING accounts with inter-session delay
 
 ### Phase 4 — Hardening & Monitoring
 - [ ] **4.1** Fingerprint consistency
@@ -232,3 +240,4 @@ SMSPOOL_USER=...
 | 2026-04-19 | `--sync-cookies` added to `ig_pool_admin.py` — fixes Windows paths + promotes in one command |
 | 2026-04-19 | Social account dossiers: `entities/social-accounts/instagram/<handle>` in wiki; INTSUM pages link to creator dossier; `osia:ig:intel_sources` Redis set populated with 395 handles via text-mine backfill |
 | 2026-04-19 | Pool state: 15 ACTIVE, 2 WARMING (missing cookies), 0 FLAGGED |
+| 2026-04-20 | Phase 3 complete: `instagram_warmup_agent.py` (Camoufox), `instagram_pool_health.py` (cron), `--warm`/`--warm-all` in ig_pool_admin.py, systemd timer active |
