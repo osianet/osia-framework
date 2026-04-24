@@ -47,7 +47,7 @@ from datetime import UTC, datetime
 import httpx
 from dotenv import load_dotenv
 
-from src.intelligence.wiki_client import WikiClient, desk_wiki_section, entity_wiki_path
+from src.intelligence.wiki_client import WikiClient, build_entity_page, desk_wiki_section, entity_wiki_path
 
 load_dotenv()
 
@@ -267,6 +267,9 @@ class ResearchJob:
 # ---------------------------------------------------------------------------
 
 
+PROCESSING_LIST = "osia:research:processing"
+
+
 class RedisQueue:
     def __init__(self):
         import redis
@@ -276,15 +279,28 @@ class RedisQueue:
     def depth(self) -> int:
         return self._r.llen("osia:research_queue")
 
-    def pop(self) -> dict | None:
-        result = self._r.blpop("osia:research_queue", timeout=2)
-        if result is None:
+    def processing_depth(self) -> int:
+        return self._r.llen(PROCESSING_LIST)
+
+    def pop(self) -> tuple[dict, str] | None:
+        """Atomically move one job from the queue into the processing list.
+
+        Uses BLMOVE so the job is never visible to other workers — it leaves
+        the main queue and enters the processing list in a single atomic step.
+        Returns (parsed_payload, raw_json) so the caller can pass raw to complete().
+        """
+        raw = self._r.blmove("osia:research_queue", PROCESSING_LIST, timeout=2, src="LEFT", dest="RIGHT")
+        if raw is None:
             return None
-        _, raw = result
         try:
-            return json.loads(raw)
+            return json.loads(raw), raw
         except json.JSONDecodeError:
+            self._r.lrem(PROCESSING_LIST, 1, raw)
             return None
+
+    def complete(self, raw: str) -> None:
+        """Remove a job from the processing list after success or failure."""
+        self._r.lrem(PROCESSING_LIST, 1, raw)
 
     def is_seen(self, key: str) -> bool:
         return bool(self._r.exists(f"osia:research:seen:{key}"))
@@ -1133,10 +1149,14 @@ def _sanitize_assistant_message(msg: dict) -> dict:
     Pydantic validator then rejects when the message is sent back in a subsequent round,
     producing a cascade of union-type validation errors. Whitelist only the three
     fields that are always valid in an assistant turn.
+
+    Also drops tool calls with empty/invalid function names — Venice occasionally
+    emits these and then rejects its own output with a 400 on the next round.
     """
     cleaned: dict = {"role": "assistant", "content": msg.get("content") or ""}
-    if msg.get("tool_calls"):
-        cleaned["tool_calls"] = msg["tool_calls"]
+    valid_calls = [tc for tc in (msg.get("tool_calls") or []) if tc.get("function", {}).get("name", "").strip()]
+    if valid_calls:
+        cleaned["tool_calls"] = valid_calls
     return cleaned
 
 
@@ -1254,9 +1274,12 @@ async def run_research_loop_openai_compat(
         data = resp.json()
         choice = data["choices"][0]
         message = choice["message"]
-        messages.append(_sanitize_assistant_message(message))
+        sanitized = _sanitize_assistant_message(message)
+        messages.append(sanitized)
 
-        tool_calls = message.get("tool_calls") or []
+        # Use the sanitized tool_calls — invalid names are already stripped,
+        # so history and tool results stay consistent.
+        tool_calls = sanitized.get("tool_calls") or []
         content = message.get("content", "") or ""
 
         # Native tool calls
@@ -1511,38 +1534,60 @@ def _chunk_text(text: str) -> list[str]:
 
 
 async def _wiki_append_research_note(job: ResearchJob, text: str, http: httpx.AsyncClient) -> None:
-    """Append a research summary note to the entity wiki page for job.topic.
+    """Write research output to the entity wiki page for job.topic.
 
-    Searches for an entity page whose path matches the topic slug, then appends
-    to its research-notes section. Non-fatal — logs and returns on any failure.
+    If an entity page already exists:
+      - patch_section "summary" with the full research text
+      - append a changelog entry to "research-notes"
+    If no entity page exists:
+      - create one with the research text pre-populated in the summary section
+
+    Non-fatal — logs and returns on any failure.
     """
     if not os.getenv("WIKIJS_API_KEY"):
         return
     try:
         date_str = datetime.now(UTC).strftime("%Y-%m-%d")
         desk_section = desk_wiki_section(job.desk) if job.desk else "desks"
-        summary = text[:400].replace("\n", " ").strip()
-        if len(text) > 400:
-            summary += "…"
-        note = (
-            f"- **{date_str}** — [{job.desk or 'research-worker'}](/{desk_section}) research on **{job.topic}**\n\n"
-            f"  > {summary}"
-        )
+        desk_label = job.desk or "research-worker"
+
+        # Brief changelog entry — one line plus a short excerpt
+        excerpt = text[:300].replace("\n", " ").strip()
+        if len(text) > 300:
+            excerpt += "…"
+        note = f"- **{date_str}** — [{desk_label}](/{desk_section}) research on **{job.topic}**\n\n  > {excerpt}"
+
         async with WikiClient(http) as wiki:
-            # Search wiki for an entity page matching the topic
             results = await wiki.search_pages(job.topic[:50])
             entity_page = next(
                 (r for r in results if r.get("path", "").startswith("entities/")),
                 None,
             )
+
             if entity_page:
-                ok = await wiki.append_to_section(entity_page["path"], "research-notes", note)
-                if ok:
-                    logger.info("Wiki: appended research note to '%s'", entity_page["path"])
+                # Populate the summary with the full research text, then log in research-notes
+                await wiki.patch_section(entity_page["path"], "summary", text.strip())
+                await wiki.append_to_section(entity_page["path"], "research-notes", note)
+                logger.info("Wiki: enriched entity page '%s'", entity_page["path"])
             else:
-                # Try the deterministic path directly (org type as best guess)
+                # No existing page — create one with research content in the summary
                 guess_path = entity_wiki_path("Organisation", job.topic)
-                await wiki.append_to_section(guess_path, "research-notes", note)
+                content = build_entity_page(
+                    entity_type="Organisation",
+                    desk_name=desk_label,
+                    desk_section=desk_section,
+                    first_seen=date_str,
+                    summary=text.strip(),
+                )
+                created = await wiki.create_page(
+                    guess_path,
+                    job.topic,
+                    content,
+                    description=f"Entity — first researched {date_str} by {desk_label}",
+                    tags=["entity", "organisation", "research-worker"],
+                )
+                if created:
+                    logger.info("Wiki: created entity page '%s'", guess_path)
     except Exception as e:
         logger.warning("Wiki research note update failed (non-fatal): %s", e)
 
@@ -1606,6 +1651,16 @@ async def main():
     logger.info("Backend: %s | Qdrant: %s", backend, QDRANT_URL)
 
     queue = RedisQueue()
+
+    stranded = queue.processing_depth()
+    if stranded:
+        logger.warning(
+            "%d job(s) found in processing list — likely stranded from a previous crashed run. "
+            "To recover: redis-cli LMOVE %s osia:research_queue LEFT RIGHT (repeat until empty)",
+            stranded,
+            PROCESSING_LIST,
+        )
+
     depth = queue.depth()
     logger.info("Research queue depth: %d (threshold: %d)", depth, BATCH_THRESHOLD)
 
@@ -1616,30 +1671,25 @@ async def main():
     async with httpx.AsyncClient(timeout=60.0) as http:
         qdrant = QdrantClient(http)
 
-        # Drain up to MAX_JOBS_PER_RUN items from the queue.
-        # Remaining items stay in Redis and are processed on the next timer fire.
-        jobs: list[ResearchJob] = []
-        while len(jobs) < MAX_JOBS_PER_RUN:
-            payload = queue.pop()
-            if payload is None:
-                break
-            job = ResearchJob.from_dict(payload)
-            if job.topic:
-                jobs.append(job)
-
-        remaining = queue.depth()
-        logger.info("Loaded %d jobs (cap: %d, remaining in queue: %d)", len(jobs), MAX_JOBS_PER_RUN, remaining)
-        if not jobs:
-            return
-
         succeeded = 0
         failed = 0
         skipped = 0
 
-        for job in jobs:
+        for _ in range(MAX_JOBS_PER_RUN):
+            result = queue.pop()
+            if result is None:
+                break
+            payload, raw = result
+
+            job = ResearchJob.from_dict(payload)
+            if not job.topic:
+                queue.complete(raw)
+                continue
+
             topic_key = hashlib.md5(job.topic.lower().strip().encode()).hexdigest()  # noqa: S324
             if queue.is_seen(topic_key):
                 logger.info("Already researched, skipping: %s", job.topic)
+                queue.complete(raw)
                 skipped += 1
                 continue
 
@@ -1648,11 +1698,13 @@ async def main():
                 text = await run_research_loop(job, http)
             except Exception as e:
                 logger.error("Research failed for '%s': %s", job.topic, e)
+                queue.complete(raw)
                 failed += 1
                 continue
 
             if not text:
                 logger.warning("Empty result for topic: %s", job.topic)
+                queue.complete(raw)
                 failed += 1
                 continue
 
@@ -1662,15 +1714,23 @@ async def main():
                 await store_research(job, text, http, qdrant)
             except Exception as e:
                 logger.error("Storage failed for '%s': %s", job.topic, e)
+                queue.complete(raw)
                 failed += 1
                 continue
 
             await _wiki_append_research_note(job, text, http)
             queue.mark_seen(topic_key, topic=job.topic)
+            queue.complete(raw)
             succeeded += 1
             await asyncio.sleep(2)  # brief pause between jobs to stay within Venice rate limits
 
-    logger.info("=== Batch complete. succeeded=%d failed=%d skipped=%d ===", succeeded, failed, skipped)
+        logger.info(
+            "=== Batch complete. succeeded=%d failed=%d skipped=%d | queue depth: %d ===",
+            succeeded,
+            failed,
+            skipped,
+            queue.depth(),
+        )
 
 
 if __name__ == "__main__":
