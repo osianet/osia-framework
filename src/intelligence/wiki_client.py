@@ -191,10 +191,17 @@ def build_entity_page(
     desk_name: str,
     desk_section: str,
     first_seen: str,
-    intsum_path: str,
-    intsum_title: str,
+    intsum_path: str = "",
+    intsum_title: str = "",
+    summary: str = "",
 ) -> str:
     """Build a new entity wiki page with AUTO-fenced sections."""
+    summary_body = summary.strip() if summary.strip() else "*No summary compiled. Pending research worker analysis.*"
+    intel_log_entries = (
+        f"- {first_seen} — [{intsum_title}](/{intsum_path})\n"
+        if intsum_path and intsum_title
+        else "*No intelligence products linked yet.*\n"
+    )
     return (
         f"<!-- OSIA:AUTO:profile -->\n"
         f"| Field | Value |\n"
@@ -205,12 +212,12 @@ def build_entity_page(
         f"<!-- /OSIA:AUTO:profile -->\n\n"
         f"---\n\n"
         f"<!-- OSIA:AUTO:summary -->\n"
-        f"*No summary compiled. Pending research worker analysis.*\n"
+        f"{summary_body}\n"
         f"<!-- /OSIA:AUTO:summary -->\n\n"
         f"---\n\n"
         f"<!-- OSIA:AUTO:intel-log -->\n"
         f"## Intelligence Log\n\n"
-        f"- {first_seen} — [{intsum_title}](/{intsum_path})\n"
+        f"{intel_log_entries}"
         f"<!-- /OSIA:AUTO:intel-log -->\n\n"
         f"---\n\n"
         f"<!-- OSIA:AUTO:research-notes -->\n"
