@@ -2855,7 +2855,7 @@ class OsiaOrchestrator:
                     ig_source_handle: str | None = None
                     ig_display_name: str | None = None
                     ig_channel_url: str | None = None
-                    if raw_meta and (urlparse(url).hostname or "").endswith("instagram.com"):
+                    if raw_meta and (urlparse(url).hostname or "") in ("www.instagram.com", "instagram.com"):
                         ig_source_handle = raw_meta.get("uploader_id") or raw_meta.get("channel_id")
                         ig_display_name = raw_meta.get("uploader") or raw_meta.get("channel")
                         ig_channel_url = raw_meta.get("channel_url") or raw_meta.get("uploader_url")
