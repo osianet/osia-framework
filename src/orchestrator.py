@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from src.agents.instagram_account_manager import InstagramAccountManager
 from src.agents.social_media_agent import SocialMediaAgent
 from src.desks.desk_registry import DeskRegistry
 from src.desks.hf_endpoint_manager import HFEndpointManager
@@ -35,10 +36,12 @@ from src.intelligence.wiki_client import (
     WikiClient,
     build_entity_page,
     build_intsum_page,
+    build_social_account_page,
     desk_wiki_section,
     entity_wiki_path,
     intsum_wiki_path,
     sitrep_wiki_path,
+    social_account_wiki_path,
 )
 
 logger = logging.getLogger("osia.orchestrator")
@@ -172,6 +175,9 @@ class OsiaOrchestrator:
 
         # Load default desk from config/osia.yaml
         self.default_desk = _load_default_desk(self.base_dir)
+
+        # Instagram account pool
+        self._ig_pool = InstagramAccountManager(self.redis)
 
         # Other infrastructure
         self.hf_endpoints = HFEndpointManager()
@@ -1673,6 +1679,38 @@ class OsiaOrchestrator:
     # ADB media capture
     # ------------------------------------------------------------------
 
+    async def _resolve_instagram_cookie(self) -> tuple[str | None, Path | None]:
+        """
+        Return (account_id, cookie_path) for yt-dlp.
+
+        Tries the pool first — get_active_cookie_path() reads content from Redis and
+        materialises it to a temp file. Falls back to the legacy on-disk file.
+        """
+        result = await self._ig_pool.get_active_cookie_path()
+        if result:
+            return result
+        legacy = self.base_dir / "config" / "instagram_cookies.txt"
+        if legacy.exists():
+            return None, legacy
+        return None, None
+
+    @staticmethod
+    def _yt_dlp_auth_error(stderr: str) -> bool:
+        low = stderr.lower()
+        return any(
+            k in low
+            for k in (
+                "login required",
+                "http error 401",
+                "http error 429",
+                "http error 403",
+                "rate-limited",
+                "rate limited",
+                "please log in",
+                "not logged in",
+            )
+        )
+
     async def _fetch_yt_dlp_metadata(self, url: str) -> dict | None:
         """Run yt-dlp --dump-json and return the parsed metadata dict, or None on failure."""
         yt_dlp_bin = self.base_dir / ".venv" / "bin" / "yt-dlp"
@@ -1687,17 +1725,20 @@ class OsiaOrchestrator:
             "--extractor-args",
             "youtube:max_comments=50",
         ]
-        # Inject platform-specific cookie files when available
-        _COOKIE_FILES = {
-            "instagram.com": self.base_dir / "config" / "instagram_cookies.txt",
-            "youtube.com": self.base_dir / "config" / "youtube_cookies.txt",
-            "youtu.be": self.base_dir / "config" / "youtube_cookies.txt",
-        }
-        for domain, cookie_path in _COOKIE_FILES.items():
-            if domain in url and cookie_path.exists():
-                cmd.extend(["--cookies", str(cookie_path)])
-                break
+
+        _host = urlparse(url).hostname or ""
+        ig_account_id: str | None = None
+        if _host in ("www.instagram.com", "instagram.com"):
+            ig_account_id, ig_cookie = await self._resolve_instagram_cookie()
+            if ig_cookie:
+                cmd.extend(["--cookies", str(ig_cookie)])
+                logger.debug("yt-dlp metadata: using IG account %s", ig_account_id or "legacy")
+        else:
+            yt_cookie = self.base_dir / "config" / "youtube_cookies.txt"
+            if _host in ("www.youtube.com", "youtube.com", "youtu.be") and yt_cookie.exists():
+                cmd.extend(["--cookies", str(yt_cookie)])
         cmd.append(url)
+
         try:
             proc = await asyncio.to_thread(
                 subprocess.run,
@@ -1708,6 +1749,9 @@ class OsiaOrchestrator:
             )
             if proc.returncode == 0 and proc.stdout.strip():
                 return json.loads(proc.stdout)
+            if ig_account_id and self._yt_dlp_auth_error(proc.stderr or ""):
+                logger.warning("IG account %s flagged: auth error from yt-dlp metadata", ig_account_id)
+                await self._ig_pool.flag(ig_account_id, reason="yt-dlp metadata auth failure")
         except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
             logger.warning("yt-dlp metadata fetch failed: %s", e)
         return None
@@ -1728,50 +1772,68 @@ class OsiaOrchestrator:
 
         output_path = str(self.base_dir / "osia_ytdlp_video.mp4")
 
-        cmd = [
-            str(yt_dlp_bin),
-            "--no-playlist",
-            # Best quality up to 720p with audio; fall back progressively
-            "-f",
-            "bv[height<=720]+ba/b[height<=720]/best[height<=720]/best",
-            "--merge-output-format",
-            "mp4",
-            "-o",
-            output_path,
-            "--socket-timeout",
-            "30",
-        ]
-        # Re-use the same cookie files as the metadata fetcher
-        _COOKIE_FILES = {
-            "instagram.com": self.base_dir / "config" / "instagram_cookies.txt",
-            "youtube.com": self.base_dir / "config" / "youtube_cookies.txt",
-            "youtu.be": self.base_dir / "config" / "youtube_cookies.txt",
-        }
-        for domain, cookie_path in _COOKIE_FILES.items():
-            if domain in url and cookie_path.exists():
-                cmd.extend(["--cookies", str(cookie_path)])
-                break
+        def _base_cmd() -> list[str]:
+            return [
+                str(yt_dlp_bin),
+                "--no-playlist",
+                "-f",
+                "bv[height<=720]+ba/b[height<=720]/best[height<=720]/best",
+                "--merge-output-format",
+                "mp4",
+                "-o",
+                output_path,
+                "--socket-timeout",
+                "30",
+            ]
+
+        _host = urlparse(url).hostname or ""
+        ig_account_id: str | None = None
+        cmd = _base_cmd()
+        if _host in ("www.instagram.com", "instagram.com"):
+            ig_account_id, ig_cookie = await self._resolve_instagram_cookie()
+            if ig_cookie:
+                cmd.extend(["--cookies", str(ig_cookie)])
+                logger.debug("yt-dlp download: using IG account %s", ig_account_id or "legacy")
+        else:
+            yt_cookie = self.base_dir / "config" / "youtube_cookies.txt"
+            if _host in ("www.youtube.com", "youtube.com", "youtu.be") and yt_cookie.exists():
+                cmd.extend(["--cookies", str(yt_cookie)])
         cmd.append(url)
 
-        try:
-            proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
-            out = Path(output_path)
-            if proc.returncode == 0 and out.exists() and out.stat().st_size > 10_000:
+        for attempt in range(2):
+            try:
+                proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
+                out = Path(output_path)
+                if proc.returncode == 0 and out.exists() and out.stat().st_size > 10_000:
+                    logger.info(
+                        "yt-dlp video download succeeded (%d bytes): %s",
+                        out.stat().st_size,
+                        output_path,
+                    )
+                    return output_path
+
+                # Auth failure on a pooled account — flag it and retry with the next one
+                if ig_account_id and self._yt_dlp_auth_error(proc.stderr or "") and attempt == 0:
+                    logger.warning("IG account %s flagged: auth error — retrying with next account", ig_account_id)
+                    await self._ig_pool.flag(ig_account_id, reason="yt-dlp download auth failure")
+                    next_result = await self._ig_pool.get_next_active_cookie_path(ig_account_id)
+                    if next_result:
+                        ig_account_id, ig_cookie = next_result
+                        cmd = _base_cmd()
+                        cmd.extend(["--cookies", str(ig_cookie), url])
+                        continue
+
                 logger.info(
-                    "yt-dlp video download succeeded (%d bytes): %s",
-                    out.stat().st_size,
-                    output_path,
+                    "yt-dlp video download unavailable (rc=%d) — content may require login.\nstderr: %s",
+                    proc.returncode,
+                    proc.stderr[-300:] if proc.stderr else "(empty)",
                 )
-                return output_path
-            logger.info(
-                "yt-dlp video download unavailable (rc=%d) — content may require login.\nstderr: %s",
-                proc.returncode,
-                proc.stderr[-300:] if proc.stderr else "(empty)",
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("yt-dlp video download timed out after 120s")
-        except Exception as e:
-            logger.warning("yt-dlp video download error: %s", e)
+            except subprocess.TimeoutExpired:
+                logger.warning("yt-dlp video download timed out after 120s")
+            except Exception as e:
+                logger.warning("yt-dlp video download error: %s", e)
+            break
+
         return None
 
     async def _detect_video_duration(self, url: str) -> int | None:
@@ -2639,6 +2701,9 @@ class OsiaOrchestrator:
         source_tracker: SourceTracker | None = None
         url: str | None = None
         _article_fetched = False
+        ig_source_handle: str | None = None
+        ig_display_name: str | None = None
+        ig_channel_url: str | None = None
 
         logger.info("Received new task from %s: %s", source, query)
 
@@ -2785,6 +2850,15 @@ class OsiaOrchestrator:
                     if isinstance(raw_meta, BaseException):
                         logger.warning("Social metadata fetch failed: %s", raw_meta)
                         raw_meta = None
+
+                    # Extract source account for dossier + warmup follow list
+                    ig_source_handle: str | None = None
+                    ig_display_name: str | None = None
+                    ig_channel_url: str | None = None
+                    if raw_meta and (urlparse(url).hostname or "") in ("www.instagram.com", "instagram.com"):
+                        ig_source_handle = raw_meta.get("uploader_id") or raw_meta.get("channel_id")
+                        ig_display_name = raw_meta.get("uploader") or raw_meta.get("channel")
+                        ig_channel_url = raw_meta.get("channel_url") or raw_meta.get("uploader_url")
 
                     adb_analysis = None
                     screen_counts: dict = {}
@@ -3050,21 +3124,20 @@ class OsiaOrchestrator:
                 try:
                     desk_cfg = self.desk_registry.get(assigned_desk)
                     desk_collection = desk_cfg.qdrant.collection
-                    await self.qdrant.upsert(
-                        desk_collection,
-                        analysis,
-                        metadata={
-                            "desk": assigned_desk,
-                            "topic": (original_query or "")[:200],
-                            "source": source,
-                            "reliability_tier": "A",
-                            "timestamp": now.isoformat(),
-                            "entity_tags": entity_names,
-                            "triggered_by": triggered_by,
-                            "model_used": model_id_used,
-                            "wiki_path": wiki_path,
-                        },
-                    )
+                    _meta: dict = {
+                        "desk": assigned_desk,
+                        "topic": (original_query or "")[:200],
+                        "source": source,
+                        "reliability_tier": "A",
+                        "timestamp": now.isoformat(),
+                        "entity_tags": entity_names,
+                        "triggered_by": triggered_by,
+                        "model_used": model_id_used,
+                        "wiki_path": wiki_path,
+                    }
+                    if ig_source_handle:
+                        _meta["source_account"] = ig_source_handle
+                    await self.qdrant.upsert(desk_collection, analysis, metadata=_meta)
                     logger.debug("Stored analysis in Qdrant collection '%s'", desk_collection)
                 except Exception as e:
                     logger.warning("Failed to store analysis in Qdrant for desk '%s': %s", assigned_desk, e)
@@ -3099,6 +3172,11 @@ class OsiaOrchestrator:
                         _tags = ["intsum", _desk_tag, *[_slugify_tag(n) for n in entity_names[:5]]]
                         _desc = f"{_desk_name} intelligence summary — {_date_str}"
 
+                    _source_account = (
+                        (ig_source_handle, social_account_wiki_path("instagram", ig_source_handle))
+                        if ig_source_handle
+                        else None
+                    )
                     _content = build_intsum_page(
                         analysis=analysis,
                         desk_name=_desk_name,
@@ -3107,6 +3185,7 @@ class OsiaOrchestrator:
                         timestamp=now.strftime("%Y-%m-%dT%H:%M:%S UTC"),
                         source=source,
                         entity_links=_entity_links,
+                        source_account=_source_account,
                     )
 
                     async with WikiClient() as wiki:
@@ -3143,6 +3222,38 @@ class OsiaOrchestrator:
                                             tags=["entity", _ENTITY_FOLDER_TAG.get(entity.entity_type, "organisation")],
                                         )
                                     await asyncio.sleep(0.3)
+
+                                # Social account dossier for the content creator
+                                if ig_source_handle:
+                                    try:
+                                        await self.redis.sadd("osia:ig:intel_sources", ig_source_handle)
+                                    except Exception as _re:
+                                        logger.debug("Redis intel_sources stamp failed: %s", _re)
+                                    _sapath = social_account_wiki_path("instagram", ig_source_handle)
+                                    _log_entry = f"- {_date_str} — [{_title}](/{wiki_path})"
+                                    _sa_existing = await wiki.get_page(_sapath)
+                                    if _sa_existing:
+                                        await wiki.append_to_section(_sapath, "intel-log", _log_entry)
+                                        logger.debug("Updated social account dossier: %s", _sapath)
+                                    else:
+                                        _sacontent = build_social_account_page(
+                                            handle=ig_source_handle,
+                                            platform="instagram",
+                                            display_name=ig_display_name or ig_source_handle,
+                                            channel_url=ig_channel_url
+                                            or f"https://www.instagram.com/{ig_source_handle}",
+                                            first_seen=_date_str,
+                                            intsum_path=wiki_path,
+                                            intsum_title=_title,
+                                        )
+                                        await wiki.create_page(
+                                            _sapath,
+                                            f"@{ig_source_handle}",
+                                            _sacontent,
+                                            description=f"Instagram — @{ig_source_handle} — first intel {_date_str}",
+                                            tags=["social-account", "instagram", "intel-source"],
+                                        )
+                                        logger.info("Created social account dossier: @%s", ig_source_handle)
                         except Exception as e:
                             logger.warning("Wiki entity upserts failed (non-fatal): %s", e)
 

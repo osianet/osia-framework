@@ -93,6 +93,11 @@ def entity_wiki_path(entity_type: str, name: str) -> str:
     return f"entities/{folder}/{_slugify(name)}"
 
 
+def social_account_wiki_path(platform: str, handle: str) -> str:
+    """Wiki path for a social media account dossier: entities/social-accounts/<platform>/<handle-slug>"""
+    return f"entities/social-accounts/{platform.lower()}/{_slugify(handle)}"
+
+
 # ---------------------------------------------------------------------------
 # Page content builders
 # ---------------------------------------------------------------------------
@@ -106,9 +111,14 @@ def build_intsum_page(
     timestamp: str,
     source: str,
     entity_links: list[tuple[str, str]],
+    source_account: tuple[str, str] | None = None,
 ) -> str:
-    """Build INTSUM wiki page markdown with AUTO-fenced sections."""
+    """Build INTSUM wiki page markdown with AUTO-fenced sections.
+
+    source_account: optional (handle, wiki_path) for the content creator dossier link.
+    """
     entity_str = ", ".join(f"[{name}](/{path})" for name, path in entity_links) or "*None identified*"
+    creator_row = f"| **Content creator** | [@{source_account[0]}](/{source_account[1]}) |\n" if source_account else ""
     return (
         f"<!-- OSIA:AUTO:metadata -->\n"
         f"| Field | Value |\n"
@@ -117,6 +127,7 @@ def build_intsum_page(
         f"| **Date** | {timestamp} |\n"
         f"| **Desk** | [{desk_name}](/{desk_section}) |\n"
         f"| **Source** | {source} |\n"
+        f"{creator_row}"
         f"| **Reliability** | A |\n"
         f"| **Entities** | {entity_str} |\n"
         f"<!-- /OSIA:AUTO:metadata -->\n\n"
@@ -132,6 +143,46 @@ def build_intsum_page(
         f"<!-- OSIA:AUTO:related-intel -->\n"
         f"*No related intelligence cross-referenced.*\n"
         f"<!-- /OSIA:AUTO:related-intel -->\n"
+    )
+
+
+def build_social_account_page(
+    handle: str,
+    platform: str,
+    display_name: str,
+    channel_url: str,
+    first_seen: str,
+    intsum_path: str,
+    intsum_title: str,
+) -> str:
+    """Build a new social media account dossier wiki page."""
+    profile_url = channel_url or f"https://www.{platform.lower()}.com/{handle}"
+    dn = display_name or handle
+    return (
+        f"<!-- OSIA:AUTO:profile -->\n"
+        f"| Field | Value |\n"
+        f"|-------|-------|\n"
+        f"| **Handle** | @{handle} |\n"
+        f"| **Platform** | {platform.title()} |\n"
+        f"| **Display name** | {dn} |\n"
+        f"| **Channel** | [{profile_url}]({profile_url}) |\n"
+        f"| **First intel** | {first_seen} |\n"
+        f"| **Reels processed** | 1 |\n"
+        f"<!-- /OSIA:AUTO:profile -->\n\n"
+        f"---\n\n"
+        f"<!-- OSIA:AUTO:summary -->\n"
+        f"*No summary compiled. Pending research worker analysis.*\n"
+        f"<!-- /OSIA:AUTO:summary -->\n\n"
+        f"---\n\n"
+        f"<!-- OSIA:AUTO:intel-log -->\n"
+        f"## Intelligence Log\n\n"
+        f"- {first_seen} — [{intsum_title}](/{intsum_path})\n"
+        f"<!-- /OSIA:AUTO:intel-log -->\n\n"
+        f"---\n\n"
+        f"<!-- OSIA:AUTO:research-notes -->\n"
+        f"## Research Notes\n\n"
+        f"*No research notes on file.*\n"
+        f"<!-- /OSIA:AUTO:research-notes -->\n"
     )
 
 

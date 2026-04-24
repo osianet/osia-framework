@@ -121,6 +121,11 @@ class InstagramCreator:
             locale, _tz = _COUNTRY_PROFILE.get(country.upper(), ("en-US", "America/New_York"))
             await self._run_browser_signup(account, locale)
 
+            # Verify cookies were actually saved — if not, the signup succeeded on Instagram's
+            # side but we have nothing usable, so treat it as a failed creation.
+            if not await self._manager.get_cookie_content(account.id):
+                raise RuntimeError("Cookie content missing after signup — creation incomplete")
+
             # --- Promote to WARMING ---
             await self._manager.start_warming(account.id)
             logger.info("Account %s (%s) → WARMING", account.id, account.username)
@@ -181,6 +186,10 @@ class InstagramCreator:
                 await self._signup_flow(page, account, captured_sitekey)
                 await _export_cookies_netscape(page, cookie_path)
                 logger.info("Cookies written to %s", cookie_path)
+                # Also store in Redis so yt-dlp can use them without a file sync
+                content = cookie_path.read_text(encoding="utf-8")
+                await self._manager.set_cookie_content(account.id, content)
+                logger.info("Cookies stored in Redis for account %s", account.id)
             except Exception:
                 try:
                     shot = debug_dir / f"{account.id}_failure.png"
@@ -436,6 +445,7 @@ class InstagramCreator:
         if not otp:
             raise RuntimeError(f"OTP not received within timeout for order {account.smspool_order_id}")
 
+        otp = otp.replace(" ", "")
         logger.info("OTP received: %s", otp)
         await otp_field.click()
         await _type(otp_field, otp)

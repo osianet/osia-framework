@@ -33,6 +33,7 @@ TIMERS=(
     "osia-daily-sitrep.timer"
     "osia-rss-ingress.timer"
     "osia-research-worker.timer"
+    "osia-instagram-pool-health.timer"
 )
 
 CONTAINERS=(

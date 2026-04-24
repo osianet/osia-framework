@@ -3,14 +3,16 @@ Instagram account pool manager.
 
 Redis-backed state machine: CREATED → WARMING → ACTIVE → FLAGGED → RETIRED
 
-Cookie files live at config/ig_cookies/<account_id>.txt.
-SMSPool API is used to purchase OTP phone numbers for account creation.
+Cookie content is stored directly in Redis at osia:ig:cookies:<account_id>
+(Netscape format string). No on-disk files are required; get_active_cookie_path()
+materialises a temp file for yt-dlp right before use.
 """
 
 import asyncio
 import json
 import logging
 import os
+import tempfile
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -34,8 +36,10 @@ _ACTIVE_SET = "osia:ig:pool:active"
 _WARMING_SET = "osia:ig:pool:warming"
 _FLAGGED_SET = "osia:ig:pool:flagged"
 _CURRENT_KEY = "osia:ig:current"
+_COOKIE_KEY_PREFIX = "osia:ig:cookies:"  # + account_id → Netscape cookie string
 
 _ALL_STATE_SETS = (_ACTIVE_SET, _WARMING_SET, _FLAGGED_SET)
+_TEMP_DIR = Path(tempfile.gettempdir())
 
 
 @dataclass
@@ -56,6 +60,8 @@ class InstagramAccount:
     cookies_path: str = ""
     flag_reason: str | None = None
     warmup_sessions: int = 0
+    last_warmed_at: int | None = None
+    has_profile_pic: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> "InstagramAccount":
@@ -126,8 +132,6 @@ class InstagramAccountManager:
     ):
         self._redis = redis_client
         self._base_dir = base_dir or Path(__file__).resolve().parent.parent.parent
-        self._cookie_dir = self._base_dir / "config" / "ig_cookies"
-        self._cookie_dir.mkdir(parents=True, exist_ok=True)
 
         api_key = smspool_api_key or os.getenv("SMSPOOL_API_KEY", "")
         self.smspool: SMSPoolClient | None = SMSPoolClient(api_key) if api_key else None
@@ -218,12 +222,13 @@ class InstagramAccountManager:
         logger.warning("Account %s → FLAGGED: %s", account_id, reason)
 
     async def retire(self, account_id: str) -> None:
-        """Any state → RETIRED (removed from all active sets)."""
+        """Any state → RETIRED. Removes from all state sets and deletes stored cookies."""
         account = await self._require(account_id)
         account.state = "RETIRED"
         await self._save(account)
         for s in _ALL_STATE_SETS:
             await self._redis.srem(s, account_id)
+        await self._redis.delete(f"{_COOKIE_KEY_PREFIX}{account_id}")
         logger.info("Account %s → RETIRED", account_id)
 
     async def unflag(self, account_id: str) -> None:
@@ -245,22 +250,56 @@ class InstagramAccountManager:
         account.warmup_sessions += 1
         await self._save(account)
 
+    async def record_warmup_session(self, account_id: str) -> None:
+        """Increment warmup_sessions and stamp last_warmed_at."""
+        account = await self.get(account_id)
+        if not account:
+            return
+        account.warmup_sessions += 1
+        account.last_warmed_at = int(time.time())
+        await self._save(account)
+
+    async def mark_has_profile_pic(self, account_id: str) -> None:
+        account = await self.get(account_id)
+        if not account:
+            return
+        account.has_profile_pic = True
+        await self._save(account)
+
     # --------------------------------------------------------- Cookie management
 
-    async def import_cookies(self, account_id: str, source_path: Path) -> Path:
-        """Copy an external cookie file into the pool's managed directory."""
+    async def get_cookie_content(self, account_id: str) -> str | None:
+        """Return the stored Netscape cookie string for an account, or None."""
+        raw = await self._redis.get(f"{_COOKIE_KEY_PREFIX}{account_id}")
+        if raw is None:
+            return None
+        return raw if isinstance(raw, str) else raw.decode()
+
+    async def set_cookie_content(self, account_id: str, content: str) -> None:
+        """Store Netscape cookie string in Redis for an account."""
+        await self._redis.set(f"{_COOKIE_KEY_PREFIX}{account_id}", content)
+        logger.debug("Cookie content stored for account %s", account_id)
+
+    async def import_cookies(self, account_id: str, source_path: Path) -> None:
+        """Read a Netscape cookie file from disk and store its content in Redis."""
+        content = source_path.read_text(encoding="utf-8", errors="replace")
+        await self.set_cookie_content(account_id, content)
+        # Keep cookies_path as a record of where the file came from
         account = await self._require(account_id)
-        dest = self._cookie_dir / f"{account_id}.txt"
-        dest.write_bytes(source_path.read_bytes())
-        account.cookies_path = str(dest)
+        account.cookies_path = str(source_path)
         await self._save(account)
-        logger.info("Imported cookies for account %s → %s", account_id, dest)
-        return dest
+        logger.info("Imported cookies for account %s from %s", account_id, source_path)
+
+    def _materialize_cookie(self, account_id: str, content: str) -> Path:
+        """Write cookie content to a temp file and return the path."""
+        temp_path = _TEMP_DIR / f"osia_ig_{account_id}.txt"
+        temp_path.write_text(content, encoding="utf-8")
+        return temp_path
 
     async def get_active_cookie_path(self) -> tuple[str, Path] | None:
         """
-        Round-robin over ACTIVE accounts. Returns (account_id, cookie_path) or None.
-        Advances osia:ig:current to the chosen account on each call.
+        Round-robin over ACTIVE accounts. Returns (account_id, temp_cookie_path) or None.
+        Cookie content is read from Redis and materialised to a temp file for yt-dlp.
         """
         active_ids = list(await self._redis.smembers(_ACTIVE_SET))
         if not active_ids:
@@ -275,26 +314,26 @@ class InstagramAccountManager:
 
         for _ in range(len(active_ids)):
             candidate_id = active_ids[idx % len(active_ids)]
-            account = await self.get(candidate_id)
-            if account and account.cookies_path and Path(account.cookies_path).exists():
+            content = await self.get_cookie_content(candidate_id)
+            if content:
                 await self._redis.set(_CURRENT_KEY, candidate_id)
-                return candidate_id, Path(account.cookies_path)
+                return candidate_id, self._materialize_cookie(candidate_id, content)
             idx += 1
 
         return None
 
     async def get_next_active_cookie_path(self, skip_id: str) -> tuple[str, Path] | None:
-        """Like get_active_cookie_path() but skips a specific account_id (e.g. one just flagged)."""
+        """Like get_active_cookie_path() but skips a specific account_id."""
         active_ids = list(await self._redis.smembers(_ACTIVE_SET))
         active_ids = [a for a in active_ids if a != skip_id]
         if not active_ids:
             return None
         active_ids.sort()
         for aid in active_ids:
-            account = await self.get(aid)
-            if account and account.cookies_path and Path(account.cookies_path).exists():
+            content = await self.get_cookie_content(aid)
+            if content:
                 await self._redis.set(_CURRENT_KEY, aid)
-                return aid, Path(account.cookies_path)
+                return aid, self._materialize_cookie(aid, content)
         return None
 
     # --------------------------------------------------------- Pool health
@@ -314,13 +353,19 @@ class InstagramAccountManager:
         return counts["warming"] < _WARMING_MIN
 
     async def eligible_for_promotion(self) -> list[str]:
-        """Return WARMING account_ids that have exceeded IG_WARMUP_DAYS."""
+        """Return WARMING account_ids that meet both the age and session-count thresholds."""
         warming_ids = await self._redis.smembers(_WARMING_SET)
+        min_sessions = int(os.getenv("IG_WARMUP_MIN_SESSIONS", "5"))
         threshold = int(time.time()) - _WARMUP_DAYS * 86400
         eligible = []
         for aid in warming_ids:
             account = await self.get(aid)
-            if account and account.warmed_since and account.warmed_since <= threshold:
+            if (
+                account
+                and account.warmed_since
+                and account.warmed_since <= threshold
+                and account.warmup_sessions >= min_sessions
+            ):
                 eligible.append(aid)
         return eligible
 
