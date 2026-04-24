@@ -1154,10 +1154,7 @@ def _sanitize_assistant_message(msg: dict) -> dict:
     emits these and then rejects its own output with a 400 on the next round.
     """
     cleaned: dict = {"role": "assistant", "content": msg.get("content") or ""}
-    valid_calls = [
-        tc for tc in (msg.get("tool_calls") or [])
-        if tc.get("function", {}).get("name", "").strip()
-    ]
+    valid_calls = [tc for tc in (msg.get("tool_calls") or []) if tc.get("function", {}).get("name", "").strip()]
     if valid_calls:
         cleaned["tool_calls"] = valid_calls
     return cleaned
@@ -1558,10 +1555,7 @@ async def _wiki_append_research_note(job: ResearchJob, text: str, http: httpx.As
         excerpt = text[:300].replace("\n", " ").strip()
         if len(text) > 300:
             excerpt += "…"
-        note = (
-            f"- **{date_str}** — [{desk_label}](/{desk_section}) research on **{job.topic}**\n\n"
-            f"  > {excerpt}"
-        )
+        note = f"- **{date_str}** — [{desk_label}](/{desk_section}) research on **{job.topic}**\n\n  > {excerpt}"
 
         async with WikiClient(http) as wiki:
             results = await wiki.search_pages(job.topic[:50])
@@ -1732,7 +1726,10 @@ async def main():
 
         logger.info(
             "=== Batch complete. succeeded=%d failed=%d skipped=%d | queue depth: %d ===",
-            succeeded, failed, skipped, queue.depth(),
+            succeeded,
+            failed,
+            skipped,
+            queue.depth(),
         )
 
 
