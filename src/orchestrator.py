@@ -1726,15 +1726,16 @@ class OsiaOrchestrator:
             "youtube:max_comments=50",
         ]
 
+        _host = urlparse(url).hostname or ""
         ig_account_id: str | None = None
-        if "instagram.com" in url:
+        if _host in ("www.instagram.com", "instagram.com"):
             ig_account_id, ig_cookie = await self._resolve_instagram_cookie()
             if ig_cookie:
                 cmd.extend(["--cookies", str(ig_cookie)])
                 logger.debug("yt-dlp metadata: using IG account %s", ig_account_id or "legacy")
         else:
             yt_cookie = self.base_dir / "config" / "youtube_cookies.txt"
-            if ("youtube.com" in url or "youtu.be" in url) and yt_cookie.exists():
+            if _host in ("www.youtube.com", "youtube.com", "youtu.be") and yt_cookie.exists():
                 cmd.extend(["--cookies", str(yt_cookie)])
         cmd.append(url)
 
@@ -1785,16 +1786,17 @@ class OsiaOrchestrator:
                 "30",
             ]
 
+        _host = urlparse(url).hostname or ""
         ig_account_id: str | None = None
         cmd = _base_cmd()
-        if "instagram.com" in url:
+        if _host in ("www.instagram.com", "instagram.com"):
             ig_account_id, ig_cookie = await self._resolve_instagram_cookie()
             if ig_cookie:
                 cmd.extend(["--cookies", str(ig_cookie)])
                 logger.debug("yt-dlp download: using IG account %s", ig_account_id or "legacy")
         else:
             yt_cookie = self.base_dir / "config" / "youtube_cookies.txt"
-            if ("youtube.com" in url or "youtu.be" in url) and yt_cookie.exists():
+            if _host in ("www.youtube.com", "youtube.com", "youtu.be") and yt_cookie.exists():
                 cmd.extend(["--cookies", str(yt_cookie)])
         cmd.append(url)
 
@@ -2853,7 +2855,7 @@ class OsiaOrchestrator:
                     ig_source_handle: str | None = None
                     ig_display_name: str | None = None
                     ig_channel_url: str | None = None
-                    if raw_meta and "instagram.com" in url.lower():
+                    if raw_meta and (urlparse(url).hostname or "").endswith("instagram.com"):
                         ig_source_handle = raw_meta.get("uploader_id") or raw_meta.get("channel_id")
                         ig_display_name = raw_meta.get("uploader") or raw_meta.get("channel")
                         ig_channel_url = raw_meta.get("channel_url") or raw_meta.get("uploader_url")

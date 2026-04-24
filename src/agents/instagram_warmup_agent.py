@@ -99,7 +99,7 @@ async def _dismiss_overlays(page) -> None:
             if await btn.is_visible(timeout=1_200):
                 await btn.click()
                 await _pause(0.4, 0.8)
-        except Exception:
+        except Exception:  # noqa: BLE001 — best-effort: overlay may not exist, non-fatal
             pass
 
 
@@ -205,7 +205,7 @@ class InstagramWarmupSession:
         await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=30_000)
         try:
             await page.wait_for_load_state("networkidle", timeout=10_000)
-        except Exception:
+        except Exception:  # noqa: BLE001 — networkidle timeout is non-fatal; domcontentloaded already awaited
             pass
         await _dismiss_overlays(page)
         await _pause(1.5, 3.0)
@@ -333,7 +333,7 @@ class InstagramWarmupSession:
                 if await change_link.is_visible(timeout=4_000):
                     await change_link.click()
                     await _pause(0.8, 1.5)
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort: link absent on some IG UI variants
                 pass
 
             file_input = page.locator('input[type="file"]').first
@@ -347,7 +347,7 @@ class InstagramWarmupSession:
                         await btn.click()
                         await _pause(1.0, 2.0)
                         break
-                except Exception:
+                except Exception:  # noqa: BLE001 — best-effort: confirm button varies by IG UI version
                     pass
 
             await self._manager.mark_has_profile_pic(account.id)
