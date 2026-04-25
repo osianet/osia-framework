@@ -145,11 +145,27 @@ async def main() -> None:
         dest="warm_all",
         help="Run a warm-up session for every WARMING account (with inter-session delay).",
     )
+    group.add_argument(
+        "--relogin",
+        metavar="ID",
+        help="Open headed browser, fill stored credentials, capture fresh cookies.",
+    )
+    group.add_argument(
+        "--relogin-all",
+        action="store_true",
+        dest="relogin_all",
+        help="Re-login every ACTIVE/WARMING account in sequence to refresh cookies.",
+    )
 
     parser.add_argument(
         "--headed",
         action="store_true",
         help="Run browser in visible (non-headless) mode",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Save a screenshot at each warmup step to logs/ig_debug/<id>/",
     )
     parser.add_argument(
         "--no-avatar",
@@ -244,8 +260,10 @@ async def main() -> None:
 
         elif args.warm:
             upload_avatar = not args.no_avatar
-            session = InstagramWarmupSession(mgr, r, headed=args.headed, upload_avatar=upload_avatar)
-            print(f"Running warm-up for {args.warm} (headed={args.headed}, avatar={upload_avatar})…")
+            session = InstagramWarmupSession(mgr, r, headed=args.headed, upload_avatar=upload_avatar, debug=args.debug)
+            print(
+                f"Running warm-up for {args.warm} (headed={args.headed}, avatar={upload_avatar}, debug={args.debug})…"
+            )
             success = await session.run(args.warm)
             print("Done." if success else "Session failed — check logs.")
 
@@ -255,7 +273,9 @@ async def main() -> None:
                 print("No WARMING accounts.")
             else:
                 upload_avatar = not args.no_avatar
-                session = InstagramWarmupSession(mgr, r, headed=args.headed, upload_avatar=upload_avatar)
+                session = InstagramWarmupSession(
+                    mgr, r, headed=args.headed, upload_avatar=upload_avatar, debug=args.debug
+                )
                 inter_delay = int(os.getenv("IG_INTER_SESSION_DELAY_SECS", "900"))
                 warming_accounts = []
                 for aid in warming_ids:
@@ -270,6 +290,26 @@ async def main() -> None:
                     print(f"[{i + 1}/{len(warming_accounts)}] Warming @{acc.username}…")
                     success = await session.run(acc.id)
                     print("  OK" if success else "  FAILED")
+
+        elif args.relogin:
+            session = InstagramWarmupSession(mgr, r, debug=args.debug)
+            print(f"Re-login for {args.relogin}…")
+            success = await session.relogin(args.relogin)
+            print("Fresh cookies saved." if success else "Re-login failed — check logs.")
+
+        elif args.relogin_all:
+            all_accounts = await mgr.list_all()
+            targets = [a for a in all_accounts if a.state in ("ACTIVE", "WARMING")]
+            if not targets:
+                print("No ACTIVE or WARMING accounts.")
+            else:
+                session = InstagramWarmupSession(mgr, r, debug=args.debug)
+                for i, acc in enumerate(targets):
+                    print(f"\n[{i + 1}/{len(targets)}] Re-login @{acc.username} ({acc.id[:8]}…)")
+                    success = await session.relogin(acc.id)
+                    print("  Fresh cookies saved." if success else "  FAILED — skipping.")
+                    if i < len(targets) - 1:
+                        input("\nPress Enter when ready for the next account…")
 
     finally:
         await r.aclose()

@@ -1,5 +1,6 @@
 {
   "enabledPlugins": {
-    "qdrant@qdrant": true
+    "qdrant@qdrant": true,
+    "github@claude-plugins-official": true
   }
 }
