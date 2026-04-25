@@ -57,6 +57,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger("osia.research_worker")
 
+
+def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
+    """Extract a human-readable error message from an API error response."""
+    try:
+        body = exc.response.json()
+        err = body.get("error")
+        if isinstance(err, dict):
+            return err.get("message") or str(err)
+        if err:
+            return str(err)
+        if body.get("detail"):
+            return str(body["detail"])
+        if body.get("message"):
+            return str(body["message"])
+    except Exception:
+        pass  # response body is not JSON — fall through to raw text
+    return exc.response.text[:300]
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -1251,10 +1270,10 @@ async def run_research_loop_openai_compat(
                     await asyncio.sleep(wait)
                     continue
                 logger.error(
-                    "API HTTP %d on round %d — body: %s",
+                    "API HTTP %d on round %d — %s",
                     e.response.status_code,
                     round_num,
-                    e.response.text[:500],
+                    _http_error_detail(e),
                 )
                 raise
             except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError) as e:

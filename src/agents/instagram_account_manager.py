@@ -269,11 +269,33 @@ class InstagramAccountManager:
     # --------------------------------------------------------- Cookie management
 
     async def get_cookie_content(self, account_id: str) -> str | None:
-        """Return the stored Netscape cookie string for an account, or None."""
+        """Return the stored Netscape cookie string for an account, or None.
+
+        Lazy-migrates from the on-disk cookies_path if Redis is empty — handles
+        accounts that were created before Phase 3 moved storage to Redis.
+        """
         raw = await self._redis.get(f"{_COOKIE_KEY_PREFIX}{account_id}")
-        if raw is None:
-            return None
-        return raw if isinstance(raw, str) else raw.decode()
+        if raw is not None:
+            return raw if isinstance(raw, str) else raw.decode()
+
+        # Lazy migration: seed Redis from the on-disk file recorded in account data
+        try:
+            account = await self.get(account_id)
+            if account and account.cookies_path:
+                path = Path(account.cookies_path)
+                if path.exists():
+                    content = path.read_text(encoding="utf-8", errors="replace")
+                    await self.set_cookie_content(account_id, content)
+                    logger.info(
+                        "Lazy-migrated cookies from disk to Redis for account %s (@%s)",
+                        account_id,
+                        account.username,
+                    )
+                    return content
+        except Exception as exc:
+            logger.warning("Cookie lazy-migration failed for %s: %s", account_id, exc)
+
+        return None
 
     async def set_cookie_content(self, account_id: str, content: str) -> None:
         """Store Netscape cookie string in Redis for an account."""
@@ -301,12 +323,13 @@ class InstagramAccountManager:
         Round-robin over ACTIVE accounts. Returns (account_id, temp_cookie_path) or None.
         Cookie content is read from Redis and materialised to a temp file for yt-dlp.
         """
-        active_ids = list(await self._redis.smembers(_ACTIVE_SET))
+        active_ids = [a.decode() if isinstance(a, bytes) else a for a in await self._redis.smembers(_ACTIVE_SET)]
         if not active_ids:
             return None
 
         active_ids.sort()
-        current = await self._redis.get(_CURRENT_KEY)
+        raw_current = await self._redis.get(_CURRENT_KEY)
+        current = raw_current.decode() if isinstance(raw_current, bytes) else raw_current
         if current and current in active_ids:
             idx = (active_ids.index(current) + 1) % len(active_ids)
         else:
@@ -322,10 +345,14 @@ class InstagramAccountManager:
 
         return None
 
-    async def get_next_active_cookie_path(self, skip_id: str) -> tuple[str, Path] | None:
-        """Like get_active_cookie_path() but skips a specific account_id."""
-        active_ids = list(await self._redis.smembers(_ACTIVE_SET))
-        active_ids = [a for a in active_ids if a != skip_id]
+    async def get_next_active_cookie_path(self, skip_ids: str | set[str]) -> tuple[str, Path] | None:
+        """Like get_active_cookie_path() but skips one or more already-tried account IDs."""
+        exclude = {skip_ids} if isinstance(skip_ids, str) else set(skip_ids)
+        active_ids = [
+            a.decode() if isinstance(a, bytes) else a
+            for a in await self._redis.smembers(_ACTIVE_SET)
+            if (a.decode() if isinstance(a, bytes) else a) not in exclude
+        ]
         if not active_ids:
             return None
         active_ids.sort()

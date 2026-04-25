@@ -46,6 +46,25 @@ from src.intelligence.wiki_client import (
 
 logger = logging.getLogger("osia.orchestrator")
 
+
+def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
+    """Extract a human-readable error message from an API error response."""
+    try:
+        body = exc.response.json()
+        err = body.get("error")
+        if isinstance(err, dict):
+            return err.get("message") or str(err)
+        if err:
+            return str(err)
+        if body.get("detail"):
+            return str(body["detail"])
+        if body.get("message"):
+            return str(body["message"])
+    except Exception:
+        pass  # response body is not JSON — fall through to raw text
+    return exc.response.text[:300]
+
+
 _ENTITY_FOLDER_TAG: dict[str, str] = {
     "Person": "person",
     "Organisation": "organisation",
@@ -1728,32 +1747,54 @@ class OsiaOrchestrator:
 
         _host = urlparse(url).hostname or ""
         ig_account_id: str | None = None
+        ig_cookie: Path | None = None
         if _host in ("www.instagram.com", "instagram.com"):
-            ig_account_id, ig_cookie = await self._resolve_instagram_cookie()
-            if ig_cookie:
-                cmd.extend(["--cookies", str(ig_cookie)])
+            result = await self._resolve_instagram_cookie()
+            if result:
+                ig_account_id, ig_cookie = result
                 logger.debug("yt-dlp metadata: using IG account %s", ig_account_id or "legacy")
         else:
             yt_cookie = self.base_dir / "config" / "youtube_cookies.txt"
             if _host in ("www.youtube.com", "youtube.com", "youtu.be") and yt_cookie.exists():
-                cmd.extend(["--cookies", str(yt_cookie)])
-        cmd.append(url)
+                ig_cookie = yt_cookie
 
-        try:
-            proc = await asyncio.to_thread(
-                subprocess.run,
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if proc.returncode == 0 and proc.stdout.strip():
-                return json.loads(proc.stdout)
-            if ig_account_id and self._yt_dlp_auth_error(proc.stderr or ""):
-                logger.warning("IG account %s flagged: auth error from yt-dlp metadata", ig_account_id)
-                await self._ig_pool.flag(ig_account_id, reason="yt-dlp metadata auth failure")
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception) as e:
-            logger.warning("yt-dlp metadata fetch failed: %s", e)
+        tried_accounts: set[str] = {ig_account_id} if ig_account_id else set()
+        _MAX_IG_ATTEMPTS = 3
+
+        for attempt in range(_MAX_IG_ATTEMPTS):
+            attempt_cmd = list(cmd)
+            if ig_cookie:
+                attempt_cmd.extend(["--cookies", str(ig_cookie)])
+            attempt_cmd.append(url)
+            try:
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    attempt_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                )
+                if proc.returncode == 0 and proc.stdout.strip():
+                    return json.loads(proc.stdout)
+                if ig_account_id and self._yt_dlp_auth_error(proc.stderr or ""):
+                    logger.warning(
+                        "IG account %s flagged: auth error from metadata (attempt %d/%d) — trying next",
+                        ig_account_id,
+                        attempt + 1,
+                        _MAX_IG_ATTEMPTS,
+                    )
+                    await self._ig_pool.flag(ig_account_id, reason="yt-dlp metadata auth failure")
+                    next_result = await self._ig_pool.get_next_active_cookie_path(tried_accounts)
+                    if next_result:
+                        ig_account_id, ig_cookie = next_result
+                        tried_accounts.add(ig_account_id)
+                        continue
+            except subprocess.TimeoutExpired:
+                logger.warning("yt-dlp metadata fetch timed out after 60s")
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning("yt-dlp metadata fetch failed: %s", e)
+            break
+
         return None
 
     async def _download_video_yt_dlp(self, url: str) -> str | None:
@@ -1788,19 +1829,25 @@ class OsiaOrchestrator:
 
         _host = urlparse(url).hostname or ""
         ig_account_id: str | None = None
-        cmd = _base_cmd()
+        ig_cookie: Path | None = None
         if _host in ("www.instagram.com", "instagram.com"):
-            ig_account_id, ig_cookie = await self._resolve_instagram_cookie()
-            if ig_cookie:
-                cmd.extend(["--cookies", str(ig_cookie)])
+            result = await self._resolve_instagram_cookie()
+            if result:
+                ig_account_id, ig_cookie = result
                 logger.debug("yt-dlp download: using IG account %s", ig_account_id or "legacy")
         else:
             yt_cookie = self.base_dir / "config" / "youtube_cookies.txt"
             if _host in ("www.youtube.com", "youtube.com", "youtu.be") and yt_cookie.exists():
-                cmd.extend(["--cookies", str(yt_cookie)])
-        cmd.append(url)
+                ig_cookie = yt_cookie
 
-        for attempt in range(2):
+        tried_accounts: set[str] = {ig_account_id} if ig_account_id else set()
+        _MAX_IG_ATTEMPTS = 3
+
+        for attempt in range(_MAX_IG_ATTEMPTS):
+            cmd = _base_cmd()
+            if ig_cookie:
+                cmd.extend(["--cookies", str(ig_cookie)])
+            cmd.append(url)
             try:
                 proc = await asyncio.to_thread(subprocess.run, cmd, capture_output=True, text=True, timeout=120)
                 out = Path(output_path)
@@ -1812,15 +1859,19 @@ class OsiaOrchestrator:
                     )
                     return output_path
 
-                # Auth failure on a pooled account — flag it and retry with the next one
-                if ig_account_id and self._yt_dlp_auth_error(proc.stderr or "") and attempt == 0:
-                    logger.warning("IG account %s flagged: auth error — retrying with next account", ig_account_id)
+                # Auth failure on a pooled account — flag it and try the next one
+                if ig_account_id and self._yt_dlp_auth_error(proc.stderr or ""):
+                    logger.warning(
+                        "IG account %s flagged: auth error (attempt %d/%d) — trying next account",
+                        ig_account_id,
+                        attempt + 1,
+                        _MAX_IG_ATTEMPTS,
+                    )
                     await self._ig_pool.flag(ig_account_id, reason="yt-dlp download auth failure")
-                    next_result = await self._ig_pool.get_next_active_cookie_path(ig_account_id)
+                    next_result = await self._ig_pool.get_next_active_cookie_path(tried_accounts)
                     if next_result:
                         ig_account_id, ig_cookie = next_result
-                        cmd = _base_cmd()
-                        cmd.extend(["--cookies", str(ig_cookie), url])
+                        tried_accounts.add(ig_account_id)
                         continue
 
                 logger.info(
@@ -2522,6 +2573,12 @@ class OsiaOrchestrator:
                 )
                 resp.raise_for_status()
                 return resp.json()["choices"][0]["message"]["content"].strip()
+        except httpx.HTTPStatusError as e:
+            logger.warning(
+                "Venice routing failed (HTTP %d — %s) — falling back to OpenRouter",
+                e.response.status_code,
+                _http_error_detail(e),
+            )
         except Exception as e:
             logger.warning("Venice routing failed (%s) — falling back to OpenRouter", e)
 
@@ -2545,6 +2602,12 @@ class OsiaOrchestrator:
                 )
                 resp.raise_for_status()
                 return resp.json()["choices"][0]["message"]["content"].strip()
+        except httpx.HTTPStatusError as e:
+            logger.warning(
+                "OpenRouter routing failed (HTTP %d — %s) — falling back to Gemini",
+                e.response.status_code,
+                _http_error_detail(e),
+            )
         except Exception as e:
             logger.warning("OpenRouter routing failed (%s) — falling back to Gemini", e)
 
@@ -3020,12 +3083,16 @@ class OsiaOrchestrator:
             return f"- {s} ({cfg.name})"
 
         valid_desks_list = "\n".join(_desk_line(s) for s in sorted(self.valid_desks))
+        # For routing, use the original user input (URL / raw query) to avoid sending
+        # the full expanded query (which may include a 130K-char YouTube transcript) to
+        # Venice, which has a 32K token context window.
+        _route_topic = original_query or (media_analysis[:2000] if media_analysis else query[:2000])
         plan_prompt = f"""
         {mandate}
 
         ---
 
-        You are the Chief of Staff for OSIA. A new Request for Information (RFI) has come in: '{query if original_query else (media_analysis or query)}'
+        You are the Chief of Staff for OSIA. A new Request for Information (RFI) has come in: '{_route_topic}'
 
         Which of our specialized desks should analyze this? Choose ONE from the following list:
 {valid_desks_list}
