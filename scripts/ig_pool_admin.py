@@ -261,7 +261,9 @@ async def main() -> None:
         elif args.warm:
             upload_avatar = not args.no_avatar
             session = InstagramWarmupSession(mgr, r, headed=args.headed, upload_avatar=upload_avatar, debug=args.debug)
-            print(f"Running warm-up for {args.warm} (headed={args.headed}, avatar={upload_avatar}, debug={args.debug})…")
+            print(
+                f"Running warm-up for {args.warm} (headed={args.headed}, avatar={upload_avatar}, debug={args.debug})…"
+            )
             success = await session.run(args.warm)
             print("Done." if success else "Session failed — check logs.")
 
@@ -271,7 +273,9 @@ async def main() -> None:
                 print("No WARMING accounts.")
             else:
                 upload_avatar = not args.no_avatar
-                session = InstagramWarmupSession(mgr, r, headed=args.headed, upload_avatar=upload_avatar, debug=args.debug)
+                session = InstagramWarmupSession(
+                    mgr, r, headed=args.headed, upload_avatar=upload_avatar, debug=args.debug
+                )
                 inter_delay = int(os.getenv("IG_INTER_SESSION_DELAY_SECS", "900"))
                 warming_accounts = []
                 for aid in warming_ids:

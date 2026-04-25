@@ -312,7 +312,12 @@ class InstagramWarmupSession:
         # Instagram's desktop login form uses name="email" / name="pass".
         # Fall back to broader selectors in case of future changes.
         username_field = None
-        for sel in ['input[name="email"]', 'input[name="username"]', 'input[autocomplete*="username"]', 'input[type="text"]']:
+        for sel in [
+            'input[name="email"]',
+            'input[name="username"]',
+            'input[autocomplete*="username"]',
+            'input[type="text"]',
+        ]:
             try:
                 el = page.locator(sel).first
                 if await el.is_visible(timeout=5_000):
@@ -478,14 +483,13 @@ class InstagramWarmupSession:
         """List *.conf files in the countries dir via sudo ls."""
         result = subprocess.run(["sudo", "ls", str(self._countries_dir)], capture_output=True, text=True, check=True)
         return [
-            self._countries_dir / name.strip()
-            for name in result.stdout.splitlines()
-            if name.strip().endswith(".conf")
+            self._countries_dir / name.strip() for name in result.stdout.splitlines() if name.strip().endswith(".conf")
         ]
 
     def _current_vpn_slug(self) -> str | None:
         """Identify current VPN slug by matching wg0.conf endpoint against country configs."""
         import re
+
         try:
             text = self._sudo_read(self._wg_conf)
             m = re.search(r"Endpoint\s*=\s*(\S+)", text)
@@ -515,6 +519,7 @@ class InstagramWarmupSession:
     async def _switch_vpn(self, slug: str) -> None:
         """Rewrite wg0.conf peer block via sudo tee and restart wg0."""
         import re
+
         conf = self._countries_dir / f"{slug}.conf"
         conf_text = self._sudo_read(conf)
 
@@ -529,10 +534,7 @@ class InstagramWarmupSession:
         idx = wg_text.find("[Peer]")
         interface_block = wg_text[:idx].rstrip() if idx != -1 else wg_text.rstrip()
 
-        new_conf = (
-            f"{interface_block}\n\n[Peer]\nPublicKey = {pubkey}\n"
-            f"AllowedIPs = 0.0.0.0/0\nEndpoint = {endpoint}\n"
-        )
+        new_conf = f"{interface_block}\n\n[Peer]\nPublicKey = {pubkey}\nAllowedIPs = 0.0.0.0/0\nEndpoint = {endpoint}\n"
         proc = await asyncio.to_thread(
             subprocess.run,
             ["sudo", "tee", str(self._wg_conf)],
@@ -708,10 +710,10 @@ class InstagramWarmupSession:
                 'button:has(img[alt*="profile picture"])',
                 'span:has(img[alt*="profile picture"])',
                 # Desktop IG wraps the avatar in a <button> with an SVG or <img> inside
-                'header button img',
-                'header button svg',
-                'header section button',
-                'header button',
+                "header button img",
+                "header button svg",
+                "header section button",
+                "header button",
             ]:
                 try:
                     el = page.locator(sel).first
