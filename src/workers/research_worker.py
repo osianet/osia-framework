@@ -72,7 +72,7 @@ def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
         if body.get("message"):
             return str(body["message"])
     except Exception:
-        pass
+        pass  # response body is not JSON — fall through to raw text
     return exc.response.text[:300]
 
 
