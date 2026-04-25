@@ -31,6 +31,28 @@ load_dotenv()
 
 logger = logging.getLogger("osia.desk_registry")
 
+
+def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
+    """Extract a human-readable error message from an API error response.
+
+    Tries common OpenAI-compat JSON shapes before falling back to raw text.
+    """
+    try:
+        body = exc.response.json()
+        err = body.get("error")
+        if isinstance(err, dict):
+            return err.get("message") or str(err)
+        if err:
+            return str(err)
+        if body.get("detail"):
+            return str(body["detail"])
+        if body.get("message"):
+            return str(body["message"])
+    except Exception:
+        pass
+    return exc.response.text[:300]
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -370,12 +392,17 @@ class DeskRegistry:
             if desk.model_fallback is None:
                 raise
 
+            _exc_detail = (
+                f"HTTP {primary_exc.response.status_code} — {_http_error_detail(primary_exc)}"
+                if isinstance(primary_exc, httpx.HTTPStatusError)
+                else str(primary_exc)
+            )
             logger.warning(
                 "Desk '%s': primary model %s/%s failed (%s). Attempting fallback %s/%s.",
                 slug,
                 desk.model_primary.provider,
                 desk.model_primary.model_id,
-                primary_exc,
+                _exc_detail,
                 desk.model_fallback.provider,
                 desk.model_fallback.model_id,
             )
@@ -445,11 +472,19 @@ class DeskRegistry:
                 )
             )
         elif model_cfg.provider == "venice":
+            # venice-uncensored has a 32,768 token limit. Truncate to ~90K chars
+            # (~22K tokens) to leave room for the system prompt and max_tokens.
+            _VENICE_MAX_CHARS = 90_000
+            venice_message = (
+                assembled_message[:_VENICE_MAX_CHARS] + "\n\n[CONTENT TRUNCATED — Venice context limit]"
+                if len(assembled_message) > _VENICE_MAX_CHARS
+                else assembled_message
+            )
             return await self._invoke_with_retry(
                 lambda: self._call_openai_compat(
                     desk,
                     model_cfg,
-                    assembled_message,
+                    venice_message,
                     base_url="https://api.venice.ai/api",
                     api_key=os.getenv("VENICE_API_KEY", ""),
                 )
@@ -472,15 +507,21 @@ class DeskRegistry:
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code in retriable_statuses and attempt < retry_count:
                     logger.warning(
-                        "HTTP %d on attempt %d/%d — retrying in %ds",
+                        "HTTP %d on attempt %d/%d — retrying in %ds: %s",
                         exc.response.status_code,
                         attempt,
                         retry_count,
                         retry_delay,
+                        _http_error_detail(exc),
                     )
                     await asyncio.sleep(retry_delay)
                     last_exc = exc
                 else:
+                    logger.error(
+                        "HTTP %d (non-retriable) — %s",
+                        exc.response.status_code,
+                        _http_error_detail(exc),
+                    )
                     raise
             except Exception as exc:
                 raise exc

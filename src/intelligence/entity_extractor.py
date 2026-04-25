@@ -44,7 +44,6 @@ GEMINI_MODEL_ID = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 RESEARCH_QUEUE_KEY = "osia:research_queue"
-SEEN_TOPICS_KEY = "osia:research:seen_topics"
 
 # ---------------------------------------------------------------------------
 # Entity-to-desk routing table
@@ -243,7 +242,15 @@ class EntityExtractor:
     ) -> None:
         """
         Push a research job to osia:research_queue for each novel entity.
-        Skips entities whose normalised name is already in osia:research:seen_topics.
+
+        Deduplication strategy:
+        - Within this batch: skip duplicate names (case-insensitive) so a single
+          task can't queue the same entity twice.
+        - Across tasks: skip entities whose worker cooldown key is still live
+          (osia:research:seen:{md5}, TTL set by the research worker after completion).
+          This is the sole cross-task gate — a permanent set would silently block
+          entities forever as Redis state accumulates.
+
         No-op when entity list is empty.
         """
         if not entities:
@@ -252,18 +259,19 @@ class EntityExtractor:
         redis = aioredis.from_url(self._redis_url, decode_responses=True)
         try:
             enqueued = 0
+            seen_this_batch: set[str] = set()
             for entity in entities:
                 normalised = entity.name.lower().strip()
 
-                already_seen = await redis.sismember(SEEN_TOPICS_KEY, normalised)
-                if not already_seen:
-                    # Also check the worker's TTL-based cooldown key so that a Redis
-                    # restart (which clears seen_topics) doesn't re-enqueue recently
-                    # processed topics while their cooldown window is still active.
-                    topic_md5 = hashlib.md5(normalised.encode(), usedforsecurity=False).hexdigest()
-                    already_seen = bool(await redis.exists(f"osia:research:seen:{topic_md5}"))
-                if already_seen:
-                    logger.debug("Skipping already-seen entity: %r", entity.name)
+                # Within-batch dedup
+                if normalised in seen_this_batch:
+                    logger.debug("Skipping duplicate entity in batch: %r", entity.name)
+                    continue
+
+                # Cross-task cooldown: worker sets this key (with TTL) after research completes
+                topic_md5 = hashlib.md5(normalised.encode(), usedforsecurity=False).hexdigest()
+                if await redis.exists(f"osia:research:seen:{topic_md5}"):
+                    logger.debug("Skipping recently researched entity: %r", entity.name)
                     continue
 
                 desk = ENTITY_DESK_ROUTING[entity.entity_type]
@@ -279,7 +287,7 @@ class EntityExtractor:
                 )
 
                 await redis.rpush(RESEARCH_QUEUE_KEY, payload)
-                await redis.sadd(SEEN_TOPICS_KEY, normalised)
+                seen_this_batch.add(normalised)
 
                 logger.info(
                     "Enqueued research job for %r → %s (triggered_by: %s)",
