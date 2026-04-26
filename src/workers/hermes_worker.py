@@ -1,6 +1,6 @@
 """
 OSIA Hermes Worker — validates low-confidence intel by searching for corroborating
-or contradicting evidence, then updates Qdrant payload in-place.
+or contradicting evidence, then updates Qdrant payload in-place and enriches the wiki.
 
 Named after Hermes, messenger of the gods and guide across boundaries — the worker
 traverses sources and carries evidence back to validate existing intelligence rather
@@ -11,6 +11,30 @@ For each desk, scrolls the Qdrant collection for points where reliability_tier i
 not "A" (RSS-ingested B-tier, unknown ?, research worker outputs, etc.) that have
 not been recently checked. Runs a focused research loop per point and patches the
 payload in-place with a structured verdict and updated reliability_tier.
+
+After corroboration, wiki enrichment follows a three-path strategy:
+  1. Payload carries wiki_path  →  patch corroboration section + update metadata tier
+  2. No wiki_path, topic known  →  search wiki for an entity page and append a note
+  3. CORROBORATED HIGH/MODERATE, no wiki page found  →  create entity page; stamp wiki_path back to Qdrant
+
+A quality maintenance pass also runs after each desk's corroboration batch:
+  - Deletes empty/stub points (text < HERMES_CLEANUP_MIN_TEXT_LEN chars)
+  - Purges tier-C contradiction-flagged points older than HERMES_CLEANUP_STALE_DAYS
+  - Purges low-tier points checked HERMES_CLEANUP_UNVERIFIED_CHECKS+ times, always
+    UNVERIFIED, and older than HERMES_CLEANUP_UNVERIFIED_AGE_DAYS
+
+Distributed operation (multiple nodes, shared Qdrant + Redis + wiki):
+  Each desk is protected by a Redis lease: osia:hermes:lease:<desk-slug>
+  Workers claim a desk atomically via SET NX before processing and release via DEL on
+  completion (TTL = HERMES_LEASE_TTL seconds so crashed workers don't block forever).
+  Workers that find a desk already leased skip it and move on — across N desks, up to
+  N workers can run fully in parallel with zero overlap.
+
+  If Redis is unavailable, a warning is logged and the worker proceeds without
+  distributed locking (single-node safe mode).
+
+  To inspect active leases:  redis-cli KEYS 'osia:hermes:lease:*'
+  To force-clear all leases: uv run python -m src.workers.hermes_worker --clear-leases
 
 Model routing:
   All desks → nousresearch/hermes-4-70b via OpenRouter (SOTA on RefusalBench —
@@ -25,17 +49,27 @@ Verdict transitions:
 
 Usage:
   uv run python -m src.workers.hermes_worker [--desk <slug>] [--dry-run] [--limit N]
+                                              [--no-cleanup] [--worker-id ID] [--clear-leases]
 
 Environment variables:
   OPENROUTER_API_KEY           — required for Hermes 4 (primary)
   VENICE_API_KEY               — fallback if no OpenRouter key
   GEMINI_API_KEY               — final fallback
   QDRANT_URL, QDRANT_API_KEY, HF_TOKEN, TAVILY_API_KEY, OTX_API_KEY
+  WIKIJS_URL, WIKIJS_API_KEY   — wiki enrichment (optional; skipped if not set)
+  REDIS_URL                    — Redis for distributed desk leasing (default: redis://localhost:6379/0)
 
   HERMES_MODEL                 — override OpenRouter model ID
                                   (default: nousresearch/hermes-4-70b)
   HERMES_COOLDOWN_DAYS         — days before a point can be re-checked (default: 14)
   HERMES_BATCH_SIZE            — max points per desk per run (default: 10)
+  HERMES_LEASE_TTL             — desk lease TTL in seconds; must exceed max desk runtime
+                                  (default: 3600 = 1 hour)
+
+  HERMES_CLEANUP_STALE_DAYS        — days before stale contradicted tier-C points are purged (default: 30)
+  HERMES_CLEANUP_MIN_TEXT_LEN      — minimum text length to keep a point (default: 50 chars)
+  HERMES_CLEANUP_UNVERIFIED_CHECKS — check count before permanently-unverifiable purge (default: 3)
+  HERMES_CLEANUP_UNVERIFIED_AGE_DAYS — age in days for permanently-unverified purge (default: 90)
 
 Manual trigger (fire-and-forget):
   sudo systemctl start --no-block osia-hermes-worker.service
@@ -44,6 +78,8 @@ Run directly:
   uv run python -m src.workers.hermes_worker
   uv run python -m src.workers.hermes_worker --desk geopolitical-and-security-desk
   uv run python -m src.workers.hermes_worker --dry-run --limit 3
+  uv run python -m src.workers.hermes_worker --worker-id node-2
+  uv run python -m src.workers.hermes_worker --clear-leases
 """
 
 import argparse
@@ -51,8 +87,10 @@ import asyncio
 import json
 import logging
 import os
+import re
+import socket
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -62,7 +100,12 @@ from dotenv import load_dotenv
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qdrant_models
 
-from src.intelligence.wiki_client import WikiClient
+from src.intelligence.wiki_client import (
+    WikiClient,
+    build_entity_page,
+    desk_wiki_section,
+    entity_wiki_path,
+)
 
 # Tool infrastructure — imported from research_worker to avoid duplication.
 # Safe to import: module-level code only loads env vars and defines functions.
@@ -94,9 +137,29 @@ logger = logging.getLogger("osia.hermes_worker")
 QDRANT_URL = os.getenv("QDRANT_URL", "https://qdrant.osia.dev")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+HERMES_LEASE_TTL = int(os.getenv("HERMES_LEASE_TTL", "3600"))  # seconds; must exceed max desk runtime
+_LEASE_PREFIX = "osia:hermes:lease:"
+
 COOLDOWN_DAYS = float(os.getenv("HERMES_COOLDOWN_DAYS", "14"))
 COOLDOWN_SECONDS = COOLDOWN_DAYS * 86400
 BATCH_SIZE = int(os.getenv("HERMES_BATCH_SIZE", "10"))
+
+CLEANUP_STALE_DAYS = float(os.getenv("HERMES_CLEANUP_STALE_DAYS", "30"))
+CLEANUP_MIN_TEXT_LEN = int(os.getenv("HERMES_CLEANUP_MIN_TEXT_LEN", "50"))
+CLEANUP_UNVERIFIED_CHECKS = int(os.getenv("HERMES_CLEANUP_UNVERIFIED_CHECKS", "3"))
+CLEANUP_UNVERIFIED_AGE_DAYS = float(os.getenv("HERMES_CLEANUP_UNVERIFIED_AGE_DAYS", "90"))
+
+# RAG contamination remediation pass config
+SCORING_BATCH_SIZE = int(os.getenv("HERMES_SCORING_BATCH", "20"))
+CONTRA_BATCH_SIZE = int(os.getenv("HERMES_CONTRA_BATCH", "10"))
+KB_CORROBORATION_THRESHOLD = float(os.getenv("HERMES_KB_THRESHOLD", "0.75"))
+CONTRADICTION_SIMILARITY_THRESHOLD = float(os.getenv("HERMES_CONTRA_SIMILARITY", "0.70"))
+ECHO_RISK_THRESHOLD = float(os.getenv("HERMES_ECHO_RISK_THRESHOLD", "0.80"))
+STALENESS_DAYS = float(os.getenv("HERMES_STALENESS_DAYS", "30"))
+FRESH_HOURS = int(os.getenv("HERMES_FRESH_HOURS", "24"))
+SCORING_DOWNGRADE_DAYS = float(os.getenv("HERMES_SCORING_DOWNGRADE_DAYS", "14"))
+CONTRA_MODEL = os.getenv("HERMES_CONTRA_MODEL", "google/gemini-flash-1.5")
 
 DESKS_DIR = Path("config/desks")
 
@@ -157,6 +220,7 @@ class DeskMeta:
     collection: str
     tools: list[str]
     persona: str
+    boost_collections: list[str] = field(default_factory=list)
 
 
 def _load_desk_meta(slug: str) -> DeskMeta:
@@ -165,7 +229,8 @@ def _load_desk_meta(slug: str) -> DeskMeta:
         raise FileNotFoundError(f"No desk config found: {path}")
     with open(path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
-    collection = raw.get("qdrant", {}).get("collection", slug)
+    qdrant_cfg = raw.get("qdrant", {})
+    collection = qdrant_cfg.get("collection", slug)
     tools = raw.get("tools", [])
     persona = (
         raw.get("briefing", {}).get("persona") or f"You are an intelligence analyst for the {raw.get('name', slug)}."
@@ -176,6 +241,7 @@ def _load_desk_meta(slug: str) -> DeskMeta:
         collection=collection,
         tools=tools,
         persona=persona.strip(),
+        boost_collections=qdrant_cfg.get("boost_collections", []),
     )
 
 
@@ -323,8 +389,6 @@ def _parse_hermes_tool_calls(content: str) -> list[tuple[str, str]]:
 
     Priority: try all formats; deduplicate by (name, query).
     """
-    import re
-
     calls: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
 
@@ -933,7 +997,9 @@ async def _scroll_low_confidence(
                 must_not=[
                     qdrant_models.FieldCondition(
                         key="reliability_tier",
-                        match=qdrant_models.MatchValue(value="A"),
+                        # Exclude all INTSUM tiers (A, A+, A-) — those are handled
+                        # by the KB scoring pass, not the research corroboration loop.
+                        match=qdrant_models.MatchAny(any=["A", "A+", "A-"]),
                     )
                 ]
             ),
@@ -972,11 +1038,839 @@ async def _patch_payload(
 
 
 # ---------------------------------------------------------------------------
+# Distributed desk leasing (Redis)
+# ---------------------------------------------------------------------------
+
+
+def _get_redis():
+    """Return a connected Redis client, or None if Redis is unavailable.
+
+    Uses a 3-second connect timeout so a missing Redis doesn't stall startup.
+    When None is returned, all lease functions become no-ops and the worker
+    runs in single-node mode (no distributed coordination).
+    """
+    import redis as _redis
+
+    try:
+        r = _redis.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=3)
+        r.ping()
+        return r
+    except Exception as e:
+        logger.warning("Redis unavailable (%s) — running without distributed desk leasing (single-node mode)", e)
+        return None
+
+
+def _try_claim_desk(r, slug: str, worker_id: str) -> bool:
+    """Atomically claim a desk lease. Returns True if this worker now holds the lease.
+
+    Uses SET NX so only one worker can claim a given desk. The TTL ensures that
+    leases from crashed workers expire automatically after HERMES_LEASE_TTL seconds.
+    If r is None (Redis unavailable) always returns True so single-node runs
+    continue unimpeded.
+    """
+    if r is None:
+        return True
+    return bool(r.set(f"{_LEASE_PREFIX}{slug}", worker_id, nx=True, ex=HERMES_LEASE_TTL))
+
+
+def _release_desk(r, slug: str) -> None:
+    """Release a desk lease. Safe to call even if the lease has already expired."""
+    if r is None:
+        return
+    r.delete(f"{_LEASE_PREFIX}{slug}")
+
+
+def _clear_all_leases(r) -> int:
+    """Delete all active Hermes desk leases. Returns count deleted."""
+    if r is None:
+        return 0
+    keys = r.keys(f"{_LEASE_PREFIX}*")
+    if not keys:
+        return 0
+    return r.delete(*keys)
+
+
+def _list_leases(r) -> list[tuple[str, str, int]]:
+    """Return active leases as [(desk_slug, worker_id, ttl_seconds)]."""
+    if r is None:
+        return []
+    keys = r.keys(f"{_LEASE_PREFIX}*")
+    leases = []
+    for key in keys:
+        slug = key.removeprefix(_LEASE_PREFIX)
+        worker_id = r.get(key) or "unknown"
+        ttl = r.ttl(key)
+        leases.append((slug, worker_id, ttl))
+    return sorted(leases)
+
+
+# ---------------------------------------------------------------------------
+# Qdrant quality maintenance
+# ---------------------------------------------------------------------------
+
+
+async def _cleanup_empty_points(
+    client: AsyncQdrantClient,
+    collection: str,
+    dry_run: bool,
+) -> int:
+    """Delete points whose text is shorter than CLEANUP_MIN_TEXT_LEN characters."""
+    try:
+        results, _ = await client.scroll(
+            collection_name=collection,
+            limit=500,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as e:
+        logger.error("Cleanup (empty) scroll failed for '%s': %s", collection, e)
+        return 0
+
+    to_delete = [p.id for p in results if len(((p.payload or {}).get("text") or "").strip()) < CLEANUP_MIN_TEXT_LEN]
+    if not to_delete:
+        return 0
+
+    if dry_run:
+        logger.info("[DRY-RUN] Would delete %d empty/stub points from '%s'", len(to_delete), collection)
+        return len(to_delete)
+
+    try:
+        await client.delete(
+            collection_name=collection,
+            points_selector=qdrant_models.PointIdsList(points=to_delete),
+        )
+        logger.info("Cleanup: deleted %d empty/stub points from '%s'", len(to_delete), collection)
+    except Exception as e:
+        logger.error("Cleanup delete (empty) failed for '%s': %s", collection, e)
+        return 0
+    return len(to_delete)
+
+
+async def _cleanup_stale_contradicted(
+    client: AsyncQdrantClient,
+    collection: str,
+    dry_run: bool,
+) -> int:
+    """Delete tier-C contradiction-flagged points older than CLEANUP_STALE_DAYS."""
+    cutoff = time.time() - (CLEANUP_STALE_DAYS * 86400)
+    try:
+        results, _ = await client.scroll(
+            collection_name=collection,
+            scroll_filter=qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="contradiction_flag",
+                        match=qdrant_models.MatchValue(value=True),
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="reliability_tier",
+                        match=qdrant_models.MatchValue(value="C"),
+                    ),
+                ]
+            ),
+            limit=200,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as e:
+        logger.error("Cleanup (contradicted) scroll failed for '%s': %s", collection, e)
+        return 0
+
+    to_delete = []
+    for p in results:
+        payload = p.payload or {}
+        ts: float = payload.get("ingested_at_unix") or 0
+        if not ts:
+            checked = payload.get("corroboration_checked_at", "")
+            if checked:
+                try:
+                    ts = datetime.fromisoformat(checked).timestamp()
+                except (ValueError, OSError):
+                    pass  # malformed timestamp — treat as unknown age, skip
+        if ts and ts < cutoff:
+            to_delete.append(p.id)
+
+    if not to_delete:
+        return 0
+
+    if dry_run:
+        logger.info("[DRY-RUN] Would purge %d stale contradicted points from '%s'", len(to_delete), collection)
+        return len(to_delete)
+
+    try:
+        await client.delete(
+            collection_name=collection,
+            points_selector=qdrant_models.PointIdsList(points=to_delete),
+        )
+        logger.info("Cleanup: purged %d stale contradicted points from '%s'", len(to_delete), collection)
+    except Exception as e:
+        logger.error("Cleanup delete (contradicted) failed for '%s': %s", collection, e)
+        return 0
+    return len(to_delete)
+
+
+async def _cleanup_permanently_unverifiable(
+    client: AsyncQdrantClient,
+    collection: str,
+    dry_run: bool,
+) -> int:
+    """Delete low-tier points that have been checked CLEANUP_UNVERIFIED_CHECKS+ times,
+    always returned UNVERIFIED, and are older than CLEANUP_UNVERIFIED_AGE_DAYS.
+
+    These are dead-weight entries that have resisted corroboration repeatedly and no
+    longer add signal to RAG retrieval.
+    """
+    cutoff = time.time() - (CLEANUP_UNVERIFIED_AGE_DAYS * 86400)
+    try:
+        results, _ = await client.scroll(
+            collection_name=collection,
+            scroll_filter=qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="corroboration_verdict",
+                        match=qdrant_models.MatchValue(value="UNVERIFIED"),
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="corroboration_check_count",
+                        range=qdrant_models.Range(gte=CLEANUP_UNVERIFIED_CHECKS),
+                    ),
+                ],
+                must_not=[
+                    qdrant_models.FieldCondition(
+                        key="reliability_tier",
+                        match=qdrant_models.MatchAny(any=["A", "B"]),
+                    ),
+                ],
+            ),
+            limit=500,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as e:
+        logger.error("Cleanup (unverifiable) scroll failed for '%s': %s", collection, e)
+        return 0
+
+    to_delete = []
+    for p in results:
+        payload = p.payload or {}
+        ts: float = payload.get("ingested_at_unix") or 0
+        if not ts:
+            checked = payload.get("corroboration_checked_at", "")
+            if checked:
+                try:
+                    ts = datetime.fromisoformat(checked).timestamp()
+                except (ValueError, OSError):
+                    pass
+        if ts and ts < cutoff:
+            to_delete.append(p.id)
+
+    if not to_delete:
+        return 0
+
+    if dry_run:
+        logger.info(
+            "[DRY-RUN] Would purge %d permanently unverifiable points from '%s'",
+            len(to_delete),
+            collection,
+        )
+        return len(to_delete)
+
+    try:
+        await client.delete(
+            collection_name=collection,
+            points_selector=qdrant_models.PointIdsList(points=to_delete),
+        )
+        logger.info("Cleanup: purged %d permanently unverifiable points from '%s'", len(to_delete), collection)
+    except Exception as e:
+        logger.error("Cleanup delete (unverifiable) failed for '%s': %s", collection, e)
+        return 0
+    return len(to_delete)
+
+
+async def _run_cleanup_pass(
+    client: AsyncQdrantClient,
+    collection: str,
+    dry_run: bool,
+) -> None:
+    """Run all quality maintenance passes on a collection and log a summary."""
+    empty = await _cleanup_empty_points(client, collection, dry_run)
+    stale = await _cleanup_stale_contradicted(client, collection, dry_run)
+    unverifiable = await _cleanup_permanently_unverifiable(client, collection, dry_run)
+    if empty or stale or unverifiable:
+        logger.info(
+            "Cleanup '%s': empty=%d stale_contradicted=%d permanently_unverifiable=%d",
+            collection,
+            empty,
+            stale,
+            unverifiable,
+        )
+
+
+# ---------------------------------------------------------------------------
+# RAG contamination remediation passes (tier-A INTSUM chunks)
+# ---------------------------------------------------------------------------
+
+
+def _extract_vector(record_vector) -> list[float] | None:
+    """Normalise the .vector field from a Qdrant scroll record.
+
+    Collections use a single anonymous vector, so record.vector is normally a
+    list[float].  Named-vector collections return a dict; we take the first value.
+    Returns None if the vector is absent or empty.
+    """
+    if record_vector is None:
+        return None
+    if isinstance(record_vector, dict):
+        values = list(record_vector.values())
+        return values[0] if values else None
+    return record_vector if record_vector else None
+
+
+async def _score_chunk_against_kb(
+    chunk_vector: list[float],
+    boost_collections: list[str],
+    client: AsyncQdrantClient,
+) -> tuple[float, list[str]]:
+    """Search every boost collection with the chunk's own vector.
+
+    Returns (score 0.0–1.0, list of collection names that returned a hit).
+    Score = n_collections_with_hit / n_boost_collections.
+    Errors on individual collections are silently swallowed (collection may not exist).
+    """
+
+    async def _probe(col: str) -> str | None:
+        try:
+            hits = await client.search(
+                collection_name=col,
+                query_vector=chunk_vector,
+                limit=1,
+                score_threshold=KB_CORROBORATION_THRESHOLD,
+                with_vectors=False,
+                with_payload=False,
+            )
+            return col if hits else None
+        except Exception:
+            return None  # collection absent or temporarily unavailable
+
+    results = await asyncio.gather(*[_probe(col) for col in boost_collections])
+    matching = [col for col in results if col is not None]
+    score = len(matching) / len(boost_collections) if boost_collections else 0.0
+    return score, matching
+
+
+async def _corroboration_scoring_pass(
+    desk: "DeskMeta",
+    client: AsyncQdrantClient,
+    dry_run: bool,
+) -> int:
+    """Vector-based KB corroboration scoring for tier-A (and A-) INTSUM chunks.
+
+    Priority 1 — fresh chunks ingested in the last FRESH_HOURS hours.
+    Priority 2 — rolling backfill of unchecked / stale chunks.
+
+    For each chunk:
+    - Searches every boost collection with the chunk's own embedding vector
+    - If any KB hit scores ≥ KB_CORROBORATION_THRESHOLD → tier "A+"
+    - If no KB hit and chunk is > SCORING_DOWNGRADE_DAYS old → tier "A-"
+    - Writes hermes_corroboration_score, hermes_kb_sources, hermes_reviewed_at
+
+    Returns count of chunks processed.
+    """
+    if not desk.boost_collections:
+        logger.debug("Desk '%s' has no boost collections — skipping scoring pass", desk.slug)
+        return 0
+
+    now_ts = time.time()
+    fresh_cutoff = int(now_ts - FRESH_HOURS * 3600)
+    cooldown_cutoff = int(now_ts - COOLDOWN_DAYS * 86400)
+
+    # Phase 1: fresh chunks (last FRESH_HOURS) — always re-score regardless of hermes_reviewed_at
+    try:
+        fresh_records, _ = await client.scroll(
+            collection_name=desk.collection,
+            scroll_filter=qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="reliability_tier",
+                        match=qdrant_models.MatchAny(any=["A", "A-"]),
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="ingested_at_unix",
+                        range=qdrant_models.Range(gte=fresh_cutoff),
+                    ),
+                ]
+            ),
+            limit=SCORING_BATCH_SIZE,
+            with_payload=True,
+            with_vectors=True,
+        )
+    except Exception as e:
+        logger.error("Scoring: fresh scroll failed for '%s': %s", desk.collection, e)
+        fresh_records = []
+
+    # Phase 2: backfill — tier A/A- not recently scored
+    remaining_budget = SCORING_BATCH_SIZE - len(fresh_records)
+    backfill_records: list = []
+    if remaining_budget > 0:
+        try:
+            all_a, _ = await client.scroll(
+                collection_name=desk.collection,
+                scroll_filter=qdrant_models.Filter(
+                    must=[
+                        qdrant_models.FieldCondition(
+                            key="reliability_tier",
+                            match=qdrant_models.MatchAny(any=["A", "A-"]),
+                        ),
+                    ]
+                ),
+                limit=remaining_budget * 5,
+                with_payload=True,
+                with_vectors=True,
+            )
+        except Exception as e:
+            logger.error("Scoring: backfill scroll failed for '%s': %s", desk.collection, e)
+            all_a = []
+
+        fresh_ids = {r.id for r in fresh_records}
+        for r in all_a:
+            if r.id in fresh_ids:
+                continue
+            reviewed = (r.payload or {}).get("hermes_reviewed_at")
+            if reviewed and int(reviewed) > cooldown_cutoff:
+                continue  # scored recently, skip
+            backfill_records.append(r)
+            if len(backfill_records) >= remaining_budget:
+                break
+
+    candidates = list(fresh_records) + backfill_records
+    if not candidates:
+        return 0
+
+    logger.info(
+        "Scoring pass '%s': %d candidates (fresh=%d backfill=%d)",
+        desk.slug,
+        len(candidates),
+        len(fresh_records),
+        len(backfill_records),
+    )
+
+    processed = 0
+    for record in candidates:
+        vector = _extract_vector(record.vector)
+        if not vector:
+            continue
+
+        payload = record.payload or {}
+        ingested_ts = payload.get("ingested_at_unix") or 0
+        age_days = (now_ts - ingested_ts) / 86400 if ingested_ts else 999.0
+        current_tier = payload.get("reliability_tier", "A")
+
+        score, kb_sources = await _score_chunk_against_kb(vector, desk.boost_collections, client)
+
+        if score > 0:
+            new_tier = "A+"
+        elif age_days > SCORING_DOWNGRADE_DAYS:
+            new_tier = "A-"
+        else:
+            new_tier = current_tier  # too fresh to demote yet
+
+        patch: dict = {
+            "hermes_corroboration_score": round(score, 3),
+            "hermes_kb_sources": kb_sources,
+            "hermes_reviewed_at": int(now_ts),
+        }
+        if new_tier != current_tier:
+            patch["reliability_tier"] = new_tier
+
+        if dry_run:
+            logger.info(
+                "[DRY-RUN] Scoring point %s: score=%.3f tier %s→%s kb=%s",
+                str(record.id)[:8],
+                score,
+                current_tier,
+                new_tier,
+                kb_sources,
+            )
+        else:
+            await _patch_payload(client, desk.collection, record.id, patch, dry_run=False)
+        processed += 1
+
+    logger.info("Scoring pass '%s': %d chunks processed", desk.slug, processed)
+    return processed
+
+
+async def _echo_chamber_pass(
+    desk: "DeskMeta",
+    client: AsyncQdrantClient,
+    dry_run: bool,
+) -> int:
+    """Flag fresh INTSUM chunks whose top-10 similar neighbours are mostly OSIA-internal.
+
+    An echo risk chunk is one where > ECHO_RISK_THRESHOLD of the 10 most similar
+    points in the same collection came from signal: or research_worker sources,
+    meaning the INTSUM was likely synthesised from prior OSIA outputs rather than
+    primary KB evidence.
+
+    Writes hermes_echo_risk: bool.  Only processes fresh chunks (last FRESH_HOURS)
+    that have not already been assessed.
+
+    Returns count of chunks assessed.
+    """
+    now_ts = time.time()
+    fresh_cutoff = int(now_ts - FRESH_HOURS * 3600)
+
+    try:
+        fresh_records, _ = await client.scroll(
+            collection_name=desk.collection,
+            scroll_filter=qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="reliability_tier",
+                        match=qdrant_models.MatchAny(any=["A", "A+", "A-"]),
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="ingested_at_unix",
+                        range=qdrant_models.Range(gte=fresh_cutoff),
+                    ),
+                ]
+            ),
+            limit=SCORING_BATCH_SIZE,
+            with_payload=True,
+            with_vectors=True,
+        )
+    except Exception as e:
+        logger.error("Echo: fresh scroll failed for '%s': %s", desk.collection, e)
+        return 0
+
+    processed = 0
+    for record in fresh_records:
+        payload = record.payload or {}
+        if payload.get("hermes_echo_risk") is not None:
+            continue  # already assessed
+
+        vector = _extract_vector(record.vector)
+        if not vector:
+            continue
+
+        try:
+            neighbours = await client.search(
+                collection_name=desk.collection,
+                query_vector=vector,
+                limit=10,
+                with_payload=True,
+                with_vectors=False,
+                query_filter=qdrant_models.Filter(must_not=[qdrant_models.HasIdCondition(has_id=[record.id])]),
+            )
+        except Exception as e:
+            logger.warning("Echo: neighbour search failed for '%s': %s", desk.collection, e)
+            continue
+
+        if not neighbours:
+            continue
+
+        def _is_internal(src: str) -> bool:
+            return src.startswith("signal:") or src in ("research_worker", "osia")
+
+        n_internal = sum(1 for n in neighbours if _is_internal((n.payload or {}).get("source", "")))
+        echo_risk = (n_internal / len(neighbours)) > ECHO_RISK_THRESHOLD
+
+        if echo_risk:
+            logger.info(
+                "Echo risk: point %s — %.0f%% OSIA-internal context",
+                str(record.id)[:8],
+                (n_internal / len(neighbours)) * 100,
+            )
+
+        if not dry_run:
+            await _patch_payload(client, desk.collection, record.id, {"hermes_echo_risk": echo_risk}, dry_run=False)
+        else:
+            logger.info("[DRY-RUN] Echo risk for %s: %s", str(record.id)[:8], echo_risk)
+
+        processed += 1
+
+    return processed
+
+
+async def _llm_contradiction_check(
+    text_a: str,
+    text_b: str,
+    http: httpx.AsyncClient,
+) -> tuple[bool, str]:
+    """Binary LLM contradiction check using cheapest available model.
+
+    Returns (contradicts: bool, reason: str).
+    Uses CONTRA_MODEL via OpenRouter; falls back to Venice mistral-small.
+    """
+    model = CONTRA_MODEL
+    base_url = OPENROUTER_BASE_URL
+    api_key = OPENROUTER_API_KEY
+    extra_headers: dict = {"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Hermes Worker"}
+
+    if not api_key:
+        if not VENICE_API_KEY:
+            return False, "no API key configured"
+        base_url = VENICE_BASE_URL
+        api_key = VENICE_API_KEY
+        model = VENICE_MODEL_FALLBACK
+        extra_headers = {}
+
+    prompt = (
+        "Are these two intelligence claims contradictory?\n\n"
+        f"CLAIM A:\n{text_a[:400]}\n\n"
+        f"CLAIM B:\n{text_b[:400]}\n\n"
+        "Respond EXACTLY:\n"
+        "VERDICT: CONTRADICTS | CONSISTENT\n"
+        "REASON: <one sentence>"
+    )
+    try:
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        headers.update(extra_headers)
+        resp = await http.post(
+            f"{base_url}/chat/completions",
+            headers=headers,
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 100,
+                "temperature": 0.1,
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"].get("content", "") or ""
+        contradicts = "VERDICT: CONTRADICTS" in content.upper()
+        reason_match = re.search(r"REASON:\s*(.+)", content, re.IGNORECASE)
+        reason = reason_match.group(1).strip() if reason_match else ""
+        return contradicts, reason
+    except Exception as e:
+        logger.warning("Contradiction LLM check failed: %s", e)
+        return False, ""
+
+
+async def _contradiction_detection_pass(
+    desk: "DeskMeta",
+    client: AsyncQdrantClient,
+    http: httpx.AsyncClient,
+    dry_run: bool,
+) -> int:
+    """Find semantically similar INTSUM chunks with conflicting claims.
+
+    For each tier-A/A+/A- chunk with entity_tags, searches the same collection
+    for similar chunks (cosine ≥ CONTRADICTION_SIMILARITY_THRESHOLD) with
+    overlapping entity_tags, then runs a cheap binary LLM contradiction check on
+    candidate pairs.
+
+    Writes hermes_contradicts: list[str] and hermes_contradiction_reason: str
+    to both chunks in a confirmed contradiction pair.
+
+    Returns count of contradictions found.
+    """
+    if CONTRA_BATCH_SIZE <= 0:
+        return 0
+
+    try:
+        records, _ = await client.scroll(
+            collection_name=desk.collection,
+            scroll_filter=qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="reliability_tier",
+                        match=qdrant_models.MatchAny(any=["A", "A+", "A-"]),
+                    ),
+                ]
+            ),
+            limit=CONTRA_BATCH_SIZE * 5,
+            with_payload=True,
+            with_vectors=True,
+        )
+    except Exception as e:
+        logger.error("Contradiction: scroll failed for '%s': %s", desk.collection, e)
+        return 0
+
+    # Keep only records with non-empty entity_tags and valid vectors
+    tagged = [r for r in records if (r.payload or {}).get("entity_tags") and _extract_vector(r.vector) is not None]
+    if not tagged:
+        return 0
+
+    checked_pairs: set[frozenset] = set()
+    pairs_checked = 0
+    contradictions_found = 0
+    now_ts = int(time.time())
+
+    for record in tagged:
+        if pairs_checked >= CONTRA_BATCH_SIZE:
+            break
+
+        payload = record.payload or {}
+        my_tags = set(payload.get("entity_tags", []))
+        vector = _extract_vector(record.vector)
+        if not vector:
+            continue
+
+        try:
+            similar = await client.search(
+                collection_name=desk.collection,
+                query_vector=vector,
+                limit=6,
+                score_threshold=CONTRADICTION_SIMILARITY_THRESHOLD,
+                with_payload=True,
+                with_vectors=False,
+                query_filter=qdrant_models.Filter(must_not=[qdrant_models.HasIdCondition(has_id=[record.id])]),
+            )
+        except Exception as e:
+            logger.warning("Contradiction: similarity search failed: %s", e)
+            continue
+
+        for neighbour in similar:
+            pair_key: frozenset = frozenset([record.id, neighbour.id])
+            if pair_key in checked_pairs:
+                continue
+
+            nb_tags = set((neighbour.payload or {}).get("entity_tags", []))
+            if not (my_tags & nb_tags):
+                continue  # no overlapping entity_tags — not about the same subject
+
+            checked_pairs.add(pair_key)
+            pairs_checked += 1
+
+            contradicts, reason = await _llm_contradiction_check(
+                payload.get("text", ""),
+                (neighbour.payload or {}).get("text", ""),
+                http,
+            )
+
+            if not contradicts:
+                continue
+
+            contradictions_found += 1
+            logger.info(
+                "Contradiction found: %s ↔ %s — %s",
+                str(record.id)[:8],
+                str(neighbour.id)[:8],
+                reason[:120],
+            )
+
+            if not dry_run:
+                for pid, ep in [(record.id, payload), (neighbour.id, neighbour.payload or {})]:
+                    other = str(neighbour.id) if pid == record.id else str(record.id)
+                    existing = ep.get("hermes_contradicts") or []
+                    if other not in existing:
+                        await _patch_payload(
+                            client,
+                            desk.collection,
+                            pid,
+                            {
+                                "hermes_contradicts": existing + [other],
+                                "hermes_contradiction_reason": reason[:300],
+                                "hermes_reviewed_at": now_ts,
+                            },
+                            dry_run=False,
+                        )
+            else:
+                logger.info(
+                    "[DRY-RUN] Would flag contradiction: %s ↔ %s",
+                    str(record.id)[:8],
+                    str(neighbour.id)[:8],
+                )
+
+    if contradictions_found:
+        logger.info(
+            "Contradiction pass '%s': %d found in %d pairs checked",
+            desk.slug,
+            contradictions_found,
+            pairs_checked,
+        )
+    return contradictions_found
+
+
+async def _staleness_pass(
+    client: AsyncQdrantClient,
+    collection: str,
+    dry_run: bool,
+) -> int:
+    """Flag old uncorroborated entity-tagged INTSUM chunks as stale.
+
+    Criteria: tier A or A-  +  older than STALENESS_DAYS  +  entity_tags non-empty
+    +  no KB corroboration found (hermes_corroboration_score absent or zero)
+    +  not already flagged.
+
+    Writes hermes_stale_flag: true in bulk (no per-point LLM call).
+    Returns count of chunks flagged.
+    """
+    cutoff = int(time.time() - STALENESS_DAYS * 86400)
+
+    try:
+        records, _ = await client.scroll(
+            collection_name=collection,
+            scroll_filter=qdrant_models.Filter(
+                must=[
+                    qdrant_models.FieldCondition(
+                        key="reliability_tier",
+                        match=qdrant_models.MatchAny(any=["A", "A-"]),
+                    ),
+                    qdrant_models.FieldCondition(
+                        key="ingested_at_unix",
+                        range=qdrant_models.Range(lte=cutoff),
+                    ),
+                ],
+                must_not=[
+                    qdrant_models.FieldCondition(
+                        key="hermes_stale_flag",
+                        match=qdrant_models.MatchValue(value=True),
+                    ),
+                ],
+            ),
+            limit=500,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as e:
+        logger.error("Staleness scroll failed for '%s': %s", collection, e)
+        return 0
+
+    to_flag = []
+    for r in records:
+        payload = r.payload or {}
+        if not payload.get("entity_tags"):
+            continue  # no real-world entity references — skip
+        score = payload.get("hermes_corroboration_score")
+        if score and float(score) > 0:
+            continue  # already KB-corroborated
+        to_flag.append(r.id)
+
+    if not to_flag:
+        return 0
+
+    if dry_run:
+        logger.info("[DRY-RUN] Would flag %d stale chunks in '%s'", len(to_flag), collection)
+        return len(to_flag)
+
+    _WRITE_BATCH = 50
+    flagged = 0
+    for i in range(0, len(to_flag), _WRITE_BATCH):
+        batch = to_flag[i : i + _WRITE_BATCH]
+        try:
+            await client.set_payload(
+                collection_name=collection,
+                payload={"hermes_stale_flag": True},
+                points=batch,
+            )
+            flagged += len(batch)
+        except Exception as e:
+            logger.error("Staleness batch write failed for '%s': %s", collection, e)
+
+    if flagged:
+        logger.info("Staleness pass: flagged %d chunks in '%s'", flagged, collection)
+    return flagged
+
+
+# ---------------------------------------------------------------------------
 # Per-desk processing
 # ---------------------------------------------------------------------------
 
 
-async def _wiki_update_corroboration(
+async def _wiki_enrich_corroboration(
+    desk: "DeskMeta",
     payload: dict,
     verdict: str,
     confidence: str,
@@ -984,40 +1878,141 @@ async def _wiki_update_corroboration(
     sources: list[str],
     checked_at: str,
     dry_run: bool,
-) -> None:
-    """Update the corroboration section of the INTSUM wiki page referenced in the payload.
+) -> str | None:
+    """Write corroboration findings to the wiki. Returns a new wiki_path if a page was created.
 
-    Only runs when WIKIJS_API_KEY is set and the Qdrant payload carries a wiki_path.
-    Non-fatal — logs and returns on any failure.
+    Three-path strategy:
+    1. payload carries wiki_path  →  patch corroboration section + update metadata reliability tier
+    2. no wiki_path, topic known  →  search wiki for an entity page and append a research-notes entry
+    3. CORROBORATED HIGH/MODERATE, no wiki page found  →  create a new entity page and return its path
+
+    CONTRADICTED verdicts always append a warning entry to research-notes on any found page.
+    Non-fatal — logs and returns None on any failure.
     """
-    import os
-
     if dry_run or not os.getenv("WIKIJS_API_KEY"):
-        return
-    wiki_path: str = payload.get("wiki_path", "")
-    if not wiki_path:
-        return
+        return None
+
+    topic: str = (payload.get("topic") or "").strip()
+    wiki_path: str = (payload.get("wiki_path") or "").strip()
+    new_tier: str = payload.get("reliability_tier") or "?"
 
     icon = {"CORROBORATED": "✅", "CONTRADICTED": "⚠️", "UNVERIFIED": "❓"}.get(verdict, "")
     sources_str = ", ".join(sources) if sources else "*none found*"
-    section_content = (
+    date_str = checked_at[:10]
+
+    corroboration_block = (
         f"**Verdict:** {icon} {verdict}  \n"
         f"**Confidence:** {confidence}  \n"
-        f"**Verified:** {checked_at[:10]}  \n"
+        f"**Verified:** {date_str}  \n"
         f"**Reasoning:** {reasoning or '*(not recorded)*'}  \n"
         f"**Sources:** {sources_str}"
     )
+
+    note_icon = {"CORROBORATED": "✅", "CONTRADICTED": "⚠️"}.get(verdict, "🔍")
+    research_note = (
+        f"- **{date_str}** [{note_icon} {verdict} / {confidence}] "
+        f"Hermes corroboration — **{topic or 'unknown topic'}**\n\n"
+        f"  > {(reasoning or '')[:300].replace(chr(10), ' ')}"
+    )
+
     try:
         async with WikiClient() as wiki:
-            ok = await wiki.patch_section(wiki_path, "corroboration", section_content)
-            if ok:
-                logger.info("Wiki: corroboration updated for '%s' → %s", wiki_path, verdict)
+            # --- Path 1: existing page referenced by wiki_path ---
+            if wiki_path:
+                existing = await wiki.get_page(wiki_path)
+                if existing:
+                    await wiki.patch_section(wiki_path, "corroboration", corroboration_block)
+                    # Update reliability tier in the AUTO:metadata section
+                    body = existing.get("content", "")
+                    new_body = re.sub(
+                        r"(\|\s*\*\*Reliability\*\*\s*\|)\s*[A-Z?]\s*(\|)",
+                        rf"\1 {new_tier} \2",
+                        body,
+                    )
+                    if new_body != body:
+                        await wiki.update_page(
+                            existing["id"],
+                            new_body,
+                            existing["title"],
+                            existing.get("description", ""),
+                            existing.get("tags", []),
+                        )
+                    if verdict != "UNVERIFIED":
+                        await wiki.append_to_section(wiki_path, "research-notes", research_note)
+                    logger.info(
+                        "Wiki: corroboration+tier updated for '%s' → %s (tier: %s)",
+                        wiki_path,
+                        verdict,
+                        new_tier,
+                    )
+                    return None
+
+            # --- Path 2: no wiki_path — search by topic ---
+            if not topic:
+                return None
+
+            results = await wiki.search_pages(topic[:50])
+            entity_page = next(
+                (r for r in results if r.get("path", "").startswith(("entities/", "desks/"))),
+                None,
+            )
+
+            if entity_page:
+                if verdict == "CORROBORATED" and confidence in ("HIGH", "MODERATE"):
+                    text_excerpt = (payload.get("text") or "")[:500]
+                    await wiki.patch_section(
+                        entity_page["path"],
+                        "summary",
+                        f"{text_excerpt}\n\n---\n\n{corroboration_block}",
+                    )
+                await wiki.append_to_section(entity_page["path"], "research-notes", research_note)
+                logger.info(
+                    "Wiki: corroboration note appended to '%s' → %s",
+                    entity_page["path"],
+                    verdict,
+                )
+                return None
+
+            # --- Path 3: CORROBORATED HIGH/MODERATE with no wiki presence → create entity page ---
+            if verdict == "CORROBORATED" and confidence in ("HIGH", "MODERATE"):
+                text_excerpt = (payload.get("text") or "")[:500]
+                _desk_section = desk_wiki_section(desk.slug)
+                new_path = entity_wiki_path("Organisation", topic)
+                content = build_entity_page(
+                    entity_type="Organisation",
+                    desk_name=desk.name,
+                    desk_section=_desk_section,
+                    first_seen=date_str,
+                    summary=f"{text_excerpt}\n\n---\n\n{corroboration_block}",
+                )
+                created = await wiki.create_page(
+                    new_path,
+                    topic,
+                    content,
+                    description=f"Entity — corroborated {date_str} by Hermes ({confidence} confidence)",
+                    tags=["entity", "organisation", "hermes", "corroborated"],
+                )
+                if created:
+                    logger.info("Wiki: created entity page '%s' (corroborated, %s)", new_path, confidence)
+                    return new_path
+
     except Exception as e:
-        logger.warning("Wiki corroboration update failed for '%s' (non-fatal): %s", wiki_path, e)
+        logger.warning(
+            "Wiki corroboration enrichment failed for '%s' (non-fatal): %s",
+            topic or wiki_path,
+            e,
+        )
+
+    return None
 
 
-async def process_desk(desk: DeskMeta, limit: int, dry_run: bool) -> tuple[int, int, int]:
-    """Corroborate low-confidence points in one desk's collection.
+async def process_desk(
+    desk: DeskMeta,
+    limit: int,
+    dry_run: bool,
+    run_cleanup: bool = True,
+) -> tuple[int, int, int]:
+    """Corroborate low-confidence points in one desk's collection, then run quality maintenance.
 
     Returns (corroborated, contradicted, unverified) counts.
     """
@@ -1053,14 +2048,13 @@ async def process_desk(desk: DeskMeta, limit: int, dry_run: bool) -> tuple[int, 
             break
 
     logger.info("Desk '%s': %d points to corroborate after cooldown filter", desk.slug, len(targets))
-    if not targets:
-        return 0, 0, 0
 
     corroborated = 0
     contradicted = 0
     unverified = 0
 
     async with httpx.AsyncClient(timeout=120.0) as http:
+        # ---- Research corroboration loop (tier B/C/?) ----
         for point_id, payload in targets:
             topic = payload.get("topic", "")
             source = payload.get("source", "unknown")
@@ -1088,7 +2082,6 @@ async def process_desk(desk: DeskMeta, limit: int, dry_run: bool) -> tuple[int, 
             verdict, confidence, reasoning, sources = _parse_verdict(raw_output)
             logger.info("Point %s verdict: %s (%s confidence)", str(point_id)[:8], verdict, confidence)
 
-            # Build payload patch
             checked_now = datetime.now(UTC).isoformat()
             patch: dict = {
                 "corroboration_verdict": verdict,
@@ -1096,6 +2089,7 @@ async def process_desk(desk: DeskMeta, limit: int, dry_run: bool) -> tuple[int, 
                 "corroboration_checked_at": checked_now,
                 "corroboration_reasoning": reasoning[:500] if reasoning else "",
                 "corroboration_sources": sources,
+                "corroboration_check_count": payload.get("corroboration_check_count", 0) + 1,
             }
 
             if verdict == "CORROBORATED":
@@ -1106,12 +2100,26 @@ async def process_desk(desk: DeskMeta, limit: int, dry_run: bool) -> tuple[int, 
                 patch["contradiction_flag"] = True
                 contradicted += 1
             else:
-                # UNVERIFIED — no tier change, keep existing or leave absent
                 unverified += 1
 
+            enriched_payload = {**payload, **patch}
+            new_wiki_path = await _wiki_enrich_corroboration(
+                desk, enriched_payload, verdict, confidence, reasoning, sources, checked_now, dry_run
+            )
+            if new_wiki_path:
+                patch["wiki_path"] = new_wiki_path
+
             await _patch_payload(client, desk.collection, point_id, patch, dry_run)
-            await _wiki_update_corroboration(payload, verdict, confidence, reasoning, sources, checked_now, dry_run)
-            await asyncio.sleep(2)  # rate-limit buffer between points
+            await asyncio.sleep(2)
+
+        # ---- RAG contamination remediation passes (tier A/A+/A-) ----
+        await _corroboration_scoring_pass(desk, client, dry_run)
+        await _echo_chamber_pass(desk, client, dry_run)
+        await _contradiction_detection_pass(desk, client, http, dry_run)
+        await _staleness_pass(client, desk.collection, dry_run)
+
+    if run_cleanup:
+        await _run_cleanup_pass(client, desk.collection, dry_run)
 
     return corroborated, contradicted, unverified
 
@@ -1122,7 +2130,7 @@ async def process_desk(desk: DeskMeta, limit: int, dry_run: bool) -> tuple[int, 
 
 
 async def main() -> None:
-    parser = argparse.ArgumentParser(description="OSIA Corroboration Worker")
+    parser = argparse.ArgumentParser(description="OSIA Hermes Worker")
     parser.add_argument(
         "--desk",
         metavar="SLUG",
@@ -1140,24 +2148,67 @@ async def main() -> None:
         metavar="N",
         help=f"Max points to corroborate per desk (default: {BATCH_SIZE})",
     )
+    parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Skip Qdrant quality maintenance passes (empty/stale/unverifiable point cleanup)",
+    )
+    parser.add_argument(
+        "--worker-id",
+        default=socket.gethostname(),
+        metavar="ID",
+        help="Identifier stamped into Redis desk leases (default: hostname). "
+        "Use to distinguish workers in multi-node deployments.",
+    )
+    parser.add_argument(
+        "--clear-leases",
+        action="store_true",
+        help="Delete all active Hermes desk leases from Redis and exit. Use to unblock desks after a crashed worker.",
+    )
     args = parser.parse_args()
+
+    # --clear-leases: admin action — connect, clear, exit immediately.
+    if args.clear_leases:
+        r = _get_redis()
+        if r is None:
+            logger.error("Cannot clear leases — Redis unavailable")
+            return
+        n = _clear_all_leases(r)
+        if n:
+            logger.info("Cleared %d Hermes desk lease(s)", n)
+        else:
+            logger.info("No active Hermes desk leases found")
+        return
 
     if not VENICE_API_KEY and not OPENROUTER_API_KEY and not GEMINI_API_KEY:
         logger.error("No API key set (VENICE_API_KEY / OPENROUTER_API_KEY / GEMINI_API_KEY) — cannot run")
         return
 
+    # Connect to Redis once for the entire run; None = single-node mode.
+    redis_client = _get_redis()
+    if redis_client is not None:
+        active = _list_leases(redis_client)
+        if active:
+            logger.info(
+                "Active leases at startup: %s",
+                ", ".join(f"{slug}@{wid}({ttl}s)" for slug, wid, ttl in active),
+            )
+
     desk_slugs = [args.desk] if args.desk else _list_all_desks()
     logger.info(
-        "=== OSIA Corroboration Worker starting === desks=%d limit=%d dry_run=%s",
+        "=== OSIA Hermes Worker starting === worker=%s desks=%d limit=%d dry_run=%s cleanup=%s",
+        args.worker_id,
         len(desk_slugs),
         args.limit,
         args.dry_run,
+        not args.no_cleanup,
     )
 
     total_corroborated = 0
     total_contradicted = 0
     total_unverified = 0
     total_skipped = 0
+    total_leased_out = 0
 
     for slug in desk_slugs:
         try:
@@ -1167,13 +2218,31 @@ async def main() -> None:
             total_skipped += 1
             continue
 
-        logger.info("--- Processing desk: %s (%s) ---", desk.name, desk.collection)
+        # Claim the desk lease before doing any work.
+        if not _try_claim_desk(redis_client, slug, args.worker_id):
+            logger.info(
+                "Desk '%s' is held by another worker — skipping (lease TTL: %ds)",
+                slug,
+                redis_client.ttl(f"{_LEASE_PREFIX}{slug}") if redis_client else 0,
+            )
+            total_leased_out += 1
+            continue
+
+        logger.info("--- Processing desk: %s (%s) [lease claimed] ---", desk.name, desk.collection)
         try:
-            c, x, u = await process_desk(desk, limit=args.limit, dry_run=args.dry_run)
+            c, x, u = await process_desk(
+                desk,
+                limit=args.limit,
+                dry_run=args.dry_run,
+                run_cleanup=not args.no_cleanup,
+            )
         except Exception as e:
             logger.error("Desk '%s' failed: %s", slug, e)
             total_skipped += 1
             continue
+        finally:
+            # Always release — even on exception or dry-run.
+            _release_desk(redis_client, slug)
 
         total_corroborated += c
         total_contradicted += x
@@ -1185,15 +2254,15 @@ async def main() -> None:
             x,
             u,
         )
-        # Brief pause between desks to avoid 429s when processing all desks in sequence
         await asyncio.sleep(5)
 
     logger.info(
-        "=== Batch complete: corroborated=%d contradicted=%d unverified=%d skipped_desks=%d ===",
+        "=== Batch complete: corroborated=%d contradicted=%d unverified=%d skipped=%d leased_out=%d ===",
         total_corroborated,
         total_contradicted,
         total_unverified,
         total_skipped,
+        total_leased_out,
     )
 
 

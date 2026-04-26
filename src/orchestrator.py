@@ -2725,8 +2725,29 @@ class OsiaOrchestrator:
         if not combined:
             return None
 
-        # Sort combined results by score descending for presentation
-        combined.sort(key=lambda r: r.score, reverse=True)
+        def _hermes_adjusted_score(r) -> float:
+            """Apply Hermes annotation multipliers to the base temporal-decay score.
+
+            hermes_corroboration_score (0–1): boosts KB-backed chunks, penalises
+            unscored ones.  A chunk with score=0 (no KB hit) is multiplied by 0.7;
+            one with score=1 (all KB collections matched) stays at full weight.
+
+            hermes_echo_risk: half-weights chunks that were synthesised primarily
+            from prior OSIA outputs (self-citation loop protection).
+
+            hermes_stale_flag: further penalises old, unverified entity claims.
+            """
+            s = r.score
+            corr = r.metadata.get("hermes_corroboration_score")
+            if corr is not None:
+                s *= 0.7 + 0.3 * float(corr)
+            if r.metadata.get("hermes_echo_risk"):
+                s *= 0.5
+            if r.metadata.get("hermes_stale_flag"):
+                s *= 0.7
+            return s
+
+        combined.sort(key=_hermes_adjusted_score, reverse=True)
 
         lines = ["## INTELLIGENCE CONTEXT\n"]
         for r in combined:
@@ -2736,8 +2757,16 @@ class OsiaOrchestrator:
             # Truncate individual context entries so a single large prior INTSUM cannot
             # dominate the context window and tempt the model into reproducing it verbatim.
             text_snippet = r.text[:1500] + "\n…[truncated]" if len(r.text) > 1500 else r.text
+            hermes_notes = []
+            if r.metadata.get("hermes_echo_risk"):
+                hermes_notes.append("⚠ echo-risk")
+            if r.metadata.get("hermes_stale_flag"):
+                hermes_notes.append("⚠ unverified — may be outdated")
+            if r.metadata.get("hermes_contradicts"):
+                hermes_notes.append("⚠ contradicted claim on record")
+            hermes_suffix = f" [{', '.join(hermes_notes)}]" if hermes_notes else ""
             lines.append(
-                f"[{r.collection} | {source_label}] (Reliability: {reliability}, Score: {r.score:.2f}) {timestamp[:10] if timestamp else ''}\n{text_snippet}\n"
+                f"[{r.collection} | {source_label}] (Reliability: {reliability}, Score: {r.score:.2f}){hermes_suffix} {timestamp[:10] if timestamp else ''}\n{text_snippet}\n"
             )
         return "\n".join(lines)
 
