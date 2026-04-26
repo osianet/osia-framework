@@ -112,9 +112,7 @@ async def rechunk_collection(
                     # Re-insert as chunks
                     ids = await store.upsert_chunks(collection, text, meta)
                     chunks_written += len(ids)
-                    logger.info(
-                        "%s: replaced blob %s with %d chunks", collection, point_id, len(ids)
-                    )
+                    logger.info("%s: replaced blob %s with %d chunks", collection, point_id, len(ids))
             else:
                 for point_id, text, _payload in blob_points:
                     preview = text[:120].replace("\n", " ")
