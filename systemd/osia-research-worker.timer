@@ -1,11 +1,11 @@
 [Unit]
-Description=OSIA Research Worker — runs every 2 hours
+Description=OSIA Research Worker — runs every 15 minutes
 Requires=osia-research-worker.service
 
 [Timer]
-# Fire every 2 hours, offset by 15 minutes to avoid clashing with RSS ingress
-OnCalendar=*-*-* 00/2:15:00
-AccuracySec=5min
+# Fire every 15 minutes to keep pace with queue growth
+OnCalendar=*:0/15:00
+AccuracySec=30s
 Persistent=false
 
 [Install]

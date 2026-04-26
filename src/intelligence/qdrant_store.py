@@ -236,6 +236,106 @@ class QdrantStore:
         return point_id
 
     # ------------------------------------------------------------------
+    # Chunked upsert — for INTSUM write-backs and long documents
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _split_into_chunks(text: str, max_chars: int = 600) -> list[str]:
+        """Split markdown text into semantic chunks sized for embedding quality.
+
+        Splits on markdown section headers first, then paragraph breaks.
+        Each sub-section header is re-prepended to its child chunks so each
+        chunk is self-contained without requiring the full document for context.
+        """
+        import re
+
+        # Prepend a newline so the first section header is caught by the split
+        sections = re.split(r"\n(?=#{1,3} )", "\n" + text.strip())
+        sections = [s.strip() for s in sections if s.strip()]
+
+        chunks: list[str] = []
+        for section in sections:
+            if len(section) <= max_chars:
+                chunks.append(section)
+                continue
+
+            # Extract section header (first line when it starts with #)
+            parts = section.split("\n", 1)
+            header = parts[0].strip() if parts[0].startswith("#") else ""
+            body = parts[1].strip() if len(parts) > 1 else section
+
+            # Split body on paragraph boundaries
+            paragraphs = re.split(r"\n{2,}", body)
+            current_parts: list[str] = [header] if header else []
+            current_len: int = len(header) if header else 0
+
+            for para in paragraphs:
+                para = para.strip()
+                if not para:
+                    continue
+                add_len = len(para) + (2 if current_parts else 0)
+                if current_len + add_len <= max_chars:
+                    current_parts.append(para)
+                    current_len += add_len
+                else:
+                    if current_parts:
+                        chunks.append("\n\n".join(current_parts))
+                    # Re-prepend header so each chunk is self-contained
+                    current_parts = [header, para] if header else [para]
+                    current_len = (len(header) + 2 + len(para)) if header else len(para)
+
+            if current_parts:
+                chunks.append("\n\n".join(current_parts))
+
+        # Drop tiny fragments; fall back to first portion if nothing remains
+        return [c for c in chunks if len(c.strip()) >= 40] or [text[: max_chars * 3]]
+
+    async def upsert_chunks(
+        self,
+        collection: str,
+        text: str,
+        metadata: dict,
+        max_chars: int = 600,
+    ) -> list[str]:
+        """Split text into semantic chunks and upsert each as a separate Qdrant point.
+
+        Vectors are batched in a single HF API call for efficiency.
+        Each chunk inherits all metadata fields plus chunk_index and chunk_total.
+        Returns list of point IDs.
+        """
+        chunks = self._split_into_chunks(text, max_chars)
+        if not chunks:
+            return []
+
+        total = len(chunks)
+        vectors = await self._embed_batch(chunks)
+        now_unix = int(time.time())
+
+        points = []
+        point_ids = []
+        for i, (chunk_text, vector) in enumerate(zip(chunks, vectors, strict=False)):
+            point_id = self._point_id(chunk_text)
+            payload = {
+                "text": chunk_text,
+                "ingested_at_unix": now_unix,
+                "chunk_index": i,
+                "chunk_total": total,
+                **metadata,
+            }
+            points.append(
+                qdrant_models.PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload=payload,
+                )
+            )
+            point_ids.append(point_id)
+
+        await self._client.upsert(collection_name=collection, points=points)
+        logger.debug("Upserted %d chunks into '%s'", total, collection)
+        return point_ids
+
+    # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
 

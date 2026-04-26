@@ -430,7 +430,18 @@ class DeskRegistry:
         now_utc = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         header = f"CURRENT TIME (UTC): {now_utc}"
         if context_block and context_block.strip():
-            return f"{header}\n\n## INTELLIGENCE CONTEXT\n{context_block.strip()}\n\n{user_message}"
+            # context_block already begins with "## INTELLIGENCE CONTEXT" — do not add a
+            # duplicate heading. Insert a "HISTORICAL BACKGROUND" warning and a clear
+            # "## CURRENT TASK" separator so the model cannot confuse stored records with
+            # the live analysis it is being asked to produce.
+            ctx = context_block.strip()
+            warning = (
+                "\n> **HISTORICAL BACKGROUND ONLY** — the records below are retrieved "
+                "knowledge-base entries and prior analyses. They provide context. "
+                "Your task is defined in the **CURRENT TASK** section below. "
+                "Do NOT reproduce, paraphrase, or summarise these records as your output.\n"
+            )
+            return f"{header}\n\n{ctx}{warning}\n\n## CURRENT TASK\n\n{user_message}"
         return f"{header}\n\n{user_message}"
 
     # ------------------------------------------------------------------

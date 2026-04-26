@@ -2733,8 +2733,11 @@ class OsiaOrchestrator:
             reliability = r.metadata.get("reliability_tier", "?")
             timestamp = r.metadata.get("timestamp", r.metadata.get("collected_at", ""))
             source_label = r.metadata.get("source", r.collection)
+            # Truncate individual context entries so a single large prior INTSUM cannot
+            # dominate the context window and tempt the model into reproducing it verbatim.
+            text_snippet = r.text[:1500] + "\n…[truncated]" if len(r.text) > 1500 else r.text
             lines.append(
-                f"[{r.collection} | {source_label}] (Reliability: {reliability}, Score: {r.score:.2f}) {timestamp[:10] if timestamp else ''}\n{r.text}\n"
+                f"[{r.collection} | {source_label}] (Reliability: {reliability}, Score: {r.score:.2f}) {timestamp[:10] if timestamp else ''}\n{text_snippet}\n"
             )
         return "\n".join(lines)
 
@@ -3204,8 +3207,8 @@ class OsiaOrchestrator:
                     }
                     if ig_source_handle:
                         _meta["source_account"] = ig_source_handle
-                    await self.qdrant.upsert(desk_collection, analysis, metadata=_meta)
-                    logger.debug("Stored analysis in Qdrant collection '%s'", desk_collection)
+                    ids = await self.qdrant.upsert_chunks(desk_collection, analysis, _meta)
+                    logger.debug("Stored %d chunks in Qdrant collection '%s'", len(ids), desk_collection)
                 except Exception as e:
                     logger.warning("Failed to store analysis in Qdrant for desk '%s': %s", assigned_desk, e)
 
