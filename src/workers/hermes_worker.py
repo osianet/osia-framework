@@ -159,7 +159,7 @@ ECHO_RISK_THRESHOLD = float(os.getenv("HERMES_ECHO_RISK_THRESHOLD", "0.80"))
 STALENESS_DAYS = float(os.getenv("HERMES_STALENESS_DAYS", "30"))
 FRESH_HOURS = int(os.getenv("HERMES_FRESH_HOURS", "24"))
 SCORING_DOWNGRADE_DAYS = float(os.getenv("HERMES_SCORING_DOWNGRADE_DAYS", "14"))
-CONTRA_MODEL = os.getenv("HERMES_CONTRA_MODEL", "google/gemini-flash-1.5")
+CONTRA_MODEL = os.getenv("HERMES_CONTRA_MODEL", "google/gemini-2.0-flash-lite-001")
 
 DESKS_DIR = Path("config/desks")
 
@@ -1340,15 +1340,15 @@ async def _score_chunk_against_kb(
 
     async def _probe(col: str) -> str | None:
         try:
-            hits = await client.search(
+            result = await client.query_points(
                 collection_name=col,
-                query_vector=chunk_vector,
+                query=chunk_vector,
                 limit=1,
                 score_threshold=KB_CORROBORATION_THRESHOLD,
                 with_vectors=False,
                 with_payload=False,
             )
-            return col if hits else None
+            return col if result.points else None
         except Exception:
             return None  # collection absent or temporarily unavailable
 
@@ -1553,14 +1553,15 @@ async def _echo_chamber_pass(
             continue
 
         try:
-            neighbours = await client.search(
+            result = await client.query_points(
                 collection_name=desk.collection,
-                query_vector=vector,
+                query=vector,
                 limit=10,
                 with_payload=True,
                 with_vectors=False,
                 query_filter=qdrant_models.Filter(must_not=[qdrant_models.HasIdCondition(has_id=[record.id])]),
             )
+            neighbours = result.points
         except Exception as e:
             logger.warning("Echo: neighbour search failed for '%s': %s", desk.collection, e)
             continue
@@ -1708,15 +1709,16 @@ async def _contradiction_detection_pass(
             continue
 
         try:
-            similar = await client.search(
+            result = await client.query_points(
                 collection_name=desk.collection,
-                query_vector=vector,
+                query=vector,
                 limit=6,
                 score_threshold=CONTRADICTION_SIMILARITY_THRESHOLD,
                 with_payload=True,
                 with_vectors=False,
                 query_filter=qdrant_models.Filter(must_not=[qdrant_models.HasIdCondition(has_id=[record.id])]),
             )
+            similar = result.points
         except Exception as e:
             logger.warning("Contradiction: similarity search failed: %s", e)
             continue

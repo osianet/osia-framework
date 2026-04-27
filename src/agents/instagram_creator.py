@@ -67,17 +67,25 @@ class InstagramCreator:
         self._countries_dir = countries_dir
         self._headless = headless
 
-    async def create_new(self, country: str = "AU", skip_vpn: bool = False) -> InstagramAccount:
+    async def create_new(
+        self, country: str = "AU", skip_vpn: bool = False, sms_country: str | None = None
+    ) -> InstagramAccount:
         """
         Full automated creation flow. Returns the registered account (state=WARMING).
         Raises on any failure; cleans up partial state and cancels SMSPool order.
 
         skip_vpn=True: omit VPN switching entirely — use when the caller (e.g. ig_create_account.sh)
         handles VPN switching externally with appropriate privileges.
+
+        sms_country: SMSPool country code to use for purchasing the OTP number.
+        Defaults to `country`. Override when the target country only has virtual numbers
+        (e.g. AU only has AU_V) — use a country with real SIM numbers such as US or GB.
+        The phone number is only used for signup OTP, not for account identity.
         """
         if not self._manager.smspool:
             raise RuntimeError("SMSPool not configured — set SMSPOOL_API_KEY in .env")
 
+        sms_country = sms_country or country
         order_data: dict = {}
         account: InstagramAccount | None = None
         original_slug: str | None = None
@@ -85,8 +93,8 @@ class InstagramCreator:
 
         try:
             # --- Purchase phone number ---
-            logger.info("Purchasing SMSPool number for country=%s", country)
-            order_data = await self._manager.smspool.purchase_number(country)
+            logger.info("Purchasing SMSPool number for sms_country=%s (account country=%s)", sms_country, country)
+            order_data = await self._manager.smspool.purchase_number(sms_country)
             # `number` = full number with country code (e.g. 61468245956)
             # `phonenumber` = subscriber digits only (e.g. 468245956) — do not use alone
             phone_raw = str(order_data.get("number") or order_data.get("phonenumber", ""))
@@ -94,7 +102,7 @@ class InstagramCreator:
             order_id = str(order_data.get("order_id") or order_data.get("orderid", ""))
             if not phone or not order_id:
                 raise RuntimeError(f"Unexpected SMSPool response: {order_data}")
-            logger.info("SMSPool order purchased: %s country=%s", order_id, country)
+            logger.info("SMSPool order purchased: %s sms_country=%s", order_id, sms_country)
 
             # --- Register bare account record (CREATED state) ---
             account = await self._manager.register(
@@ -102,7 +110,7 @@ class InstagramCreator:
                 password=_gen_password(),
                 email="",
                 phone=phone,
-                phone_country=country,
+                phone_country=sms_country,
                 vpn_country=country,
                 smspool_order_id=order_id,
             )
@@ -121,10 +129,22 @@ class InstagramCreator:
             locale, _tz = _COUNTRY_PROFILE.get(country.upper(), ("en-US", "America/New_York"))
             await self._run_browser_signup(account, locale)
 
-            # Verify cookies were actually saved — if not, the signup succeeded on Instagram's
-            # side but we have nothing usable, so treat it as a failed creation.
-            if not await self._manager.get_cookie_content(account.id):
+            # Verify cookies contain sessionid — a missing sessionid means the browser
+            # session was captured before authentication completed (common if signup was
+            # interrupted by a CAPTCHA or checkpoint that was not resolved).
+            content = await self._manager.get_cookie_content(account.id)
+            if not content:
                 raise RuntimeError("Cookie content missing after signup — creation incomplete")
+            cookie_names = [
+                line.split("\t")[5]
+                for line in content.splitlines()
+                if line and not line.startswith("#") and len(line.split("\t")) >= 7
+            ]
+            if "sessionid" not in cookie_names:
+                raise RuntimeError(
+                    f"sessionid missing from signup cookies (got: {cookie_names}) — "
+                    "signup may have stalled at a CAPTCHA or checkpoint"
+                )
 
             # --- Promote to WARMING ---
             await self._manager.start_warming(account.id)
@@ -154,8 +174,10 @@ class InstagramCreator:
     # ---------------------------------------------------------------- browser
 
     async def _run_browser_signup(self, account: InstagramAccount, locale: str) -> None:
-        cookie_path = Path(account.cookies_path)
-        cookie_path.parent.mkdir(parents=True, exist_ok=True)
+        import tempfile
+
+        # Use a temp file as staging; cookies are stored in Redis, not on disk permanently.
+        cookie_path = Path(tempfile.gettempdir()) / f"osia_ig_signup_{account.id}.txt"
         debug_dir = self._manager._base_dir / "logs" / "ig_debug"
         debug_dir.mkdir(parents=True, exist_ok=True)
 
@@ -184,9 +206,14 @@ class InstagramCreator:
 
             try:
                 await self._signup_flow(page, account, captured_sitekey)
+
+                # Verify we're actually logged in before exporting cookies.
+                # Navigate to the home page and look for the authenticated feed icon.
+                # This catches cases where OTP was entered but Instagram rejected it,
+                # showed a challenge, or the session was never created.
+                await _verify_logged_in(page, account.id, debug_dir)
+
                 await _export_cookies_netscape(page, cookie_path)
-                logger.info("Cookies written to %s", cookie_path)
-                # Also store in Redis so yt-dlp can use them without a file sync
                 content = cookie_path.read_text(encoding="utf-8")
                 await self._manager.set_cookie_content(account.id, content)
                 logger.info("Cookies stored in Redis for account %s", account.id)
@@ -211,6 +238,7 @@ class InstagramCreator:
                 raise
             finally:
                 await context.close()
+                cookie_path.unlink(missing_ok=True)
 
     async def _signup_flow(self, page, account: InstagramAccount, captured_sitekey: list[str] | None = None) -> None:
         logger.info("Opening signup page...")
@@ -278,8 +306,14 @@ class InstagramCreator:
         # Submit signup form — Instagram uses div[role="button"] not button[type="submit"]
         if not await _click_action_button(page, ["Submit", "Next", "Sign up"]):
             raise RuntimeError("Cannot locate signup submit button")
-        await page.wait_for_load_state("networkidle", timeout=20_000)
-        await _pause(1.0, 2.0)
+        # Wait for the SPA to finish its post-submit API call and render the next step.
+        # networkidle alone isn't sufficient — the spinner can be client-side only, and
+        # Instagram's CAPTCHA dialog renders a few seconds after the spinner appears.
+        try:
+            await page.wait_for_load_state("networkidle", timeout=20_000)
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
+        await _pause(3.0, 5.0)
         await _check_for_block(page)
 
         # Instagram shows a "Help us confirm it's you" dialog with a reCAPTCHA before the OTP.
@@ -309,8 +343,12 @@ class InstagramCreator:
         """
         try:
             dialog = page.get_by_role("dialog").first
-            if not await dialog.is_visible():
-                return
+            # Wait up to 15s for Instagram to render the security/CAPTCHA dialog.
+            # It appears several seconds after the signup spinner, not immediately.
+            try:
+                await dialog.wait_for(state="visible", timeout=15_000)
+            except Exception:
+                return  # No dialog appeared — proceed directly to OTP/delivery choice
             dialog_text = await dialog.inner_text()
             logger.info("Security dialog: %s", dialog_text[:80].replace("\n", " "))
         except Exception:
@@ -415,35 +453,42 @@ class InstagramCreator:
         except Exception as exc:
             logger.debug("Suppressed: %s", exc)
 
-        # Try label-based selectors first (same approach as signup form), then CSS fallbacks
-        otp_field = await _by_label(
-            page,
-            [
-                "Confirmation code",
-                "Security code",
-                "Verification code",
-                "Enter the code",
-                "Enter confirmation code",
-                "6-digit code",
-                "Code",
-            ],
-        ) or await _find(
-            page,
-            [
-                'input[maxlength="6"]',
-                'input[type="number"]',
-                'input[autocomplete="one-time-code"]',
-                'input[name="verificationCode"]',
-            ],
-        )
+        # Wait for OTP page to render — it appears after CAPTCHA/delivery choice resolves.
+        # Poll with a combined wait so we don't fail if the page needs a few more seconds.
+        otp_field = None
+        for _ in range(20):  # up to 20s
+            otp_field = await _by_label(
+                page,
+                [
+                    "Confirmation code",
+                    "Security code",
+                    "Verification code",
+                    "Enter the code",
+                    "Enter confirmation code",
+                    "6-digit code",
+                    "Code",
+                ],
+            ) or await _find(
+                page,
+                [
+                    'input[maxlength="6"]',
+                    'input[type="number"]',
+                    'input[autocomplete="one-time-code"]',
+                    'input[name="verificationCode"]',
+                ],
+            )
+            if otp_field:
+                break
+            await asyncio.sleep(1)
+
         if not otp_field:
             await _check_for_block(page)
             raise RuntimeError("Cannot locate OTP input field — Instagram may have blocked signup")
 
-        logger.info("Polling SMSPool for OTP (order %s)...", account.smspool_order_id)
-        otp = await self._manager.smspool.poll_otp(account.smspool_order_id, timeout=120, interval=5)
+        logger.info("Polling SMSPool for OTP (order %s, up to 5 min)...", account.smspool_order_id)
+        otp = await self._manager.smspool.poll_otp(account.smspool_order_id, timeout=300, interval=5)
         if not otp:
-            raise RuntimeError(f"OTP not received within timeout for order {account.smspool_order_id}")
+            raise RuntimeError(f"OTP not received within 5 minutes for order {account.smspool_order_id}")
 
         otp = otp.replace(" ", "")
         logger.info("OTP received: %s", otp)
@@ -452,8 +497,29 @@ class InstagramCreator:
         await _pause(0.5, 1.0)
 
         if await _click_action_button(page, ["Next", "Submit", "Confirm", "Continue"]):
-            await page.wait_for_load_state("networkidle", timeout=20_000)
-            await _pause(1.0, 2.0)
+            # Wait for the OTP field to disappear — that's the clearest signal that
+            # Instagram has accepted the code and is transitioning to the next page.
+            # networkidle alone fires too early (the spinner is often client-side).
+            try:
+                await otp_field.wait_for(state="hidden", timeout=20_000)
+            except Exception as exc:
+                logger.debug("Suppressed: %s", exc)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception as exc:
+                logger.debug("Suppressed: %s", exc)
+            await _pause(3.0, 5.0)
+
+        # Save a screenshot so we can see whether Instagram accepted the OTP or
+        # is showing a rejection / additional challenge page.
+        debug_dir = self._manager._base_dir / "logs" / "ig_debug"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            shot = debug_dir / f"{account.smspool_order_id}_post_otp.png"
+            await page.screenshot(path=str(shot), full_page=False)
+            logger.info("Post-OTP screenshot: %s", shot)
+        except Exception as exc:
+            logger.debug("Suppressed: %s", exc)
 
     # ---------------------------------------------------------------- VPN
 
@@ -668,7 +734,7 @@ async def _select_combobox_option(page, combo, value: str) -> None:
 async def _skip_optional_steps(page) -> None:
     """Dismiss up to 6 rounds of optional post-signup prompts."""
     for _ in range(6):
-        if not await _click_action_button(page, ["Not now", "Skip", "Cancel", "Maybe later"]):
+        if not await _click_action_button(page, ["Not now", "Not Now", "Skip", "Cancel", "Maybe later", "Maybe Later"]):
             # Also try aria-label Close (icon buttons)
             try:
                 el = page.get_by_role("button", name="Close")
@@ -786,8 +852,12 @@ async def _handle_delivery_choice(page) -> None:
     step with SMS / Email radio buttons. Select SMS (phone) if present, then click Next.
     """
     try:
-        # Check for radio buttons indicating delivery method choice
+        # Wait briefly for delivery choice page — it appears after CAPTCHA resolves
         sms_opt = page.get_by_role("radio", name="SMS").first
+        try:
+            await sms_opt.wait_for(state="visible", timeout=5_000)
+        except Exception:
+            return  # No delivery choice page
         if await sms_opt.is_visible():
             logger.info("Delivery choice page detected — selecting SMS")
             await sms_opt.click()
@@ -797,6 +867,79 @@ async def _handle_delivery_choice(page) -> None:
             await _pause(1.0, 2.0)
     except Exception as exc:
         logger.debug("Suppressed: %s", exc)
+
+
+async def _save_shot(page, debug_dir: Path, account_id: str, label: str) -> None:
+    try:
+        shot = debug_dir / f"{account_id}_{label}.png"
+        await page.screenshot(path=str(shot), full_page=False)
+        logger.info("Screenshot: %s", shot)
+    except Exception as exc:
+        logger.debug("Suppressed: %s", exc)
+
+
+async def _verify_logged_in(page, account_id: str, debug_dir: Path) -> None:
+    """
+    Confirm we're authenticated before exporting cookies.
+
+    Checks the current page first (without navigating) to avoid interrupting an
+    in-progress post-OTP session establishment. Only navigates to the home page
+    if the current URL is neutral (not a login/challenge page and not already the feed).
+    Raises RuntimeError if no authenticated feed indicator is found.
+    """
+
+    def _has_bad_url(url: str) -> bool:
+        return any(kw in url for kw in ("login", "emailsignup", "challenge", "checkpoint", "two_factor", "verify"))
+
+    async def _check_feed_visible() -> bool:
+        for label in ("Home", "Search"):
+            try:
+                if await page.locator(f'svg[aria-label="{label}"]').first.is_visible(timeout=3_000):
+                    return True
+            except Exception as exc:
+                logger.debug("Suppressed: %s", exc)
+        return False
+
+    # --- Step 1: check current page (don't navigate yet) ---
+    url = page.url
+    logger.info("Post-signup current URL: %s", url)
+
+    if _has_bad_url(url):
+        await _save_shot(page, debug_dir, account_id, "post_signup")
+        raise RuntimeError(f"Signup did not complete — browser is on: {url}")
+
+    # Give the current page a moment to settle if Instagram is mid-transition
+    await asyncio.sleep(3)
+    if await _check_feed_visible():
+        logger.info("Login confirmed on current page for account %s", account_id[:8])
+        await _save_shot(page, debug_dir, account_id, "post_signup")
+        return
+
+    # --- Step 2: navigate home only if current page is ambiguous ---
+    # (e.g. still on a post-OTP transition page that isn't the feed or a challenge)
+    logger.info("Feed not visible on current page — navigating to home to confirm")
+    await page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=30_000)
+    try:
+        await page.wait_for_load_state("networkidle", timeout=10_000)
+    except Exception as exc:
+        logger.debug("Suppressed: %s", exc)
+    await asyncio.sleep(2)
+
+    url = page.url
+    logger.info("Post-navigation URL: %s", url)
+    await _save_shot(page, debug_dir, account_id, "post_signup")
+
+    if _has_bad_url(url):
+        raise RuntimeError(f"Signup did not complete — browser is on: {url}")
+
+    logged_in = await _check_feed_visible()
+    if not logged_in:
+        raise RuntimeError(
+            f"Signup appeared to complete but browser shows no authenticated feed — URL: {url}. "
+            "Check logs/ig_debug/ for post_signup screenshot."
+        )
+
+    logger.info("Login confirmed for account %s", account_id[:8])
 
 
 async def _export_cookies_netscape(page, cookie_path: Path) -> None:

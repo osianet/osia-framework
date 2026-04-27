@@ -1,0 +1,19 @@
+[Unit]
+Description=OSIA Instagram account pool health check and warmup
+After=network.target
+
+[Service]
+Type=oneshot
+User=sysadmin
+Group=sysadmin
+WorkingDirectory=/home/sysadmin/osia-framework
+EnvironmentFile=/home/sysadmin/osia-framework/.env
+ExecStart=/home/sysadmin/osia-framework/.venv/bin/python -m src.cron.instagram_pool_health
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osia-ig-health
+# Warmup sessions are long (feed browsing + inter-session delays for multiple accounts)
+TimeoutStartSec=7200
+
+[Install]
+WantedBy=multi-user.target

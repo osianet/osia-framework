@@ -91,9 +91,10 @@ class SMSPoolClient:
                 raise RuntimeError(f"SMSPool purchase failed: {data}")
             return data
 
-    async def poll_otp(self, order_id: str, timeout: int = 120, interval: int = 5) -> str | None:
+    async def poll_otp(self, order_id: str, timeout: int = 300, interval: int = 5) -> str | None:
         """Poll until OTP arrives or timeout. Returns OTP string or None."""
         deadline = time.time() + timeout
+        attempt = 0
         async with httpx.AsyncClient(timeout=30) as client:
             while time.time() < deadline:
                 r = await client.get(
@@ -102,8 +103,18 @@ class SMSPoolClient:
                 )
                 r.raise_for_status()
                 data = r.json()
-                if data.get("sms"):
-                    return str(data["sms"])
+                sms = data.get("sms")
+                attempt += 1
+                remaining = int(deadline - time.time())
+                logger.debug(
+                    "SMSPool poll #%d order=%s status=%s remaining=%ds",
+                    attempt,
+                    order_id,
+                    data.get("status", data),
+                    remaining,
+                )
+                if sms and str(sms) not in ("0", "", "false", "False"):
+                    return str(sms)
                 await asyncio.sleep(interval)
         return None
 
@@ -182,7 +193,7 @@ class InstagramAccountManager:
             smspool_order_id=smspool_order_id,
             state="CREATED",
             created_at=int(time.time()),
-            cookies_path=str(self._cookie_dir / f"{account_id}.txt"),
+            cookies_path="",  # Cookies live in Redis; disk path unused for new accounts
         )
         await self._save(account)
         logger.info("Registered new account %s (%s) as CREATED", account_id, username)

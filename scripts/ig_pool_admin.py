@@ -181,6 +181,12 @@ async def main() -> None:
     parser.add_argument("--phone-country", default="AU", dest="phone_country")
     parser.add_argument("--vpn-country", default="AU", dest="vpn_country")
     parser.add_argument("--smspool-order-id", default="", dest="smspool_order_id")
+    parser.add_argument(
+        "--count",
+        type=int,
+        default=1,
+        help="Number of accounts to create in sequence (used with --create-account)",
+    )
 
     args = parser.parse_args()
 
@@ -251,12 +257,30 @@ async def main() -> None:
 
         elif args.create_account:
             country = args.create_account.upper()
-            headed = args.headed
-            print(f"Starting account creation for country={country} (VPN managed externally, headed={headed})...")
-            creator = InstagramCreator(mgr, headless=not headed)
-            account = await creator.create_new(country=country, skip_vpn=True)
-            print(f"\nSuccess: {account.id}  ({account.username})  state=WARMING")
-            print(f"Cookie path: {account.cookies_path}")
+            count = max(1, args.count)
+            creator = InstagramCreator(mgr, headless=not args.headed)
+            created: list[str] = []
+            failed = 0
+
+            for i in range(count):
+                if i > 0:
+                    input(f"\n[{i}/{count}] Press Enter when ready for the next account…")
+
+                print(f"\n[{i + 1}/{count}] Creating account for country={country} (headed={args.headed})…")
+                try:
+                    account = await creator.create_new(country=country, skip_vpn=True)
+                    created.append(f"  {account.id}  @{account.username}")
+                    print(f"  OK → @{account.username} ({account.id[:8]}…) — cookies in Redis")
+                except Exception as exc:
+                    failed += 1
+                    print(f"  FAILED: {exc}")
+
+            print(f"\n{'─' * 60}")
+            print(f"Done. {len(created)} created, {failed} failed.")
+            if created:
+                print("WARMING accounts:")
+                for line in created:
+                    print(line)
 
         elif args.warm:
             upload_avatar = not args.no_avatar
