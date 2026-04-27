@@ -1786,6 +1786,7 @@ class OsiaOrchestrator:
                         _MAX_IG_ATTEMPTS,
                     )
                     await self._ig_pool.flag(ig_account_id, reason="yt-dlp metadata auth failure")
+                if _host in ("www.instagram.com", "instagram.com"):
                     next_result = await self._ig_pool.get_next_active_cookie_path(tried_accounts)
                     if next_result:
                         ig_account_id, ig_cookie = next_result
@@ -1861,7 +1862,7 @@ class OsiaOrchestrator:
                     )
                     return output_path
 
-                # Auth failure on a pooled account — flag it and try the next one
+                # Flag the current account if it produced a detectable auth error
                 if ig_account_id and self._yt_dlp_auth_error(proc.stderr or ""):
                     logger.warning(
                         "IG account %s flagged: auth error (attempt %d/%d) — trying next account",
@@ -1870,10 +1871,20 @@ class OsiaOrchestrator:
                         _MAX_IG_ATTEMPTS,
                     )
                     await self._ig_pool.flag(ig_account_id, reason="yt-dlp download auth failure")
+
+                # For Instagram, always try the next pool account on any failure —
+                # covers: no initial account resolved, auth error, or unknown error.
+                if _host in ("www.instagram.com", "instagram.com"):
                     next_result = await self._ig_pool.get_next_active_cookie_path(tried_accounts)
                     if next_result:
                         ig_account_id, ig_cookie = next_result
                         tried_accounts.add(ig_account_id)
+                        logger.info(
+                            "Retrying yt-dlp download with IG account %s (attempt %d/%d)",
+                            ig_account_id,
+                            attempt + 2,
+                            _MAX_IG_ATTEMPTS,
+                        )
                         continue
 
                 logger.info(
