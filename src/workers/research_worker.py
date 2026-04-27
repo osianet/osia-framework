@@ -639,14 +639,12 @@ async def tool_fetch_url(url: str, http: httpx.AsyncClient) -> str:
     except Exception as e:
         logger.debug("curl_cffi fetch failed for %s: %s", url, e)
 
-    # Tier 2: httpx
+    # Tier 2: httpx — skipped if tier 1 already hit a bot wall
     if not html and not bot_walled:
         try:
             resp = await http.get(url, headers=_BROWSER_HEADERS, timeout=20.0)
             if resp.status_code == 200:
                 html = resp.text
-            elif resp.status_code in (403, 429):
-                bot_walled = True
         except Exception as e:
             logger.debug("httpx article fetch failed for %s: %s", url, e)
 
