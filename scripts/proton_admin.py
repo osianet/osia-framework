@@ -62,7 +62,7 @@ async def cmd_show(mgr: ProtonAccountManager, account_id: str) -> None:
         sys.exit(1)
     print(f"ID:       {account.id}")
     print(f"Email:    {account.email}")
-    print(f"Password: {account.password}")
+    print("Password: [REDACTED]")
     print(f"State:    {account.state}")
     print(f"Created:  {_ts(account.created_at)}")
     if account.used_at:
