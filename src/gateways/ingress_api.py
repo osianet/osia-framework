@@ -22,6 +22,7 @@ import hmac
 import json
 import logging
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -153,6 +154,10 @@ class ResearchRequest(BaseModel):
         pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$",
         description="Optional desk slug. Determines model routing in the research worker (e.g. cyber gets mistral-small-3-2-24b-instruct). Defaults to AI-selected routing.",
     )
+    priority: Literal["high", "normal", "low"] = Field(
+        default="normal",
+        description="Queue priority. High runs before normal; low runs after. Defaults to normal.",
+    )
 
     model_config = {"str_strip_whitespace": True}
 
@@ -231,17 +236,21 @@ async def research(request: Request, body: ResearchRequest, _=Depends(_check_aut
 
     already_queued = await r.exists(queued_key)
     if already_queued:
-        depth = await r.llen(RESEARCH_QUEUE)
+        depth = await r.zcard(RESEARCH_QUEUE)
         logger.debug("Research dedup skip: topic already queued (key=%s)", queued_key)
         return {"ok": True, "queued": False, "reason": "duplicate", "queue_depth": depth}
 
     task = {
         "topic": body.topic,
         "source": f"api:{label}",
+        "priority": body.priority,
         "timestamp": datetime.now(UTC).isoformat(),
         **({"desk": body.desk} if body.desk else {}),
     }
-    depth = await r.rpush(RESEARCH_QUEUE, json.dumps(task))
+    _tier = {"high": 1, "normal": 2, "low": 3}[body.priority]
+    score = _tier * 1_000_000_000_000 + int(time.time())
+    await r.zadd(RESEARCH_QUEUE, {json.dumps(task): score})
+    depth = await r.zcard(RESEARCH_QUEUE)
 
     # TTL matches the research worker's cooldown so the same topic can be re-submitted
     # after the cooldown window expires (same as before, different key namespace).
@@ -258,7 +267,7 @@ async def research(request: Request, body: ResearchRequest, _=Depends(_check_aut
 async def queue_status(request: Request, _=Depends(_check_auth)):
     """Return current depth of both the task and research queues."""
     r = _get_redis()
-    task_depth, research_depth = await r.llen(TASK_QUEUE), await r.llen(RESEARCH_QUEUE)
+    task_depth, research_depth = await r.llen(TASK_QUEUE), await r.zcard(RESEARCH_QUEUE)
     return {
         "ok": True,
         "queues": {

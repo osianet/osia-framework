@@ -263,7 +263,7 @@ case $command in
 
             # Check critical env vars are set (non-empty)
             missing_vars=()
-            required_vars=("GEMINI_API_KEY" "SIGNAL_SENDER_NUMBER" "ANYTHINGLLM_API_KEY")
+            required_vars=("GEMINI_API_KEY" "SIGNAL_SENDER_NUMBER" "VENICE_API_KEY")
             for var in "${required_vars[@]}"; do
                 val=$(grep -E "^${var}=" "$SCRIPT_DIR/.env" 2>/dev/null | head -1 | cut -d'=' -f2-)
                 if [ -z "$val" ] || [[ "$val" == *"your_"*"_here"* ]]; then
@@ -342,7 +342,6 @@ case $command in
 
         # --- API & Component Health ---
         section_header "API HEALTH"
-        check_api_health "AnythingLLM" "http://localhost:3001"
         QDRANT_API_KEY_HEALTH=$(grep -E '^QDRANT_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2-)
         if [ -n "$QDRANT_API_KEY_HEALTH" ]; then
             http_code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 -H "api-key: $QDRANT_API_KEY_HEALTH" http://localhost:6333/collections 2>/dev/null)
@@ -458,9 +457,23 @@ case $command in
         section_header "TASK QUEUE"
         if docker exec osia-redis redis-cli ping 2>/dev/null | grep -q PONG; then
             queue_depth=$(docker exec osia-redis redis-cli LLEN osia:task_queue 2>/dev/null | tr -d '\r')
-            research_depth=$(docker exec osia-redis redis-cli LLEN osia:research_queue 2>/dev/null | tr -d '\r')
-            echo -e "  Task queue:     ${BOLD}${queue_depth:-0}${NC} pending"
-            echo -e "  Research queue: ${BOLD}${research_depth:-0}${NC} pending"
+            # Research queue is a priority sorted set — use ZCARD not LLEN
+            research_depth=$(docker exec osia-redis redis-cli ZCARD osia:research_queue 2>/dev/null | tr -d '\r')
+            processing_depth=$(docker exec osia-redis redis-cli LLEN osia:research:processing 2>/dev/null | tr -d '\r')
+            inflight_guard=$(docker exec osia-redis redis-cli SCARD osia:research:queued_topics 2>/dev/null | tr -d '\r')
+            seen_count=$(docker exec osia-redis redis-cli SCARD osia:research:seen_topics 2>/dev/null | tr -d '\r')
+
+            echo -e "  Task queue:      ${BOLD}${queue_depth:-0}${NC} pending"
+            echo -e "  Research queue:  ${BOLD}${research_depth:-0}${NC} pending  ${DIM}(${processing_depth:-0} in-flight, ${inflight_guard:-0} guarded, ${seen_count:-0} seen)${NC}"
+
+            # Priority breakdown for research queue (sorted set score bands)
+            if [ "${research_depth:-0}" -gt 0 ]; then
+                r_critical=$(docker exec osia-redis redis-cli ZCOUNT osia:research_queue 0 999999999999 2>/dev/null | tr -d '\r')
+                r_high=$(docker exec osia-redis redis-cli ZCOUNT osia:research_queue 1000000000000 1999999999999 2>/dev/null | tr -d '\r')
+                r_normal=$(docker exec osia-redis redis-cli ZCOUNT osia:research_queue 2000000000000 2999999999999 2>/dev/null | tr -d '\r')
+                r_low=$(docker exec osia-redis redis-cli ZCOUNT osia:research_queue 3000000000000 +inf 2>/dev/null | tr -d '\r')
+                echo -e "  ${DIM}  ↳ critical:${r_critical:-0}  high:${r_high:-0}  normal:${r_normal:-0}  low:${r_low:-0}${NC}"
+            fi
 
             if [ "${queue_depth:-0}" -gt 0 ]; then
                 echo -e "  ${DIM}Next task preview:${NC}"
@@ -486,25 +499,32 @@ case $command in
 
         check_timer "osia-research-worker.timer"
 
-        # Last run result
-        last_run=$(journalctl -u osia-research-worker.service -n 1 --no-pager -q 2>/dev/null | grep -oE "(Batch complete.*|Research Worker starting|error.*)" | head -1)
-        [ -n "$last_run" ] && echo -e "  Last run:        ${DIM}${last_run}${NC}"
-
-        # Queue depths
-        if docker exec osia-redis redis-cli ping 2>/dev/null | grep -q PONG; then
-            research_depth=$(docker exec osia-redis redis-cli LLEN osia:research_queue 2>/dev/null | tr -d '\r')
-            seen_count=$(docker exec osia-redis redis-cli SCARD osia:research:seen_topics 2>/dev/null | tr -d '\r')
-            echo -e "  Pending topics:  ${BOLD}${research_depth:-0}${NC} queued, ${seen_count:-0} already researched"
+        # Active worker processes (parallel instances)
+        worker_pids=$(pgrep -fc "python.*research_worker" 2>/dev/null || echo 0)
+        worker_instances=$(grep -E '^RESEARCH_WORKER_INSTANCES=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]')
+        worker_instances="${worker_instances:-1}"
+        if [ "${worker_pids:-0}" -gt 0 ]; then
+            echo -e "  Active workers:  ${GREEN}${worker_pids} running${NC} ${DIM}(configured: ${worker_instances})${NC}"
         else
-            echo -e "  ${DIM}Redis unavailable — cannot inspect research queue${NC}"
+            echo -e "  Active workers:  ${DIM}none (timer fires every 15 min, configured instances: ${worker_instances})${NC}"
         fi
 
-        # OpenRouter key check
+        # Last batch result from journal
+        last_run=$(journalctl -u osia-research-worker.service -n 50 --no-pager -q 2>/dev/null | grep -oE "Batch complete\. succeeded=[0-9]+ failed=[0-9]+ skipped=[0-9]+ \| queue depth: [0-9]+" | tail -1)
+        [ -n "$last_run" ] && echo -e "  Last batch:      ${DIM}${last_run}${NC}"
+
+        # API provider status
+        VENICE_KEY=$(grep -E '^VENICE_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]')
         OR_KEY=$(grep -E '^OPENROUTER_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]')
-        if [ -n "$OR_KEY" ]; then
-            echo -e "  OpenRouter:      ${GREEN}key configured${NC}"
+        GEMINI_KEY=$(grep -E '^GEMINI_API_KEY=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]')
+        provider_str=""
+        [ -n "$VENICE_KEY" ] && provider_str="${provider_str}Venice "
+        [ -n "$OR_KEY" ] && provider_str="${provider_str}OpenRouter "
+        [ -n "$GEMINI_KEY" ] && provider_str="${provider_str}Gemini"
+        if [ -n "$provider_str" ]; then
+            echo -e "  Providers:       ${GREEN}${provider_str// /, }${NC}"
         else
-            echo -e "  OpenRouter:      ${RED}OPENROUTER_API_KEY not set — worker will not run${NC}"
+            echo -e "  Providers:       ${RED}no API keys set — worker cannot run${NC}"
         fi
 
         echo -e "  ${DIM}Logs: journalctl -u osia-research-worker.service -f${NC}"

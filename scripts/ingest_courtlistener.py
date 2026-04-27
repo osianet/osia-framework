@@ -122,30 +122,24 @@ HIGH_VALUE_COURTS = {
 
 # Keywords in case name suggesting high HUMINT value
 NOTABLE_CASE_KEYWORDS = {
-    "united states v.",
-    "conspiracy",
     "espionage",
     "terrorism",
-    "bribery",
-    "corruption",
-    "fraud",
-    "rico",
-    "trafficking",
     "assassination",
     "treason",
-    "sanctions",
-    "laundering",
-    "surveillance",
-    "wiretap",
-    "classified",
     "national security",
     "cia",
     "nsa",
-    "fbi",
-    "doj",
-    "sec v.",
-    "ftc v.",
+    "classified",
+    "state secrets",
+    "foreign intelligence",
+    "war crimes",
+    "genocide",
 }
+
+# Minimum citation count to enqueue a case for deep research.
+# 50 is trivially common in federal circuits — use a high bar so only genuinely
+# landmark opinions are queued. SCOTUS cases are always enqueued regardless.
+NOTABLE_CITATION_FLOOR = 500
 
 CHUNK_SIZE = 600
 CHUNK_OVERLAP_WORDS = 80
@@ -557,7 +551,7 @@ class CourtListenerIngestor:
         if court_id == "scotus":
             return True
         citations = cluster.get("citation_count", 0) or 0
-        return citations >= 50
+        return citations >= NOTABLE_CITATION_FLOOR
 
     async def _maybe_enqueue(
         self, opinion_id: str, case_name: str, court_id: str, date_filed: str, cluster: dict, stats: IngestStats
@@ -571,12 +565,17 @@ class CourtListenerIngestor:
         topic = f"CourtListener notable case: {case_name} ({court_id.upper()}, {date_filed})"
         if citations:
             topic += f" — {citations} citations"
+
+        topic_normalised = topic.lower().strip()
+        if await self._redis.sismember("osia:research:queued_topics", topic_normalised):
+            return
+
         job = json.dumps(
             {
                 "job_id": str(uuid.uuid4()),
                 "topic": topic,
-                "desk": "human-intelligence-and-profiling-desk",
-                "priority": "normal",
+                "desk": "geopolitical-and-security-desk",
+                "priority": "low",
                 "triggered_by": "courtlistener_ingest",
                 "metadata": {
                     "opinion_id": opinion_id,
@@ -586,7 +585,11 @@ class CourtListenerIngestor:
                 },
             }
         )
-        await self._redis.rpush(RESEARCH_QUEUE_KEY, job)
+        # Use the priority sorted set (low tier) so court cases don't jump ahead
+        # of live Signal investigations or API-submitted research tasks.
+        score = 3 * 1_000_000_000_000 + int(time.time())
+        await self._redis.zadd(RESEARCH_QUEUE_KEY, {job: score})
+        await self._redis.sadd("osia:research:queued_topics", topic_normalised)
         await self._redis.set(redis_key, "1", ex=60 * 60 * 24 * 60)
         stats.events_enqueued += 1
         logger.debug("Enqueued notable case: %r", case_name[:80])

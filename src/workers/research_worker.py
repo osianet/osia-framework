@@ -43,6 +43,8 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
 
 import httpx
 from dotenv import load_dotenv
@@ -56,6 +58,12 @@ logging.basicConfig(
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger("osia.research_worker")
+
+# DDGS logs INFO for every backend engine failure it handles internally (Bing
+# DecodeErrors, Yahoo RequestErrors, etc.).  These are expected transient noise
+# — the library retries other engines automatically, so suppress below WARNING.
+for _ddgs_logger in ("ddgs", "ddgs.ddgs", "ddgs.engines", "ddgs.engines.yahoo_news"):
+    logging.getLogger(_ddgs_logger).setLevel(logging.ERROR)
 
 
 def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
@@ -101,6 +109,17 @@ CENSYS_API_SECRET = os.getenv("CENSYS_API_SECRET", "")
 CRIMINALIP_API_KEY = os.getenv("CRIMINALIP_API_KEY", "")
 OTX_API_KEY = os.getenv("OTX_API_KEY", "")
 ALEPH_API_KEY = os.getenv("ALEPH_API_KEY", "")  # Optional — public datasets accessible without key
+
+# Camoufox (real Firefox browser) — used when robots.txt disallows crawling or simpler
+# fetchers hit bot-detection walls.  Set CAMOUFOX_HEADLESS=false on desktop Linux.
+CAMOUFOX_HEADLESS = os.getenv("CAMOUFOX_HEADLESS", "true").lower() not in ("0", "false", "no")
+
+# Per-process semaphore — one Camoufox instance at a time to cap memory use.
+_camoufox_sem = asyncio.Semaphore(1)
+
+# Domain-level robots.txt cache: domain → (crawl_allowed, expires_at)
+_robots_cache: dict[str, tuple[bool, float]] = {}
+_ROBOTS_TTL = 3600.0  # re-check each domain at most once per hour
 
 WIKIPEDIA_USER_AGENT = os.getenv(
     "WIKIPEDIA_USER_AGENT",
@@ -263,10 +282,11 @@ class ResearchJob:
     job_id: str
     topic: str
     desk: str
-    priority: str = "normal"
+    priority: str = "normal"  # critical | high | normal | low
     directives_lens: bool = True
     triggered_by: str = ""
     source: str = ""  # set by ingress API (e.g. "api:external"); triggered_by used elsewhere
+    entity_type: str = ""  # Person | Organisation | Location | Event | Technology | Concept
 
     @classmethod
     def from_dict(cls, d: dict) -> "ResearchJob":
@@ -278,15 +298,45 @@ class ResearchJob:
             directives_lens=d.get("directives_lens", True),
             triggered_by=d.get("triggered_by", ""),
             source=d.get("source", ""),
+            entity_type=d.get("entity_type", ""),
         )
+
+
+# ---------------------------------------------------------------------------
+# Priority queue — sorted set scoring
+# ---------------------------------------------------------------------------
+
+# Lower score = processed first.  Tier × 10¹² keeps tiers well-separated;
+# Unix timestamp within each tier preserves FIFO order.
+PRIORITY_SCORES: dict[str, int] = {
+    "critical": 0,
+    "high": 1,
+    "normal": 2,
+    "low": 3,
+}
+
+
+def _priority_score(priority: str) -> int:
+    tier = PRIORITY_SCORES.get(priority, 2)
+    return tier * 1_000_000_000_000 + int(time.time())
 
 
 # ---------------------------------------------------------------------------
 # Redis client (direct — no HTTP queue API needed when running locally)
 # ---------------------------------------------------------------------------
 
-
+RESEARCH_QUEUE = "osia:research_queue"
 PROCESSING_LIST = "osia:research:processing"
+
+# Atomically pops the lowest-score member from a sorted set (KEYS[1]) and
+# appends it to a list (KEYS[2]).  Returns the member string, or nil if empty.
+_LUA_ZPOP_MOVE = """
+local result = redis.call('ZPOPMIN', KEYS[1], 1)
+if #result == 0 then return nil end
+local member = result[1]
+redis.call('RPUSH', KEYS[2], member)
+return member
+"""
 
 
 class RedisQueue:
@@ -294,21 +344,68 @@ class RedisQueue:
         import redis
 
         self._r = redis.from_url(REDIS_URL, decode_responses=True)
+        self._zpop_move = self._r.register_script(_LUA_ZPOP_MOVE)
+        self._migrate_list_to_zset()
+        self._recover_stranded_jobs()
+
+    def _migrate_list_to_zset(self) -> None:
+        """One-time migration: convert legacy list to sorted set on first run."""
+        key_type = self._r.type(RESEARCH_QUEUE)
+        if key_type == "none" or key_type == "zset":
+            return
+        if key_type != "list":
+            logger.warning("Unexpected Redis type for %s: %s — leaving as-is", RESEARCH_QUEUE, key_type)
+            return
+
+        items = self._r.lrange(RESEARCH_QUEUE, 0, -1)
+        logger.info("Migrating %d list items in %s to priority sorted set", len(items), RESEARCH_QUEUE)
+        pipe = self._r.pipeline()
+        pipe.delete(RESEARCH_QUEUE)
+        base_ts = int(time.time())
+        for i, item in enumerate(items):
+            score = PRIORITY_SCORES["normal"] * 1_000_000_000_000 + base_ts + i
+            pipe.zadd(RESEARCH_QUEUE, {item: score})
+        pipe.execute()
+        logger.info("Migration complete — %d items re-enqueued as normal priority", len(items))
+
+    def _recover_stranded_jobs(self) -> None:
+        """Re-queue any jobs left in the processing list from a previous crashed run.
+
+        LPOP is atomic so concurrent workers draining the list simultaneously is
+        safe — each item is popped exactly once regardless of how many workers call
+        this at startup.
+        """
+        recovered = 0
+        score_base = PRIORITY_SCORES["normal"] * 1_000_000_000_000 + int(time.time())
+        while True:
+            raw = self._r.lpop(PROCESSING_LIST)
+            if raw is None:
+                break
+            self._r.zadd(RESEARCH_QUEUE, {raw: score_base + recovered})
+            try:
+                topic = json.loads(raw).get("topic", "?")[:60]
+            except Exception:
+                topic = "?"
+            logger.info("Recovered stranded job: %s", topic)
+            recovered += 1
+        if recovered:
+            logger.info("Re-queued %d stranded job(s) into research queue", recovered)
 
     def depth(self) -> int:
-        return self._r.llen("osia:research_queue")
+        return self._r.zcard(RESEARCH_QUEUE)
 
     def processing_depth(self) -> int:
         return self._r.llen(PROCESSING_LIST)
 
     def pop(self) -> tuple[dict, str] | None:
-        """Atomically move one job from the queue into the processing list.
+        """Atomically move the highest-priority job into the processing list.
 
-        Uses BLMOVE so the job is never visible to other workers — it leaves
-        the main queue and enters the processing list in a single atomic step.
+        Uses a Lua script to ZPOPMIN from the sorted set and RPUSH into the
+        processing list in a single round-trip, so no job is ever lost or
+        visible to two workers simultaneously.
         Returns (parsed_payload, raw_json) so the caller can pass raw to complete().
         """
-        raw = self._r.blmove("osia:research_queue", PROCESSING_LIST, timeout=2, src="LEFT", dest="RIGHT")
+        raw = self._zpop_move(keys=[RESEARCH_QUEUE, PROCESSING_LIST])
         if raw is None:
             return None
         try:
@@ -317,18 +414,38 @@ class RedisQueue:
             self._r.lrem(PROCESSING_LIST, 1, raw)
             return None
 
+    def push(self, payload: dict, priority: str = "normal") -> int:
+        """Enqueue a job with the given priority. Returns current queue depth."""
+        score = _priority_score(priority)
+        self._r.zadd(RESEARCH_QUEUE, {json.dumps(payload): score})
+        return self._r.zcard(RESEARCH_QUEUE)
+
     def complete(self, raw: str) -> None:
         """Remove a job from the processing list after success or failure."""
         self._r.lrem(PROCESSING_LIST, 1, raw)
+
+    def release_inflight(self, topic: str) -> None:
+        """Remove a topic from the in-flight guard without marking it as seen.
+
+        Called on failure paths so the entity extractor can re-queue the topic
+        on a future poll. mark_seen() handles the success path via its own srem.
+        """
+        normalised = topic.lower().strip()
+        if normalised:
+            self._r.srem("osia:research:queued_topics", normalised)
 
     def is_seen(self, key: str) -> bool:
         return bool(self._r.exists(f"osia:research:seen:{key}"))
 
     def mark_seen(self, key: str, topic: str = "") -> None:
+        normalised = topic.lower().strip()
         self._r.set(f"osia:research:seen:{key}", "1", ex=RESEARCH_COOLDOWN_SECONDS)
-        if topic:
+        if normalised:
             # Keep seen_topics in sync so entity_extractor dedup survives Redis restarts.
-            self._r.sadd("osia:research:seen_topics", topic.lower().strip())
+            self._r.sadd("osia:research:seen_topics", normalised)
+            # Remove from the in-flight guard set so the topic can be re-queued
+            # by the entity extractor once the cooldown expires.
+            self._r.srem("osia:research:queued_topics", normalised)
 
 
 # ---------------------------------------------------------------------------
@@ -395,12 +512,104 @@ async def embed_texts(texts: list[str], http: httpx.AsyncClient) -> list[list[fl
 # ---------------------------------------------------------------------------
 
 
-async def tool_fetch_url(url: str, http: httpx.AsyncClient) -> str:
-    """Fetch and extract full article text from a URL using browser impersonation.
+async def _crawl_allowed(url: str, http: httpx.AsyncClient) -> bool:
+    """Return True if robots.txt permits crawling this URL (or is absent/unreachable).
 
+    Results are cached per domain for _ROBOTS_TTL seconds so we never fetch
+    robots.txt more than once per hour per domain.
+    """
+    try:
+        parsed = urlparse(url)
+        domain = f"{parsed.scheme}://{parsed.netloc}"
+        now = time.time()
+        if domain in _robots_cache:
+            allowed, expires = _robots_cache[domain]
+            if now < expires:
+                return allowed
+        robots_url = f"{domain}/robots.txt"
+        try:
+            resp = await http.get(robots_url, timeout=5.0, follow_redirects=True)
+            if resp.status_code == 200:
+                rp = RobotFileParser()
+                rp.parse(resp.text.splitlines())
+                allowed = rp.can_fetch("*", url)
+            else:
+                allowed = True
+        except Exception:
+            allowed = True
+        _robots_cache[domain] = (allowed, now + _ROBOTS_TTL)
+        if not allowed:
+            logger.debug("robots.txt disallows crawling %s — will use Camoufox", domain)
+        return allowed
+    except Exception:
+        return True
+
+
+async def _fetch_with_camoufox(url: str) -> str | None:
+    """Fetch a URL using a real Firefox browser via Camoufox.
+
+    Used when robots.txt disallows automated crawlers or when simpler fetchers
+    hit bot-detection walls (403, Cloudflare, JS-heavy pages).
+    Semaphore limits to one concurrent Camoufox instance per worker process.
+    CAMOUFOX_HEADLESS env var controls display mode (default: true for servers,
+    set to false for desktop Linux runs).
+    """
+    try:
+        import trafilatura
+        from camoufox.async_api import AsyncCamoufox
+    except ImportError:
+        logger.debug("Camoufox not available — skipping")
+        return None
+
+    async with _camoufox_sem:
+        try:
+            async with AsyncCamoufox(headless=CAMOUFOX_HEADLESS) as browser:
+                page = await browser.new_page()
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                    html = await page.content()
+                finally:
+                    await page.close()
+
+            text = trafilatura.extract(html, include_comments=False, include_tables=False, favor_recall=True)
+            if text:
+                logger.info("fetch_url (camoufox) extracted %d chars from %s", len(text), url)
+                return f"[Source: {url}]\n\n{text[:15000]}"
+            return None
+        except Exception as e:
+            logger.debug("Camoufox fetch failed for %s: %s", url, e)
+            return None
+
+
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "DNT": "1",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+}
+
+
+async def tool_fetch_url(url: str, http: httpx.AsyncClient) -> str:
+    """Fetch and extract full article text from a URL.
+
+    Tier 0: robots.txt check — if crawling is disallowed, go straight to Camoufox
+            (sites that restrict bots actively block simpler fetchers).
     Tier 1: curl_cffi with Chrome TLS fingerprint — defeats most bot detection.
-    Tier 2: httpx with browser-like headers — basic UA/header spoofing fallback.
-    Extraction: trafilatura (best-in-class) → BeautifulSoup plain-text fallback.
+    Tier 2: httpx with browser-like headers — lightweight fallback.
+    Tier 3: Camoufox (real Firefox) — for JS-heavy pages or 403/bot-wall responses.
+    Extraction: trafilatura → BeautifulSoup plain-text fallback.
     """
     import trafilatura
     from bs4 import BeautifulSoup
@@ -409,36 +618,29 @@ async def tool_fetch_url(url: str, http: httpx.AsyncClient) -> str:
     if not url or not url.startswith(("http://", "https://")):
         return "Error: fetch_url requires a full http:// or https:// URL."
 
-    _BROWSER_HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/125.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "DNT": "1",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "max-age=0",
-    }
+    # Tier 0: robots.txt — skip the simpler fetchers for sites that block bots
+    if not await _crawl_allowed(url, http):
+        result = await _fetch_with_camoufox(url)
+        if result:
+            return result
+        return f"Error: could not retrieve content from {url} (robots.txt disallows crawling)"
 
     html: str | None = None
+    bot_walled = False
 
+    # Tier 1: curl_cffi
     try:
         async with AsyncSession(impersonate="chrome") as session:
             resp = await session.get(url, headers=_BROWSER_HEADERS, timeout=20, allow_redirects=True)
             if resp.status_code == 200:
                 html = resp.text
+            elif resp.status_code in (403, 429):
+                bot_walled = True
     except Exception as e:
         logger.debug("curl_cffi fetch failed for %s: %s", url, e)
 
-    if not html:
+    # Tier 2: httpx — skipped if tier 1 already hit a bot wall
+    if not html and not bot_walled:
         try:
             resp = await http.get(url, headers=_BROWSER_HEADERS, timeout=20.0)
             if resp.status_code == 200:
@@ -446,7 +648,11 @@ async def tool_fetch_url(url: str, http: httpx.AsyncClient) -> str:
         except Exception as e:
             logger.debug("httpx article fetch failed for %s: %s", url, e)
 
+    # Tier 3: Camoufox — on bot-wall responses or when both simpler tiers failed
     if not html:
+        result = await _fetch_with_camoufox(url)
+        if result:
+            return result
         return f"Error: could not retrieve content from {url}"
 
     text = trafilatura.extract(html, include_comments=False, include_tables=False, favor_recall=True)
@@ -477,6 +683,29 @@ async def tool_search_web(query: str, _http: httpx.AsyncClient) -> str:
         return "\n\n".join(f"[{r.get('title', '')}]({r.get('href', '')})\n{r.get('body', '')[:500]}" for r in results)
     except Exception as e:
         return f"DuckDuckGo search error: {e}"
+
+
+async def tool_search_news(query: str, _http: httpx.AsyncClient) -> str:
+    """DuckDuckGo news search — returns recent articles with publication dates and sources.
+
+    Prefer this over search_web when recency matters: breaking events, recent statements,
+    current conflict updates, newly published reports. Results include the publication
+    date so the model can assess freshness.
+    """
+    try:
+        from ddgs import DDGS
+
+        results = await asyncio.to_thread(lambda: list(DDGS().news(query, max_results=6)))
+        if not results:
+            return "No news results found."
+        return "\n\n".join(
+            f"[{r.get('title', '')}]({r.get('url', '')})\n"
+            f"Source: {r.get('source', '')} | Published: {r.get('date', '')}\n"
+            f"{r.get('body', '')[:400]}"
+            for r in results
+        )
+    except Exception as e:
+        return f"News search error: {e}"
 
 
 async def _tavily_within_budget() -> bool:
@@ -832,6 +1061,7 @@ TOOL_REGISTRY = {
     "fetch_url": tool_fetch_url,
     "search_intel_kb": tool_search_intel_kb,
     "search_web": tool_search_web,
+    "search_news": tool_search_news,
     "search_tavily": tool_search_tavily,
     "search_wikipedia": tool_search_wikipedia,
     "search_arxiv": tool_search_arxiv,
@@ -883,9 +1113,22 @@ TOOL_SCHEMAS = [
             "name": "search_web",
             "description": (
                 "DEFAULT web search via DuckDuckGo — no quota, use freely. "
-                "Use for: recent news, current events, background context, entity lookups, market data, "
-                "product launches, living persons, and any general web query. "
-                "Prefer this over search_tavily for all routine queries."
+                "Use for: background context, entity lookups, market data, product launches, living persons, "
+                "and any general web query where recency is not the primary concern. "
+                "Prefer search_news when you need dated recent articles."
+            ),
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_news",
+            "description": (
+                "DuckDuckGo NEWS search — returns recent articles with publication dates and source names. "
+                "Prefer this over search_web when recency matters: breaking events, recent arrests or statements, "
+                "current conflict updates, newly published reports, election results, sanctions announcements. "
+                "No quota — use freely for any time-sensitive query."
             ),
             "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         },
@@ -976,7 +1219,8 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
     "cyber-intelligence-and-warfare-desk": (
         "search_intel_kb FIRST (MITRE ATT&CK, CVE database, CTI reports, TTP mappings, HackerOne disclosures are all in the KB). "
         "search_otx for live threat intelligence pulses, IOCs, and campaign reporting when the topic involves an active threat actor or malware campaign. "
-        "search_web for recent CVE news or campaign reporting not covered by KB or OTX; use fetch_url to read full advisories. "
+        "search_news for recent CVE disclosures, patch releases, or active exploitation reports. "
+        "search_web for campaign reporting not covered by KB or OTX; use fetch_url to read full advisories. "
         "search_wikipedia for background on APT groups or malware families. "
         "search_arxiv only for novel malware research or cryptographic vulnerabilities. "
         "search_semantic_scholar is rarely appropriate. "
@@ -985,7 +1229,8 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
     "human-intelligence-and-profiling-desk": (
         "search_intel_kb FIRST (Epstein files, WikiLeaks cables, and past HUMINT research may surface direct leads), "
         "then search_aleph for the subject in OCCRP leak datasets (Panama Papers, FinCEN Files, Pandora Papers, sanctions lists). "
-        "search_web for current activity, affiliations, recent statements; use fetch_url to read full articles. "
+        "search_news for recent statements, arrests, appointments, or controversies involving the subject. "
+        "search_web for current activity, affiliations, and background; use fetch_url to read full articles. "
         "search_wikipedia for background on subjects, organisations, or related events. "
         "Academic tools are not appropriate for profiling. "
         "Reserve search_tavily only if DDG results are clearly insufficient for a time-critical query."
@@ -993,6 +1238,7 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
     "cultural-and-theological-intelligence-desk": (
         "search_intel_kb FIRST (past cultural/theological research and Watch Floor INTSUMs may have relevant context), "
         "then search_wikipedia for deep doctrinal or historical background. "
+        "search_news for recent events involving religious movements, cultural controversies, or clerical statements. "
         "search_web for current movements, recent events, or contemporary actors; use fetch_url to read primary sources. "
         "Academic tools only if the topic is specifically scholarly religious studies. "
         "search_tavily is rarely needed for cultural topics."
@@ -1001,7 +1247,9 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
         "search_intel_kb FIRST (WikiLeaks cables, past geopolitical INTSUMs, desk archives, and OFAC SDN sanctions list "
         "may have directly relevant intel on state actors, sanctioned individuals, or blocked entities). "
         "search_aleph when the topic involves oligarchs, sanctioned entities, or offshore financial networks. "
-        "search_web for current events, diplomatic developments, conflict reporting; use fetch_url to read full reports. "
+        "search_news for breaking conflict updates, diplomatic developments, and recent security events — results include "
+        "publication dates so you can assess freshness. "
+        "search_web for broader context; use fetch_url to read full reports. "
         "search_wikipedia for geopolitical context, state actors, historical background. "
         "Reserve search_tavily only for breaking conflict or sanctions news from the last 24-48h not indexed by DDG."
     ),
@@ -1011,7 +1259,8 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
         "OFAC SDN sanctions list (18K+ sanctioned individuals and entities with aliases, DOB, passports, addresses), "
         "Yahoo Finance news articles and earnings call transcripts, WikiLeaks cables, and Epstein files. "
         "search_aleph for additional corporate ownership, PEP connections, and leak datasets not yet in KB. "
-        "search_web for market news, economic indicators, corporate reporting; use fetch_url to read full filings or articles. "
+        "search_news for recent earnings, market-moving events, regulatory actions, or corporate announcements. "
+        "search_web for broader market context; use fetch_url to read full filings or articles. "
         "search_wikipedia for company or institution background. "
         "search_arxiv for economic research papers or monetary policy studies. "
         "Reserve search_tavily only for time-sensitive market-moving news DDG cannot surface."
@@ -1019,22 +1268,25 @@ _DESK_TOOL_GUIDANCE: dict[str, str] = {
     "science-technology-and-commercial-desk": (
         "search_intel_kb FIRST (past science/tech research may already cover this topic), "
         "then search_arxiv and search_semantic_scholar for technical research, patents, emerging science. "
-        "search_web for recent product launches, commercial developments, company news; use fetch_url to read full articles. "
+        "search_news for recent product launches, commercial developments, or company announcements. "
+        "search_web for broader context; use fetch_url to read full articles. "
         "search_wikipedia for established technical background. "
         "Reserve search_tavily only if DDG returns insufficient results for a rapidly evolving story."
     ),
     "information-warfare-desk": (
         "search_intel_kb FIRST (WikiLeaks cables and Epstein files may surface funding trails, "
         "personnel links, or documented covert influence programs directly relevant to the topic). "
-        "search_web for current influence operations, disinformation campaign reporting, NGO funding disclosures, "
-        "and investigative journalism on propaganda; use fetch_url to read primary source articles in full. "
+        "search_news for active disinformation campaigns, recently published influence op reporting, "
+        "or breaking media manipulation stories — dates are shown so you can assess currency. "
+        "search_web for investigative journalism on propaganda and NGO funding disclosures; use fetch_url to read in full. "
         "search_wikipedia for background on organisations, historical psyops operations, or media ownership. "
         "Academic tools rarely needed unless the topic is formal propaganda studies or media theory. "
         "Reserve search_tavily only for rapidly developing disinfo campaigns not yet indexed by DDG."
     ),
     "environment-and-ecology-desk": (
-        "search_web FIRST for current environmental events: extreme weather, disaster reports, crop failure news, "
-        "corporate pollution incidents, ecocide reporting, and official agency bulletins (NOAA, NASA, WMO, IPCC); "
+        "search_news FIRST for current environmental events: extreme weather, disaster reports, crop failure, "
+        "corporate pollution incidents, and official agency bulletins (NOAA, NASA, WMO, IPCC) — "
+        "publication dates help confirm recency of fast-moving environmental stories. "
         "use fetch_url to read full agency reports or news articles. "
         "search_arxiv and search_semantic_scholar for climate science research, ecological studies, "
         "and peer-reviewed environmental impact assessments. "
@@ -1050,6 +1302,7 @@ _REACT_TOOL_MAP = {
     "search_intel_kb": "search_intel_kb",
     "search_web": "search_web",
     "search_tavily": "search_tavily",
+    "search_news": "search_news",
     "search_wikipedia": "search_wikipedia",
     "search_arxiv": "search_arxiv",
     "search_semantic_scholar": "search_semantic_scholar",
@@ -1215,9 +1468,10 @@ async def run_research_loop_openai_compat(
                 f"Produce a focused intelligence brief with citations.{directives}\n\n"
                 "TOOL SELECTION — be deliberate and conservative:\n"
                 "• search_intel_kb: ALWAYS call this first. Searches all OSIA collections (MITRE ATT&CK, CVEs, CTI, WikiLeaks, Epstein, ICIJ Offshore Leaks, OFAC sanctions, Yahoo Finance, past research). If KB results are sufficient, skip external tools.\n"
-                "• search_web: DEFAULT web search (DuckDuckGo) — no quota, use freely for news, current events, entity lookups, background context.\n"
-                "• search_tavily: PREMIUM Tavily search — limited monthly budget. Call ONLY when search_web results are clearly insufficient AND you need multi-source breaking news from the last 24-48h. Never call if search_web already returned useful results.\n"
-                "• fetch_url: fetch full article text from a known URL. Use after search_web returns relevant URLs to read the primary source directly.\n"
+                "• search_news: DuckDuckGo NEWS search — returns recent articles with publication dates. Use when recency matters: breaking events, recent arrests, conflict updates, new reports.\n"
+                "• search_web: general DuckDuckGo web search — no quota. Use for background context, entity lookups, and queries where recency is not the primary concern.\n"
+                "• search_tavily: PREMIUM Tavily search — limited monthly budget. Call ONLY when search_web/search_news results are clearly insufficient AND you need multi-source breaking news from the last 24-48h.\n"
+                "• fetch_url: fetch full article text from a known URL. Use after search results return relevant URLs.\n"
                 "• search_wikipedia: background on established entities, concepts, or historical events.\n"
                 "• search_arxiv: novel STEM/ML/security research papers. Not for news or politics.\n"
                 "• search_semantic_scholar: peer-reviewed science. Not for HUMINT, cyber ops, or finance.\n\n"
@@ -1226,9 +1480,10 @@ async def run_research_loop_openai_compat(
                 "2-3 tool calls total is usually sufficient; stop as soon as you have enough to write the brief. "
                 "Never run the same query through multiple tools.\n\n"
                 "If native tool calling is unavailable, use the ReAct format:\n"
-                "FETCH_URL: <url>\nSEARCH_INTEL_KB: <query>\nSEARCH_WEB: <query>\n"
+                "FETCH_URL: <url>\nSEARCH_INTEL_KB: <query>\nSEARCH_NEWS: <query>\nSEARCH_WEB: <query>\n"
                 "SEARCH_TAVILY: <query>\nSEARCH_WIKIPEDIA: <query>\nSEARCH_ARXIV: <query>\n"
-                "SEARCH_SEMANTIC_SCHOLAR: <query>\nSEARCH_OTX: <query>\nSEARCH_ALEPH: <query>"
+                "SEARCH_SEMANTIC_SCHOLAR: <query>\nSEARCH_CENSYS: <query>\nSEARCH_CRIMINALIP: <query>\n"
+                "SEARCH_OTX: <query>\nSEARCH_ALEPH: <query>"
             ),
         },
         {"role": "user", "content": user_message or f"Research topic: {job.topic}"},
@@ -1541,6 +1796,57 @@ async def run_research_loop(job: ResearchJob, http: httpx.AsyncClient) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Output validation
+# ---------------------------------------------------------------------------
+
+# Minimum prose length for a result to be worth storing.
+# 500 chars is roughly two short paragraphs — anything under is either a
+# model failure or raw tool-call artifacts rather than an intelligence brief.
+_MIN_RESEARCH_CHARS = 500
+
+# ReAct line prefixes that indicate the text is an un-executed tool call
+# artifact rather than synthesised prose.
+_ARTIFACT_PREFIXES = tuple(
+    prefix for name in _REACT_TOOL_MAP for prefix in (f"{name.upper()}:", f"{name}{{", f"{name}(")
+)
+
+
+def _validate_research_output(text: str, topic: str) -> str | None:
+    """Return the stripped text if it qualifies as a usable intelligence brief.
+
+    Rejects:
+    - Outputs shorter than _MIN_RESEARCH_CHARS (model gave up or errored)
+    - Outputs where stripping known ReAct tool-call lines leaves less than
+      300 chars of actual prose (raw artifact stored instead of a brief)
+    """
+    stripped = text.strip()
+
+    if len(stripped) < _MIN_RESEARCH_CHARS:
+        logger.warning(
+            "Research output too short (%d chars) for '%s' — discarding",
+            len(stripped),
+            topic,
+        )
+        return None
+
+    prose_lines = [
+        ln
+        for ln in stripped.splitlines()
+        if not any(ln.upper().startswith(p) or ln.startswith(p.lower()) for p in _ARTIFACT_PREFIXES)
+    ]
+    prose = "\n".join(prose_lines).strip()
+    if len(prose) < 300:
+        logger.warning(
+            "Research output for '%s' appears to be raw tool-call artifacts (%d chars prose) — discarding",
+            topic,
+            len(prose),
+        )
+        return None
+
+    return stripped
+
+
+# ---------------------------------------------------------------------------
 # Chunking and storage
 # ---------------------------------------------------------------------------
 
@@ -1552,14 +1858,95 @@ def _chunk_text(text: str) -> list[str]:
     return [" ".join(words[i : i + CHUNK_SIZE]) for i in range(0, len(words), step) if words[i : i + CHUNK_SIZE]]
 
 
+_WIKI_STOPWORDS = frozenset(
+    "the a an and or of in on at to for with by from is are was were be been "
+    "has have had its it this that these those".split()
+)
+
+
+def _wiki_match_entity(topic: str, results: list[dict]) -> dict | None:
+    """Return the first entity search result that is genuinely about the topic.
+
+    Wiki full-text search returns relevance-ranked results but can match on
+    incidental word overlap (e.g. 'polar bears' matching a page that previously
+    received a 'bear' brief). We require that at least one significant token from
+    the topic appears in the result's title or slug to confirm relevance.
+    """
+    topic_tokens = {
+        t.lower().strip("\"'.,;:()") for t in topic.split() if len(t) > 2 and t.lower() not in _WIKI_STOPWORDS
+    }
+    for r in results:
+        if not r.get("path", "").startswith("entities/"):
+            continue
+        title = r.get("title", "").lower()
+        slug = r.get("path", "").split("/")[-1].replace("-", " ")
+        candidate_text = f"{title} {slug}"
+        if any(tok in candidate_text for tok in topic_tokens):
+            return r
+    return None
+
+
+# Summary content considered a stub — safe to replace with new research.
+_WIKI_STUB_MARKERS = (
+    "pending research worker analysis",
+    "pending hermes corroboration",
+    "summary pending",
+    "no summary compiled",
+)
+# Minimum chars for an existing summary to be considered substantive.
+_WIKI_SUMMARY_MIN_CHARS = 500
+
+
+def _wiki_extract_section(content: str, section: str) -> str:
+    """Return the inner text of an OSIA:AUTO-fenced section, or empty string."""
+    m = re.search(
+        rf"<!-- OSIA:AUTO:{re.escape(section)} -->(.*?)<!-- /OSIA:AUTO:{re.escape(section)} -->",
+        content,
+        re.DOTALL,
+    )
+    return m.group(1).strip() if m else ""
+
+
+def _wiki_replace_section(content: str, section: str, new_inner: str) -> str:
+    """Replace the inner text of an OSIA:AUTO-fenced section in place."""
+    open_tag = f"<!-- OSIA:AUTO:{section} -->"
+    close_tag = f"<!-- /OSIA:AUTO:{section} -->"
+    return re.sub(
+        rf"{re.escape(open_tag)}.*?{re.escape(close_tag)}",
+        f"{open_tag}\n{new_inner.strip()}\n{close_tag}",
+        content,
+        flags=re.DOTALL,
+    )
+
+
+def _wiki_append_section(content: str, section: str, new_entry: str) -> str:
+    """Append an entry to an OSIA:AUTO-fenced section in place."""
+    open_tag = f"<!-- OSIA:AUTO:{section} -->"
+    close_tag = f"<!-- /OSIA:AUTO:{section} -->"
+
+    def _do_append(m: re.Match) -> str:
+        inner = m.group(1).rstrip()
+        return f"{open_tag}\n{inner}\n{new_entry.strip()}\n{close_tag}"
+
+    return re.sub(
+        rf"{re.escape(open_tag)}(.*?){re.escape(close_tag)}",
+        _do_append,
+        content,
+        flags=re.DOTALL,
+    )
+
+
 async def _wiki_append_research_note(job: ResearchJob, text: str, http: httpx.AsyncClient) -> None:
     """Write research output to the entity wiki page for job.topic.
 
-    If an entity page already exists:
-      - patch_section "summary" with the full research text
-      - append a changelog entry to "research-notes"
-    If no entity page exists:
-      - create one with the research text pre-populated in the summary section
+    Enriching an existing page:
+      - Fetches the page once, modifies both sections in memory, writes once.
+      - Only replaces the summary if it is a stub/placeholder or shorter than
+        _WIKI_SUMMARY_MIN_CHARS — preserves substantive existing intel.
+      - Always appends a dated entry to research-notes.
+
+    Creating a new page:
+      - Builds a full entity page with the research text as the initial summary.
 
     Non-fatal — logs and returns on any failure.
     """
@@ -1570,7 +1957,6 @@ async def _wiki_append_research_note(job: ResearchJob, text: str, http: httpx.As
         desk_section = desk_wiki_section(job.desk) if job.desk else "desks"
         desk_label = job.desk or "research-worker"
 
-        # Brief changelog entry — one line plus a short excerpt
         excerpt = text[:300].replace("\n", " ").strip()
         if len(text) > 300:
             excerpt += "…"
@@ -1578,21 +1964,43 @@ async def _wiki_append_research_note(job: ResearchJob, text: str, http: httpx.As
 
         async with WikiClient(http) as wiki:
             results = await wiki.search_pages(job.topic[:50])
-            entity_page = next(
-                (r for r in results if r.get("path", "").startswith("entities/")),
-                None,
-            )
+            match = _wiki_match_entity(job.topic, results)
 
-            if entity_page:
-                # Populate the summary with the full research text, then log in research-notes
-                await wiki.patch_section(entity_page["path"], "summary", text.strip())
-                await wiki.append_to_section(entity_page["path"], "research-notes", note)
-                logger.info("Wiki: enriched entity page '%s'", entity_page["path"])
-            else:
-                # No existing page — create one with research content in the summary
-                guess_path = entity_wiki_path("Organisation", job.topic)
+            if match:
+                page = await wiki.get_page(match["path"])
+                if not page:
+                    # Disappeared between search and fetch — fall through to create
+                    match = None
+                else:
+                    body = page["content"]
+                    existing_summary = _wiki_extract_section(body, "summary")
+
+                    is_stub = len(existing_summary) < _WIKI_SUMMARY_MIN_CHARS or any(
+                        marker in existing_summary.lower() for marker in _WIKI_STUB_MARKERS
+                    )
+
+                    if is_stub:
+                        body = _wiki_replace_section(body, "summary", text.strip())
+                        action = "summary+notes"
+                    else:
+                        action = "notes-only"
+
+                    body = _wiki_append_section(body, "research-notes", note)
+
+                    await wiki.update_page(
+                        page["id"],
+                        body,
+                        page["title"],
+                        page.get("description", ""),
+                        page.get("tags", []),
+                    )
+                    logger.info("Wiki: enriched entity page '%s' (%s)", match["path"], action)
+
+            if not match:
+                entity_type = job.entity_type or "Organisation"
+                guess_path = entity_wiki_path(entity_type, job.topic)
                 content = build_entity_page(
-                    entity_type="Organisation",
+                    entity_type=entity_type,
                     desk_name=desk_label,
                     desk_section=desk_section,
                     first_seen=date_str,
@@ -1603,7 +2011,7 @@ async def _wiki_append_research_note(job: ResearchJob, text: str, http: httpx.As
                     job.topic,
                     content,
                     description=f"Entity — first researched {date_str} by {desk_label}",
-                    tags=["entity", "organisation", "research-worker"],
+                    tags=["entity", entity_type.lower(), "research-worker"],
                 )
                 if created:
                     logger.info("Wiki: created entity page '%s'", guess_path)
@@ -1611,11 +2019,38 @@ async def _wiki_append_research_note(job: ResearchJob, text: str, http: httpx.As
         logger.warning("Wiki research note update failed (non-fatal): %s", e)
 
 
+# Entity types that are expected for each desk. Mismatches are logged as
+# warnings so contaminated points can be audited — storage is not blocked.
+_DESK_ENTITY_ALIGNMENT: dict[str, frozenset[str]] = {
+    "human-intelligence-and-profiling-desk": frozenset({"Person"}),
+    "geopolitical-and-security-desk": frozenset({"Organisation", "Location", "Event", "Concept"}),
+    "cyber-intelligence-and-warfare-desk": frozenset({"Technology", "Organisation"}),
+    "cultural-and-theological-intelligence-desk": frozenset({"Organisation", "Person", "Concept"}),
+    "science-technology-and-commercial-desk": frozenset({"Technology", "Organisation"}),
+    "finance-and-economics-directorate": frozenset({"Organisation", "Person"}),
+    "information-warfare-desk": frozenset({"Organisation", "Person", "Event"}),
+    "environment-and-ecology-desk": frozenset({"Organisation", "Location", "Event"}),
+}
+
+
 async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, qdrant: QdrantClient):
     chunks = _chunk_text(text)
     if not chunks:
         logger.warning("No chunks for job %s", job.job_id)
         return
+
+    # Warn if the entity type doesn't match the desk's expected domain — these
+    # points may contaminate RAG results and should be flagged for periodic audit.
+    if job.entity_type and job.desk in _DESK_ENTITY_ALIGNMENT:
+        if job.entity_type not in _DESK_ENTITY_ALIGNMENT[job.desk]:
+            logger.warning(
+                "Desk alignment mismatch: entity_type=%r stored in %s (expected %s) — topic=%r",
+                job.entity_type,
+                job.desk,
+                sorted(_DESK_ENTITY_ALIGNMENT[job.desk]),
+                job.topic,
+            )
+
     embeddings = await embed_texts(chunks, http)
     now = datetime.now(UTC).isoformat()
     now_unix = int(time.time())
@@ -1633,6 +2068,7 @@ async def store_research(job: ResearchJob, text: str, http: httpx.AsyncClient, q
                     "text": chunk,
                     "topic": job.topic,
                     "desk": job.desk,
+                    "entity_type": job.entity_type or "",
                     "job_id": job.job_id,
                     "chunk_index": i,
                     "total_chunks": len(chunks),
@@ -1670,15 +2106,6 @@ async def main():
     logger.info("Backend: %s | Qdrant: %s", backend, QDRANT_URL)
 
     queue = RedisQueue()
-
-    stranded = queue.processing_depth()
-    if stranded:
-        logger.warning(
-            "%d job(s) found in processing list — likely stranded from a previous crashed run. "
-            "To recover: redis-cli LMOVE %s osia:research_queue LEFT RIGHT (repeat until empty)",
-            stranded,
-            PROCESSING_LIST,
-        )
 
     depth = queue.depth()
     logger.info("Research queue depth: %d (threshold: %d)", depth, BATCH_THRESHOLD)
@@ -1718,12 +2145,14 @@ async def main():
             except Exception as e:
                 logger.error("Research failed for '%s': %s", job.topic, e)
                 queue.complete(raw)
+                queue.release_inflight(job.topic)
                 failed += 1
                 continue
 
+            text = _validate_research_output(text or "", job.topic)
             if not text:
-                logger.warning("Empty result for topic: %s", job.topic)
                 queue.complete(raw)
+                queue.release_inflight(job.topic)
                 failed += 1
                 continue
 
@@ -1734,6 +2163,7 @@ async def main():
             except Exception as e:
                 logger.error("Storage failed for '%s': %s", job.topic, e)
                 queue.complete(raw)
+                queue.release_inflight(job.topic)
                 failed += 1
                 continue
 
