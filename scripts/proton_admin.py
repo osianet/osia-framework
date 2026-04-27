@@ -154,7 +154,7 @@ async def main() -> None:
                 print("No AVAILABLE Proton accounts in pool.", file=sys.stderr)
                 sys.exit(1)
             print(f"Email:    {account.email}")
-            print(f"Password: {account.password}")
+            print("Password: [REDACTED]")
             print(f"ID:       {account.id}")
 
         elif args.create:
