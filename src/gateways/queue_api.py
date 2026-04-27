@@ -4,9 +4,9 @@ OSIA Queue API — authenticated HTTP wrapper around Redis for remote job submis
 Exposes the minimal Redis operations needed by external workers (HuggingFace Spaces
 or any remote process) without exposing Redis directly:
 
-  POST /queue/push          — push a job onto a named queue (rpush)
+  POST /queue/push          — push a job onto a named queue (zadd for research_queue, rpush for others)
   POST /queue/pop           — blocking pop from a queue (blpop, timeout configurable)
-  GET  /queue/length        — queue depth (llen)
+  GET  /queue/length        — queue depth (zcard for research_queue, llen for others)
   POST /queue/seen/check    — check if a URL/ID has been seen (sismember)
   POST /queue/seen/add      — mark a URL/ID as seen (sadd)
   GET  /health              — unauthenticated liveness probe
@@ -25,6 +25,7 @@ import hmac
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -126,10 +127,15 @@ def _check_auth(request: Request, credentials: HTTPAuthorizationCredentials = De
 # ---------------------------------------------------------------------------
 
 
+_RESEARCH_QUEUE = "osia:research_queue"
+_PRIORITY_TIERS: dict[str, int] = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+
+
 class PushRequest(BaseModel):
     queue: str
     payload: dict[str, Any]
     dedup_key: str | None = None  # if set, skip push if already in seen_topics
+    priority: str | None = None  # critical | high | normal | low (research_queue only)
 
 
 class PopRequest(BaseModel):
@@ -179,7 +185,16 @@ async def push(request: Request, body: PushRequest, _=Depends(_check_auth)):
             depth = await r.llen(body.queue)
             return {"ok": True, "queue": body.queue, "depth": depth, "skipped": True}
         await r.sadd("osia:research:seen_topics", body.dedup_key)
-    length = await r.rpush(body.queue, json.dumps(body.payload))
+    raw = json.dumps(body.payload)
+    if body.queue == _RESEARCH_QUEUE:
+        # Research queue is a sorted set — use priority-aware ZADD
+        priority = body.priority or str(body.payload.get("priority", "normal"))
+        tier = _PRIORITY_TIERS.get(priority, 2)
+        score = tier * 1_000_000_000_000 + int(time.time())
+        await r.zadd(body.queue, {raw: score})
+        length = await r.zcard(body.queue)
+    else:
+        length = await r.rpush(body.queue, raw)
     # body.queue is validated against ALLOWED_QUEUES above; sanitise for log injection (CWE-117)
     logger.info("Pushed job to %s (depth now %d)", body.queue.replace("\n", ""), length)
     return {"ok": True, "queue": body.queue, "depth": length, "skipped": False}
@@ -214,7 +229,7 @@ async def queue_length(request: Request, queue: str, _=Depends(_check_auth)):
     if queue not in ALLOWED_QUEUES:
         raise HTTPException(status_code=400, detail="Queue not permitted")
     r = _get_redis()
-    depth = await r.llen(queue)
+    depth = await r.zcard(queue) if queue == _RESEARCH_QUEUE else await r.llen(queue)
     return {"ok": True, "queue": queue, "depth": depth}
 
 

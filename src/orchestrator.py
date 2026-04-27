@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -607,7 +608,7 @@ class OsiaOrchestrator:
         if signal_group:
             try:
                 queued = await self.redis.llen(self.queue_name)
-                research_queued = await self.redis.llen("osia:research_queue")
+                research_queued = await self.redis.zcard("osia:research_queue")
                 lines = [
                     "⬛ OSIA ONLINE ⬛",
                     f"🕐 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}",
@@ -934,11 +935,12 @@ class OsiaOrchestrator:
                     "triggered_by": f"signal-investigate:{recipient}",
                 }
             )
-            await self.redis.rpush("osia:research_queue", payload)
+            score = 1 * 1_000_000_000_000 + int(time.time())
+            await self.redis.zadd("osia:research_queue", {payload: score})
             logger.info("Enqueued investigation job → %s", desk)
 
         desk_list = "\n".join(f"  • {d}" for d in desks)
-        queue_depth = await self.redis.llen("osia:research_queue")
+        queue_depth = await self.redis.zcard("osia:research_queue")
         await self.send_signal_message(
             recipient,
             f"Investigation queued across {len(desks)} desk(s):\n{desk_list}\n\n"
@@ -1297,7 +1299,7 @@ class OsiaOrchestrator:
         try:
             task_depth, research_depth, rss_depth = await asyncio.gather(
                 self.redis.llen("osia:task_queue"),
-                self.redis.llen("osia:research_queue"),
+                self.redis.zcard("osia:research_queue"),
                 self.redis.llen("osia:rss:daily_digest"),
             )
         except Exception as exc:
@@ -1361,7 +1363,7 @@ class OsiaOrchestrator:
         # Queue and dedup stats
         try:
             research_depth, seen_count = await asyncio.gather(
-                self.redis.llen("osia:research_queue"),
+                self.redis.zcard("osia:research_queue"),
                 self.redis.scard("osia:research:seen_topics"),
             )
             lines.append(f"  Pending:  {research_depth} queued, {seen_count} already seen")
@@ -1374,7 +1376,7 @@ class OsiaOrchestrator:
         """Single-line worker summary for the full /status view."""
         active = await self._run_cmd("systemctl", "is-active", "osia-research-worker.timer")
         try:
-            depth = await self.redis.llen("osia:research_queue")
+            depth = await self.redis.zcard("osia:research_queue")
         except Exception:
             depth = "?"
         icon = "✅" if active == "active" else "❌"

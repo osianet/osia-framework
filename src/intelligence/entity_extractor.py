@@ -20,6 +20,8 @@ import hashlib
 import json
 import logging
 import os
+import re
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -55,6 +57,7 @@ ENTITY_DESK_ROUTING: dict[str, str] = {
     "Location": "geopolitical-and-security-desk",
     "Event": "geopolitical-and-security-desk",
     "Technology": "science-technology-and-commercial-desk",
+    "Concept": "cultural-and-theological-intelligence-desk",
 }
 
 # ---------------------------------------------------------------------------
@@ -75,21 +78,28 @@ class Entity:
 # ---------------------------------------------------------------------------
 
 EXTRACTION_PROMPT = """\
-You are a named entity extraction system. Analyse the following text and identify all named entities.
+You are a named entity extraction system for an intelligence agency. Analyse the following text and identify named entities worth researching for operational intelligence value.
 
 Return ONLY a JSON array (no markdown, no explanation) where each element has these fields:
 - "name": the entity name as it appears in the text
-- "entity_type": one of "Person", "Organisation", "Location", "Event", "Technology"
+- "entity_type": one of "Person", "Organisation", "Location", "Event", "Technology", "Concept"
 - "context": the exact sentence or short phrase from the text where this entity appears
 
 Entity type guidance:
-- Person: named individuals (include role/affiliation in context if present)
-- Organisation: companies, governments, agencies, NGOs, military units
-- Location: countries, cities, regions, geographic features
-- Event: named events, operations, conflicts, summits, incidents
-- Technology: named technologies, systems, platforms, protocols, weapons systems
+- Person: named living individuals with current operational relevance. EXCLUDE: deceased historical figures (died before 1970), generic role titles without a specific person's name (e.g. "the President", "Secretary of Defense" — only include if a specific name is given, e.g. "Pete Hegseth")
+- Organisation: companies, governments, agencies, NGOs, military units, political movements
+- Location: countries, cities, regions, geographic features with current intelligence relevance
+- Event: named events, operations, conflicts, summits, incidents, court cases
+- Technology: named technologies, systems, platforms, protocols, weapons systems, software tools
+- Concept: legal doctrines, constitutional principles, religious texts/frameworks, academic theories, policy frameworks (e.g. "Lemon test", "Establishment Clause", "King James Version", "Monroe Doctrine"). Route these to cultural/theological analysis.
 
-If no entities are found, return an empty array: []
+Exclusion rules — do NOT extract:
+- Generic role titles without a named person ("the Secretary", "a senior official")
+- Deceased historical figures who died before 1970 (Ho Chi Minh, Stalin, etc.)
+- Extremely well-known reference works or ancient texts (Bible, Quran, Torah — unless the article is specifically about a controversy or current use of that text)
+- Vague descriptors ("Western officials", "local authorities", "unnamed sources")
+
+If no entities worth researching are found, return an empty array: []
 
 Text to analyse:
 {text}
@@ -274,19 +284,36 @@ class EntityExtractor:
                     logger.debug("Skipping recently researched entity: %r", entity.name)
                     continue
 
+                # In-flight guard: skip if already sitting in the queue waiting to be processed.
+                # Without this, every RSS poll re-adds the same entities while the worker is
+                # behind, causing the queue to balloon with duplicates.
+                if await redis.sismember("osia:research:queued_topics", normalised):
+                    logger.debug("Skipping already-queued entity: %r", entity.name)
+                    continue
+
                 desk = ENTITY_DESK_ROUTING[entity.entity_type]
+                # CVE identifiers are cybersecurity topics regardless of how the
+                # LLM tagged the entity type — always route to the Cyber desk
+                # which has OTX, MITRE ATT&CK, and Censys in its boost collections.
+                if re.match(r"CVE-\d{4}-\d+", entity.name, re.IGNORECASE):
+                    desk = "cyber-intelligence-and-warfare-desk"
                 payload = json.dumps(
                     {
                         "job_id": str(uuid.uuid4()),
                         "topic": entity.name,
                         "desk": desk,
+                        "entity_type": entity.entity_type,
                         "priority": "normal",
                         "directives_lens": True,
                         "triggered_by": triggered_by,
                     }
                 )
 
-                await redis.rpush(RESEARCH_QUEUE_KEY, payload)
+                # Entity extraction is background work — enqueue at low priority
+                # so live Signal investigations and API submissions run first.
+                score = 3 * 1_000_000_000_000 + int(time.time())
+                await redis.zadd(RESEARCH_QUEUE_KEY, {payload: score})
+                await redis.sadd("osia:research:queued_topics", normalised)
                 seen_this_batch.add(normalised)
 
                 logger.info(
