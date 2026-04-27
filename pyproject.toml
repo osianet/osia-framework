@@ -9,7 +9,7 @@ dependencies = [
     "beautifulsoup4==4.14.3",
     "fastapi==0.136.0",
     "feedparser==6.0.12",
-    "google-genai==1.72.0",
+    "google-genai==1.73.1",
     "huggingface-hub==1.10.2",
     "httpx==0.28.1",
     "matplotlib==3.10.8",
