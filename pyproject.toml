@@ -43,6 +43,7 @@ dependencies = [
     "curl-cffi==0.15.0",
     "camoufox[geoip]==0.4.11",
     "2captcha-python==2.0.6",
+    "instaloader==4.13.1",
 ]
 
 [project.optional-dependencies]

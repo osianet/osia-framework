@@ -1,0 +1,12 @@
+[Unit]
+Description=OSIA Profile Investigation Worker — runs every 6 hours
+Requires=osia-profile-investigation-worker.service
+
+[Timer]
+# Run at 01:00, 07:00, 13:00, 19:00 UTC — avoids collision with 07:00 SITREP
+OnCalendar=*-*-* 01,07,13,19:00:00
+AccuracySec=60s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

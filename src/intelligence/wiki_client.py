@@ -452,3 +452,42 @@ class WikiClient:
         }"""
         data = await self._gql(q, {"query": query_str})
         return (data.get("data") or {}).get("pages", {}).get("search", {}).get("results", [])
+
+    async def list_pages(self, path_prefix: str = "") -> list[dict]:
+        """List all pages, optionally filtered by path prefix.
+        Returns list of {id, title, path, description}."""
+        q = """
+        query ListPages {
+          pages {
+            list(orderBy: PATH, orderByDirection: ASC, locale: "en") {
+              id title path description
+            }
+          }
+        }"""
+        data = await self._gql(q)
+        pages = (data.get("data") or {}).get("pages", {}).get("list", []) or []
+        if path_prefix:
+            prefix = path_prefix.strip("/")
+            pages = [p for p in pages if (p.get("path") or "").startswith(prefix)]
+        return pages
+
+    async def move_page(self, page_id: int, new_path: str) -> bool:
+        """Move a page to a new path. Returns True on success."""
+        q = """
+        mutation MovePage($id: Int!, $destinationPath: String!) {
+          pages {
+            move(id: $id, destinationPath: $destinationPath, destinationLocale: "en") {
+              responseResult { succeeded errorCode message }
+            }
+          }
+        }"""
+        data = await self._gql(q, {"id": page_id, "destinationPath": new_path})
+        result = (data.get("data") or {}).get("pages", {}).get("move", {}).get("responseResult", {})
+        if not result.get("succeeded"):
+            logger.warning(
+                "Wiki move failed for page %d → '%s': %s",
+                page_id,
+                new_path,
+                result.get("message"),
+            )
+        return bool(result.get("succeeded"))
