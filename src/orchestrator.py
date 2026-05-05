@@ -2964,9 +2964,18 @@ class OsiaOrchestrator:
                     ig_display_name: str | None = None
                     ig_channel_url: str | None = None
                     if raw_meta and (urlparse(url).hostname or "") in ("www.instagram.com", "instagram.com"):
-                        ig_source_handle = raw_meta.get("uploader_id") or raw_meta.get("channel_id")
+                        # Extract the actual username from the profile URL rather than
+                        # uploader_id which is a numeric Instagram user ID, not a handle.
+                        _uploader_url = raw_meta.get("uploader_url") or raw_meta.get("channel_url") or ""
+                        _handle_from_url = _uploader_url.rstrip("/").split("/")[-1] if _uploader_url else ""
+                        ig_source_handle = (
+                            _handle_from_url
+                            or raw_meta.get("uploader")
+                            or raw_meta.get("channel")
+                            or None
+                        )
                         ig_display_name = raw_meta.get("uploader") or raw_meta.get("channel")
-                        ig_channel_url = raw_meta.get("channel_url") or raw_meta.get("uploader_url")
+                        ig_channel_url = _uploader_url or None
 
                     adb_analysis = None
                     screen_counts: dict = {}
