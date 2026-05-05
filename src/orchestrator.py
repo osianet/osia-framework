@@ -2969,10 +2969,7 @@ class OsiaOrchestrator:
                         _uploader_url = raw_meta.get("uploader_url") or raw_meta.get("channel_url") or ""
                         _handle_from_url = _uploader_url.rstrip("/").split("/")[-1] if _uploader_url else ""
                         ig_source_handle = (
-                            _handle_from_url
-                            or raw_meta.get("uploader")
-                            or raw_meta.get("channel")
-                            or None
+                            _handle_from_url or raw_meta.get("uploader") or raw_meta.get("channel") or None
                         )
                         ig_display_name = raw_meta.get("uploader") or raw_meta.get("channel")
                         ig_channel_url = _uploader_url or None
