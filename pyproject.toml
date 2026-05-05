@@ -22,7 +22,7 @@ dependencies = [
     "redis==7.4.0",
     "slowapi==0.1.9",
     "starlette-context==0.5.1",
-    "uvicorn==0.42.0",
+    "uvicorn==0.46.0",
     "websockets==16.0",
     "yt-dlp==2026.3.17",
     "youtube-transcript-api==1.2.4",
