@@ -72,8 +72,9 @@ def _resolve_id(numeric_id: str, cookie_path: str | None, request_timeout: int =
     (returns 400 for query_hash lookups). The private API endpoint at
     i.instagram.com/api/v1/users/{id}/info/ still works with valid session cookies.
     """
-    import requests
     from http.cookiejar import MozillaCookieJar
+
+    import requests
 
     session = requests.Session()
     session.headers.update(
