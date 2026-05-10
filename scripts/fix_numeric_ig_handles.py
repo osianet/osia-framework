@@ -64,13 +64,12 @@ def _patch_content(content: str, old_handle: str, new_handle: str) -> str:
     return content
 
 
-def _resolve_id(numeric_id: str, cookie_path: str | None, request_timeout: int = 30) -> dict | None:
+def _resolve_id_with_cookie(
+    numeric_id: str, cookie_path: str | None, request_timeout: int = 30
+) -> tuple[dict | None, bool]:
     """
-    Resolve an Instagram numeric user ID to a username using the private REST API.
-
-    Instagram's GraphQL endpoint used by instaloader's Profile.from_id() is broken
-    (returns 400 for query_hash lookups). The private API endpoint at
-    i.instagram.com/api/v1/users/{id}/info/ still works with valid session cookies.
+    Try one cookie against the private API. Returns (result, is_rate_limited).
+    is_rate_limited=True means this cookie hit a 401/429 — caller should try next account.
     """
     from http.cookiejar import MozillaCookieJar
 
@@ -79,7 +78,6 @@ def _resolve_id(numeric_id: str, cookie_path: str | None, request_timeout: int =
     session = requests.Session()
     session.headers.update(
         {
-            # Mobile client UA required for the private API
             "User-Agent": (
                 "Instagram 276.0.0.19.105 Android "
                 "(29/10; 380dpi; 1080x2340; Google; sdk_gphone_x86; generic_x86; en_US)"
@@ -102,21 +100,36 @@ def _resolve_id(numeric_id: str, cookie_path: str | None, request_timeout: int =
             f"https://i.instagram.com/api/v1/users/{numeric_id}/info/",
             timeout=request_timeout,
         )
+        if resp.status_code in (401, 429):
+            return None, True  # rate limited — try next account
         if not resp.ok:
-            logger.warning("Private API %d for ID %s: %s", resp.status_code, numeric_id, resp.text[:200])
-            return None
+            logger.warning("Private API %d for ID %s: %s", resp.status_code, numeric_id, resp.text[:120])
+            return None, False
         user = resp.json().get("user", {})
         username = user.get("username")
         if not username:
-            logger.warning("No username in API response for ID %s", numeric_id)
-            return None
-        return {
-            "username": username,
-            "full_name": user.get("full_name") or username,
-        }
+            return None, False
+        return {"username": username, "full_name": user.get("full_name") or username}, False
     except Exception as exc:
-        logger.warning("Could not resolve ID %s: %s", numeric_id, exc)
-        return None
+        logger.warning("Request error for ID %s: %s", numeric_id, exc)
+        return None, False
+
+
+async def _get_all_cookies(ig_pool: "InstagramAccountManager") -> list[tuple[str, str]]:
+    """Return (account_id, cookie_path) for every active account in the pool."""
+
+    from src.agents.instagram_account_manager import _ACTIVE_SET  # type: ignore[attr-defined]
+
+    active_ids = [a.decode() if isinstance(a, bytes) else a for a in await ig_pool._redis.smembers(_ACTIVE_SET)]
+    results = []
+    for acct_id in sorted(active_ids):
+        try:
+            result = await ig_pool.get_next_active_cookie_path(skip_ids=set(active_ids) - {acct_id})
+            if result:
+                results.append((result[0], str(result[1])))
+        except Exception:
+            pass
+    return results
 
 
 async def run(dry_run: bool, limit: int | None, delay: float) -> None:
@@ -124,13 +137,25 @@ async def run(dry_run: bool, limit: int | None, delay: float) -> None:
     redis_client = aioredis.from_url(redis_url, decode_responses=False)
     ig_pool = InstagramAccountManager(redis_client)
 
-    # Get a cookie file from the pool (reuse same one throughout to avoid cycling)
-    cookie_result = await ig_pool.get_active_cookie_path()
-    cookie_path = str(cookie_result[1]) if cookie_result else None
-    if cookie_path:
-        logger.info("Using cookie from account %s", cookie_result[0])
+    # Pre-materialise cookies for all active accounts so we can cycle on 401
+    all_cookies: list[tuple[str, str]] = []
+    tried: set[str] = set()
+    result = await ig_pool.get_active_cookie_path()
+    while result:
+        acct_id, cookie_path = result[0], str(result[1])
+        if acct_id in tried:
+            break
+        all_cookies.append((acct_id, cookie_path))
+        tried.add(acct_id)
+        result = await ig_pool.get_next_active_cookie_path(skip_ids=tried)
+
+    if not all_cookies:
+        logger.warning("No active Instagram cookies — resolution will likely fail")
+        all_cookies = [(None, None)]
     else:
-        logger.warning("No active Instagram cookies — resolution may hit rate limits")
+        logger.info("Loaded %d account cookie(s) for rotation", len(all_cookies))
+
+    cookie_index = 0  # which account we're currently using
 
     async with WikiClient() as wiki:
         pages = await wiki.list_pages(path_prefix="entities/social-accounts/instagram")
@@ -150,13 +175,33 @@ async def run(dry_run: bool, limit: int | None, delay: float) -> None:
         numeric_id = old_path.split("/")[-1]
         page_title = page_stub.get("title", f"@{numeric_id}")
 
-        logger.info("[%d/%d] Resolving ID %s (%s)…", i, len(numeric_pages), numeric_id, page_title)
+        logger.info(
+            "[%d/%d] Resolving ID %s (%s) [account %d/%d]…",
+            i,
+            len(numeric_pages),
+            numeric_id,
+            page_title,
+            cookie_index + 1,
+            len(all_cookies),
+        )
 
-        # Resolve ID → username (synchronous instaloader call in thread)
-        result = await asyncio.to_thread(_resolve_id, numeric_id, cookie_path)
+        # Try accounts in rotation; cycle on 401/429
+        result = None
+        for attempt in range(len(all_cookies)):
+            acct_id, cookie_path = all_cookies[(cookie_index + attempt) % len(all_cookies)]
+            res, rate_limited = await asyncio.to_thread(_resolve_id_with_cookie, numeric_id, cookie_path)
+            if res:
+                result = res
+                cookie_index = (cookie_index + attempt) % len(all_cookies)
+                break
+            if rate_limited:
+                logger.info("  ↻ Account %s rate-limited — trying next", acct_id)
+                await asyncio.sleep(2)
+            else:
+                break  # non-rate-limit error, no point trying other accounts
 
         if not result:
-            logger.warning("  ✗ Could not resolve %s — skipping", numeric_id)
+            logger.warning("  ✗ Could not resolve %s (all accounts exhausted)", numeric_id)
             failed += 1
             await asyncio.sleep(delay)
             continue

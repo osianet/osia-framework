@@ -137,9 +137,14 @@ NOTABLE_CASE_KEYWORDS = {
 }
 
 # Minimum citation count to enqueue a case for deep research.
-# 50 is trivially common in federal circuits — use a high bar so only genuinely
-# landmark opinions are queued. SCOTUS cases are always enqueued regardless.
-NOTABLE_CITATION_FLOOR = 500
+# 2000 keeps only genuinely landmark opinions and avoids flooding the research
+# queue with routine circuit precedents. Applies to non-keyword matches only.
+NOTABLE_CITATION_FLOOR = 2000
+
+# Only enqueue cases filed within this many years. Prevents bulk-historical
+# ingest from queuing thousands of century-old opinions with no current OSINT value.
+# Applies to both citation-floor and SCOTUS-blanket matches.
+NOTABLE_RECENCY_YEARS = 2
 
 CHUNK_SIZE = 600
 CHUNK_OVERLAP_WORDS = 80
@@ -373,7 +378,20 @@ class CourtListenerIngestor:
                 ),
                 optimizers_config=qdrant_models.OptimizersConfigDiff(indexing_threshold=1000),
             )
-            logger.info("Created Qdrant collection '%s'.", COLLECTION_NAME)
+            # Payload indexes for filtered search and temporal decay
+            await self._qdrant.create_payload_index(
+                COLLECTION_NAME, "date_filed", qdrant_models.PayloadSchemaType.KEYWORD
+            )
+            await self._qdrant.create_payload_index(
+                COLLECTION_NAME, "ingested_at_unix", qdrant_models.PayloadSchemaType.INTEGER
+            )
+            await self._qdrant.create_payload_index(
+                COLLECTION_NAME, "court_id", qdrant_models.PayloadSchemaType.KEYWORD
+            )
+            await self._qdrant.create_payload_index(
+                COLLECTION_NAME, "citation_count", qdrant_models.PayloadSchemaType.INTEGER
+            )
+            logger.info("Created Qdrant collection '%s' with payload indexes.", COLLECTION_NAME)
         else:
             info = await self._qdrant.get_collection(COLLECTION_NAME)
             logger.info("Collection '%s' ready (%d points).", COLLECTION_NAME, info.points_count or 0)
@@ -398,6 +416,9 @@ class CourtListenerIngestor:
                 "cluster__docket__court": court_id,
                 "order_by": "id",
                 "page_size": PAGE_SIZE,
+                # Filter by filing date so we only ingest recent opinions, not the entire
+                # historical database. date_from_default defaults to 2 years ago.
+                "cluster__date_filed__gte": self.date_from_default,
             }
             if start_id:
                 params["id__gte"] = start_id
@@ -509,6 +530,7 @@ class CourtListenerIngestor:
 
         date_filed = cluster.get("date_filed", "")
         judges = cluster.get("judges", "")
+        citations = cluster.get("citation_count", 0) or 0
         entity_tags = [t for t in [case_name, court_id, judges] if t]
         ingest_unix = filed_unix or int(time.time())
 
@@ -523,7 +545,8 @@ class CourtListenerIngestor:
                 "opinion_id": opinion_id,
                 "case_name": case_name,
                 "court_id": court_id,
-                "pub_date": date_filed,
+                "date_filed": date_filed,
+                "citation_count": citations,
                 "entity_tags": entity_tags,
                 "ingested_at_unix": ingest_unix,
             }
@@ -541,13 +564,20 @@ class CourtListenerIngestor:
         if len(self._upsert_buffer) >= self.upsert_batch_size:
             await self._flush_upsert_buffer(stats)
 
-        if self.enqueue_notable and self._is_notable(case_name, court_id, cluster):
+        if self.enqueue_notable and self._is_notable(case_name, court_id, cluster, date_filed):
             await self._maybe_enqueue(opinion_id, case_name, court_id, date_filed, cluster, stats)
 
-    def _is_notable(self, case_name: str, court_id: str, cluster: dict) -> bool:
+    def _is_notable(self, case_name: str, court_id: str, cluster: dict, date_filed: str) -> bool:
         name_lower = case_name.lower()
         if any(kw in name_lower for kw in NOTABLE_CASE_KEYWORDS):
             return True
+        # All remaining checks require the case to be recent enough to have OSINT value.
+        try:
+            cutoff = datetime.now() - timedelta(days=365 * NOTABLE_RECENCY_YEARS)
+            if datetime.fromisoformat(date_filed) < cutoff:
+                return False
+        except (ValueError, TypeError):
+            return False
         if court_id == "scotus":
             return True
         citations = cluster.get("citation_count", 0) or 0
