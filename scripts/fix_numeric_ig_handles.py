@@ -127,8 +127,8 @@ async def _get_all_cookies(ig_pool: "InstagramAccountManager") -> list[tuple[str
             result = await ig_pool.get_next_active_cookie_path(skip_ids=set(active_ids) - {acct_id})
             if result:
                 results.append((result[0], str(result[1])))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to fetch cookie path for account %s: %s", acct_id, exc)
     return results
 
 
