@@ -323,6 +323,11 @@ class InstagramAccountManager:
         await self._save(account)
         logger.info("Imported cookies for account %s from %s", account_id, source_path)
 
+    @staticmethod
+    def _cookie_has_session(content: str) -> bool:
+        """Return True if the Netscape cookie string contains a sessionid entry."""
+        return "sessionid" in content
+
     def _materialize_cookie(self, account_id: str, content: str) -> Path:
         """Write cookie content to a temp file and return the path."""
         temp_path = _TEMP_DIR / f"osia_ig_{account_id}.txt"
@@ -333,6 +338,7 @@ class InstagramAccountManager:
         """
         Round-robin over ACTIVE accounts. Returns (account_id, temp_cookie_path) or None.
         Cookie content is read from Redis and materialised to a temp file for yt-dlp.
+        Skips accounts whose stored cookies lack a sessionid (unauthenticated sessions).
         """
         active_ids = [a.decode() if isinstance(a, bytes) else a for a in await self._redis.smembers(_ACTIVE_SET)]
         if not active_ids:
@@ -349,7 +355,7 @@ class InstagramAccountManager:
         for _ in range(len(active_ids)):
             candidate_id = active_ids[idx % len(active_ids)]
             content = await self.get_cookie_content(candidate_id)
-            if content:
+            if content and self._cookie_has_session(content):
                 await self._redis.set(_CURRENT_KEY, candidate_id)
                 return candidate_id, self._materialize_cookie(candidate_id, content)
             idx += 1
@@ -369,7 +375,7 @@ class InstagramAccountManager:
         active_ids.sort()
         for aid in active_ids:
             content = await self.get_cookie_content(aid)
-            if content:
+            if content and self._cookie_has_session(content):
                 await self._redis.set(_CURRENT_KEY, aid)
                 return aid, self._materialize_cookie(aid, content)
         return None
