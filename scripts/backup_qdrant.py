@@ -45,6 +45,9 @@ BACKUP_BASE_DIR = Path("/home/ubuntu/osia-qdrant-backups")
 KEEP_DAYS = 7
 POLL_INTERVAL = 5  # seconds between status checks
 TIMEOUT_SECS = 3600  # 1 hour max for snapshot creation
+# How many full snapshots to keep in the source dir when the move step failed on
+# a previous run (i.e. the script timed out before move_to_backup could run).
+SOURCE_KEEP_SNAPSHOTS = 3
 
 
 def headers() -> dict:
@@ -56,7 +59,7 @@ def create_snapshot(client: httpx.Client) -> str:
     log.info("Requesting full Qdrant snapshot …")
     # POST /snapshots is synchronous — blocks until the snapshot file is written.
     # Allow up to 10 minutes for large instances.
-    resp = client.post("/snapshots", timeout=600)
+    resp = client.post("/snapshots", timeout=3600)
     resp.raise_for_status()
     data = resp.json()
 
@@ -120,8 +123,25 @@ def delete_qdrant_snapshot_record(client: httpx.Client, name: str) -> None:
         log.warning("Could not delete snapshot record from Qdrant: %s", exc)
 
 
+def prune_source_snapshots() -> None:
+    """Delete the oldest full-instance snapshots from the Qdrant source dir.
+
+    Keeps only SOURCE_KEEP_SNAPSHOTS most-recent files so that previous timeout
+    failures don't silently accumulate unbounded disk usage.
+    """
+    snapshots = sorted(SNAPSHOT_SOURCE_DIR.glob("full-snapshot-*.snapshot"))
+    excess = snapshots[: max(0, len(snapshots) - SOURCE_KEEP_SNAPSHOTS)]
+    for snap in excess:
+        try:
+            snap.unlink()
+            log.info("Pruned source snapshot: %s", snap.name)
+        except OSError as exc:
+            log.warning("Could not remove source snapshot %s: %s", snap.name, exc)
+
+
 def main() -> None:
     BACKUP_BASE_DIR.mkdir(parents=True, exist_ok=True)
+    prune_source_snapshots()
 
     with httpx.Client(base_url=QDRANT_URL, headers=headers()) as client:
         # Verify Qdrant is reachable
