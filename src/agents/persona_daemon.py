@@ -40,6 +40,7 @@ from google import genai
 
 from src.agents.social_media_agent import _HOME_SCREEN_PACKAGES, HomeScreenError, SocialMediaAgent
 from src.gateways.adb_device import ADBDevice
+from src.intelligence.vision_client import VisionClient, VisionError
 
 logger = logging.getLogger("osia.persona")
 
@@ -111,11 +112,14 @@ class PersonaDaemon:
         self.adb = ADBDevice(device_id=device_id, lock_check=self._wait_for_adb_lock)
         self.gemini = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
+        # Provider-agnostic vision (Google-free by default: Venice → OpenRouter).
+        self.vision = VisionClient()
         self.agent = SocialMediaAgent(
             adb=self.adb,
             gemini_client=self.gemini,
             model_id=self.model_id,
             base_dir=self.base_dir,
+            vision_client=self.vision,
         )
 
         # Redis — for pulling RSS digest as post inspiration
@@ -230,8 +234,6 @@ class PersonaDaemon:
         Detects video content (reels, shorts, stories) and flags it for the
         capture-and-analyze pipeline instead of a simple screenshot decision.
         """
-        screen_file = self.gemini.files.upload(file=screenshot_path)
-
         can_like = self.stats.likes < self._daily_like_cap
         can_comment = self.stats.comments < self._daily_comment_cap
 
@@ -290,15 +292,12 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 }}
 """
 
-        response = self.gemini.models.generate_content(
-            model=self.model_id,
-            contents=[screen_file, prompt],
-        )
+        response_text = await self._vision_analyse(screenshot_path, prompt, is_video=False)
 
-        parsed = self._parse_json_response(response.text)
+        parsed = self._parse_json_response(response_text)
         if parsed:
             return parsed
-        logger.warning("[%s] Could not parse interaction decision: %s", self.persona_name, response.text[:200])
+        logger.warning("[%s] Could not parse interaction decision: %s", self.persona_name, response_text[:200])
         return {"action": "scroll", "reasoning": "Parse error, defaulting to scroll"}
 
     # ------------------------------------------------------------------
@@ -485,20 +484,10 @@ Respond with ONLY valid JSON (no markdown, no code fences):
 
     async def _analyze_video_content(self, video_path: str) -> dict:
         """
-        Upload a captured video to Gemini and get a comprehensive content analysis
-        including transcription, visual description, and thematic summary.
+        Analyse a captured video (Google-free via VisionClient frame-sampling)
+        for transcription, visual description, and thematic summary.
         """
-        logger.info("[%s] Uploading video for analysis...", self.persona_name)
-        video_file = self.gemini.files.upload(file=video_path)
-
-        # Wait for processing
-        while video_file.state.name == "PROCESSING":
-            await asyncio.sleep(2)
-            video_file = self.gemini.files.get(name=video_file.name)
-
-        if video_file.state.name == "FAILED":
-            logger.warning("[%s] Video processing failed in Gemini", self.persona_name)
-            return {"error": "Video processing failed"}
+        logger.info("[%s] Analysing captured video...", self.persona_name)
 
         prompt = """Analyze this video comprehensively. Provide:
 
@@ -518,16 +507,53 @@ Respond with ONLY valid JSON (no markdown, no code fences):
     "notable_claims": "Any specific claims, statistics, or assertions made"
 }"""
 
-        response = self.gemini.models.generate_content(
-            model=self.model_id,
-            contents=[video_file, prompt],
-        )
+        response_text = await self._vision_analyse(video_path, prompt, is_video=True)
+        if not response_text:
+            logger.warning("[%s] Video analysis failed across all providers", self.persona_name)
+            return {"error": "Video analysis failed"}
 
-        parsed = self._parse_json_response(response.text)
+        parsed = self._parse_json_response(response_text)
         if parsed:
             return parsed
-        logger.warning("[%s] Could not parse video analysis: %s", self.persona_name, response.text[:200])
-        return {"topic": response.text[:500], "themes": [], "tone": "unknown"}
+        logger.warning("[%s] Could not parse video analysis: %s", self.persona_name, response_text[:200])
+        return {"topic": response_text[:500], "themes": [], "tone": "unknown"}
+
+    async def _vision_analyse(self, media_path: str, prompt: str, is_video: bool) -> str:
+        """Analyse an image or video, Google-free first, Gemini as opt-in fallback.
+
+        Returns the model's text response, or "" if every backend failed.
+        """
+        # --- Preferred: provider-agnostic VisionClient (Venice → OpenRouter) ---
+        if self.vision.available:
+            try:
+                if is_video:
+                    text = await self.vision.analyse_video(media_path, prompt)
+                else:
+                    text = await self.vision.analyse_image(media_path, prompt)
+                if text and text.strip():
+                    return text
+            except VisionError as ve:
+                logger.warning("[%s] VisionClient failed (%s) — trying Gemini.", self.persona_name, str(ve)[:120])
+
+        # --- Optional: native Gemini (only if a key is present) ---
+        if os.getenv("GEMINI_API_KEY"):
+            try:
+                media_file = await asyncio.to_thread(self.gemini.files.upload, file=media_path)
+                while media_file.state.name == "PROCESSING":
+                    await asyncio.sleep(2)
+                    media_file = await asyncio.to_thread(self.gemini.files.get, name=media_file.name)
+                if media_file.state.name == "FAILED":
+                    logger.warning("[%s] Gemini media processing failed", self.persona_name)
+                    return ""
+                response = await asyncio.to_thread(
+                    self.gemini.models.generate_content,
+                    model=self.model_id,
+                    contents=[media_file, prompt],
+                )
+                return response.text or ""
+            except Exception as exc:
+                logger.warning("[%s] Gemini vision fallback failed: %s", self.persona_name, exc)
+        return ""
 
     async def _evaluate_and_engage_video(self, analysis: dict, app_name: str) -> None:
         """

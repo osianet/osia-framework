@@ -15,11 +15,15 @@ import random
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
-from google import genai
 
 from src.gateways.adb_device import ADBDevice
+from src.intelligence.vision_client import VisionClient, VisionError
+
+if TYPE_CHECKING:
+    from google import genai
 
 OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
 
@@ -122,13 +126,17 @@ class SocialMediaAgent:
     def __init__(
         self,
         adb: ADBDevice,
-        gemini_client: genai.Client,
+        gemini_client: "genai.Client | None" = None,
         model_id: str = "gemini-2.5-flash",
         base_dir: str | Path | None = None,
+        vision_client: VisionClient | None = None,
     ):
         self.adb = adb
         self.gemini = gemini_client
         self.model_id = model_id
+        # Provider-agnostic vision (Google-free by default: Venice → OpenRouter).
+        # Preferred over the native genai client for screen comprehension.
+        self.vision = vision_client or VisionClient()
         self.base_dir = Path(base_dir or os.getenv("OSIA_BASE_DIR", Path(__file__).resolve().parent.parent.parent))
         self._scratch_dir = self.base_dir / "tmp" / "social_agent"
         self._scratch_dir.mkdir(parents=True, exist_ok=True)
@@ -144,8 +152,8 @@ class SocialMediaAgent:
         """Try vision models across providers, returning the response text.
 
         Order:
-          1. Google direct (native genai client) — ``self.model_id`` first,
-             then ``_VISION_GOOGLE_MODELS``.
+          0. VisionClient — provider-agnostic, Google-free (Venice → OpenRouter).
+          1. Google direct (native genai client) — only if one was injected.
           2. OpenRouter — ``_VISION_OPENROUTER_MODELS`` (multiple providers).
 
         Falls through on any transient error (503 / 429 / UNAVAILABLE).
@@ -153,8 +161,18 @@ class SocialMediaAgent:
         """
         last_exc: Exception | None = None
 
-        # --- Google direct ---
-        google_models = [self.model_id] + [m for m in _VISION_GOOGLE_MODELS if m != self.model_id]
+        # --- VisionClient (preferred, Google-free) ---
+        if self.vision.available:
+            try:
+                return await self.vision.analyse_image(screenshot_path, prompt)
+            except VisionError as ve:
+                logger.warning("Vision: VisionClient failed (%s) — trying legacy backends.", str(ve)[:120])
+                last_exc = ve
+
+        # --- Google direct (only if a genai client was injected) ---
+        google_models = (
+            [self.model_id] + [m for m in _VISION_GOOGLE_MODELS if m != self.model_id] if self.gemini else []
+        )
         screen_file = None
         for model in google_models:
             try:

@@ -33,6 +33,7 @@ from src.intelligence.source_tracker import (
     audit_report,
     build_citation_protocol,
 )
+from src.intelligence.vision_client import VisionClient, VisionError
 from src.intelligence.wiki_client import (
     WikiClient,
     build_entity_page,
@@ -183,6 +184,12 @@ class OsiaOrchestrator:
             http_options=types.HttpOptions(timeout=300_000),
         )
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
+
+        # Provider-agnostic vision (image/video comprehension) — Google-free by
+        # default (Venice → OpenRouter). Gemini is only a last-resort backend and
+        # only when OSIA_VISION_ALLOW_GEMINI is set. This is preferred over the
+        # native genai client for all multimodal analysis below.
+        self.vision = VisionClient()
 
         # Venice (desk routing) — uncensored so sensitive queries are never refused or misrouted
         self._venice_base_url = "https://api.venice.ai/api/v1"
@@ -2165,66 +2172,43 @@ class OsiaOrchestrator:
                 ff.stderr.decode(errors="replace")[:500],
             )
 
+        prompt = (
+            "Watch this intercepted video. Transcribe ALL spoken audio verbatim "
+            "and as completely as possible — do not paraphrase or summarise speech, "
+            "reproduce the exact words spoken. Then describe the visual context, "
+            "identify any text on screen, and summarize the core message or narrative."
+        )
+
         try:
-            _MAX_UPLOAD_ATTEMPTS = 3
-            video_file = None
-            for attempt in range(1, _MAX_UPLOAD_ATTEMPTS + 1):
+            # --- Preferred: provider-agnostic VisionClient (Google-free) ---
+            if self.vision.available:
                 try:
-                    logger.info(
-                        "Uploading video to Gemini (%s) — attempt %d/%d...",
-                        upload_path,
-                        attempt,
-                        _MAX_UPLOAD_ATTEMPTS,
-                    )
+                    text = await self.vision.analyse_video(upload_path, prompt)
+                    if text and text.strip():
+                        return text, engagement_counts
+                    logger.warning("VisionClient returned empty video analysis — trying next backend.")
+                except VisionError as ve:
+                    logger.warning("VisionClient video analysis failed (%s) — trying next backend.", ve)
+
+            # --- Optional: native Gemini upload (only if a key is present) ---
+            if os.getenv("GEMINI_API_KEY"):
+                try:
                     video_file = await asyncio.to_thread(self.client.files.upload, file=upload_path)
-                    break
-                except Exception as upload_err:
-                    logger.warning(
-                        "Gemini upload attempt %d/%d failed: %s",
-                        attempt,
-                        _MAX_UPLOAD_ATTEMPTS,
-                        upload_err,
+                    while video_file.state.name == "PROCESSING":
+                        await asyncio.sleep(2)
+                        video_file = await asyncio.to_thread(self.client.files.get, name=video_file.name)
+                    response = await asyncio.to_thread(
+                        self.client.models.generate_content,
+                        model=self.model_id,
+                        contents=[video_file, prompt],
                     )
-                    if attempt < _MAX_UPLOAD_ATTEMPTS:
-                        msg = str(upload_err).lower()
-                        is_network_err = any(
-                            tok in msg for tok in ("ssl", "handshake", "timed out", "connection", "reset")
-                        )
-                        if is_network_err and attempt >= 2:
-                            logger.warning(
-                                "Gemini upload: persistent network error — skipping final retry, falling back to Reka."
-                            )
-                            return await self._analyse_video_reka(upload_path, engagement_counts)
-                        wait = 5 if is_network_err else 5 * attempt
-                        logger.info("Retrying upload in %ds...", wait)
-                        await asyncio.sleep(wait)
-                    else:
-                        logger.error(
-                            "Gemini upload failed after %d attempts — trying Reka fallback.",
-                            _MAX_UPLOAD_ATTEMPTS,
-                        )
-                        return await self._analyse_video_reka(upload_path, engagement_counts)
+                    if response.text and response.text.strip():
+                        return response.text, engagement_counts
+                except Exception as gc_err:
+                    logger.warning("Gemini video analysis failed: %s — trying Reka fallback.", gc_err)
 
-            while video_file.state.name == "PROCESSING":
-                await asyncio.sleep(2)
-                video_file = await asyncio.to_thread(self.client.files.get, name=video_file.name)
-
-            prompt = (
-                "Watch this intercepted video. Transcribe ALL spoken audio verbatim "
-                "and as completely as possible — do not paraphrase or summarise speech, "
-                "reproduce the exact words spoken. Then describe the visual context, "
-                "identify any text on screen, and summarize the core message or narrative."
-            )
-            try:
-                response = await asyncio.to_thread(
-                    self.client.models.generate_content,
-                    model=self.model_id,
-                    contents=[video_file, prompt],
-                )
-                return response.text, engagement_counts
-            except Exception as gc_err:
-                logger.warning("Gemini generate_content failed: %s — trying Reka fallback.", gc_err)
-                return await self._analyse_video_reka(upload_path, engagement_counts)
+            # --- Final fallback: Reka ---
+            return await self._analyse_video_reka(upload_path, engagement_counts)
         finally:
             try:
                 Path(transcoded_path).unlink(missing_ok=True)
@@ -2872,33 +2856,48 @@ class OsiaOrchestrator:
                 att_type = att.get("content_type", "")
                 if not att_path or not Path(att_path).exists():
                     return None
-                try:
-                    logger.info("Uploading Signal attachment to Gemini: %s (%s)", att_path, att_type)
-                    att_file = await asyncio.to_thread(self.client.files.upload, file=att_path)
-                    while att_file.state.name == "PROCESSING":
-                        await asyncio.sleep(2)
-                        att_file = await asyncio.to_thread(self.client.files.get, name=att_file.name)
-
-                    if att_type.startswith("image/"):
-                        att_prompt = (
-                            "Analyse this image sent as a Signal intelligence attachment. "
-                            "Describe all visible content in detail: text, faces, locations, objects, "
-                            "maps, documents, or any other identifiable elements. "
-                            "Summarise the intelligence value."
-                        )
-                    else:
-                        att_prompt = (
-                            "Analyse this video sent as a Signal intelligence attachment. "
-                            "Transcribe any spoken audio, describe the visual content, identify text on screen, "
-                            "and summarise the core message or intelligence value."
-                        )
-
-                    att_response = await asyncio.to_thread(
-                        self.client.models.generate_content,
-                        model=self.model_id,
-                        contents=[att_file, att_prompt],
+                is_image = att_type.startswith("image/")
+                if is_image:
+                    att_prompt = (
+                        "Analyse this image sent as a Signal intelligence attachment. "
+                        "Describe all visible content in detail: text, faces, locations, objects, "
+                        "maps, documents, or any other identifiable elements. "
+                        "Summarise the intelligence value."
                     )
-                    return f"[{att_type}]\n{att_response.text.strip()}"
+                else:
+                    att_prompt = (
+                        "Analyse this video sent as a Signal intelligence attachment. "
+                        "Transcribe any spoken audio, describe the visual content, identify text on screen, "
+                        "and summarise the core message or intelligence value."
+                    )
+                try:
+                    # --- Preferred: provider-agnostic VisionClient (Google-free) ---
+                    if self.vision.available:
+                        try:
+                            if is_image:
+                                text = await self.vision.analyse_image(att_path, att_prompt)
+                            else:
+                                text = await self.vision.analyse_video(att_path, att_prompt)
+                            if text and text.strip():
+                                return f"[{att_type}]\n{text.strip()}"
+                        except VisionError as ve:
+                            logger.warning("VisionClient attachment analysis failed (%s) — trying Gemini.", ve)
+
+                    # --- Optional: native Gemini (only if a key is present) ---
+                    if os.getenv("GEMINI_API_KEY"):
+                        att_file = await asyncio.to_thread(self.client.files.upload, file=att_path)
+                        while att_file.state.name == "PROCESSING":
+                            await asyncio.sleep(2)
+                            att_file = await asyncio.to_thread(self.client.files.get, name=att_file.name)
+                        att_response = await asyncio.to_thread(
+                            self.client.models.generate_content,
+                            model=self.model_id,
+                            contents=[att_file, att_prompt],
+                        )
+                        return f"[{att_type}]\n{att_response.text.strip()}"
+
+                    logger.error("Signal attachment analysis: no vision backend available for %s", att_path)
+                    return None
                 except Exception as _att_err:
                     logger.error("Signal attachment analysis failed (%s): %s", att_path, _att_err)
                     return None
