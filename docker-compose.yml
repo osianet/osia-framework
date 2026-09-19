@@ -22,7 +22,10 @@ services:
     restart: always
 
   signal-api:
-    image: bbernhard/signal-cli-rest-api:latest
+    # Pinned (not :latest) so the version is reproducible across the future
+    # k3s cluster. 0.100 bundles signal-cli 0.14.5 (was 0.14.1) — several
+    # months of Signal linking/provisioning-protocol fixes.
+    image: bbernhard/signal-cli-rest-api:0.100
     container_name: osia-signal
     environment:
       - MODE=json-rpc
