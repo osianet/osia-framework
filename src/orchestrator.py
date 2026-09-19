@@ -47,6 +47,10 @@ from src.intelligence.wiki_client import (
 
 logger = logging.getLogger("osia.orchestrator")
 
+# A bare Signal account UUID (8-4-4-4-12 hex). Used to tell a direct recipient
+# apart from an unprefixed group id when normalizing /v2/send recipients.
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
 
 def _http_error_detail(exc: httpx.HTTPStatusError) -> str:
     """Extract a human-readable error message from an API error response."""
@@ -671,10 +675,30 @@ class OsiaOrchestrator:
         logger.error("Signal %s failed after %d attempts — giving up.", label, retries)
         return False
 
+    @staticmethod
+    def _normalize_signal_recipient(recipient: str) -> str:
+        """Normalize a Signal recipient for the /v2/send `recipients` field.
+
+        signal-cli accepts three recipient forms: a phone number (``+61...``),
+        a group id (``group.<base64>``), or a bare account UUID. The previous
+        logic wrapped ANYTHING that wasn't ``+`` or ``group.`` as a group,
+        which corrupted a direct-message reply whose source is a bare user
+        UUID (e.g. ``e9f70240-...``) into an invalid ``group.<uuid>`` — Signal
+        then rejected it with "Invalid identifier". A UUID-shaped recipient is
+        a direct account and must pass through untouched; only leave the group
+        prefix for values that are clearly not phone numbers or UUIDs.
+        """
+        if recipient.startswith("+") or recipient.startswith("group."):
+            return recipient
+        # UUID shape (8-4-4-4-12 hex) → a direct account recipient, send as-is.
+        if _UUID_RE.match(recipient):
+            return recipient
+        # Otherwise assume a bare (unprefixed) group id.
+        return f"group.{recipient}"
+
     async def send_signal_message(self, recipient: str, message: str):
         """Sends a Signal message back to the requester."""
-        if not recipient.startswith("+") and not recipient.startswith("group."):
-            recipient = f"group.{recipient}"
+        recipient = self._normalize_signal_recipient(recipient)
         payload = {
             "message": message,
             "number": self.signal_number,
@@ -685,8 +709,7 @@ class OsiaOrchestrator:
 
     async def send_signal_image(self, recipient: str, image_b64: str, caption: str = ""):
         """Sends a base64-encoded image attachment via Signal."""
-        if not recipient.startswith("+") and not recipient.startswith("group."):
-            recipient = f"group.{recipient}"
+        recipient = self._normalize_signal_recipient(recipient)
         payload = {
             "message": caption,
             "number": self.signal_number,
