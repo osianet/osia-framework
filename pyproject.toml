@@ -15,7 +15,7 @@ dependencies = [
     "matplotlib==3.10.8",
     "mcp[cli]==1.26.0",
     "openpyxl==3.1.5",
-    "pandas==3.0.1",
+    "pandas==3.0.2",
     "python-dotenv==1.2.2",
     "pyyaml==6.0.3",
     "qdrant-client==1.17.1",
