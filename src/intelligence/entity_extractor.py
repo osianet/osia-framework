@@ -139,8 +139,11 @@ class EntityExtractor:
         raw: str | None = None
         if VENICE_API_KEY:
             raw = await self._extract_via_venice(text)
+        if raw is None:
+            # Google-free fallback cascade (Venice → OpenRouter via TextClient).
+            raw = await self._extract_via_textclient(text)
         if raw is None and GEMINI_API_KEY:
-            logger.warning("Venice entity extraction failed — falling back to Gemini")
+            logger.warning("Venice + TextClient entity extraction failed — falling back to Gemini")
             raw = await self._extract_via_gemini(text)
         if raw is None:
             logger.warning("No AI API key configured or all providers failed — skipping entity extraction")
@@ -225,8 +228,24 @@ class EntityExtractor:
                     await asyncio.sleep(5 * (attempt + 1))
         return None
 
+    async def _extract_via_textclient(self, text: str) -> str | None:
+        """Google-free fallback: entity extraction via the TextClient cascade."""
+        from src.intelligence.text_client import TextClient, TextError
+
+        tc = TextClient()
+        if not tc.available:
+            return None
+        try:
+            out = await tc.generate(EXTRACTION_PROMPT.format(text=text), temperature=0.0, max_tokens=1024)
+            return out.strip() if out else None
+        except TextError as exc:
+            logger.warning("TextClient entity extraction fallback failed: %s", exc)
+            return None
+        finally:
+            await tc.aclose()
+
     async def _extract_via_gemini(self, text: str) -> str | None:
-        """Gemini fallback for entity extraction when Venice is unavailable."""
+        """Gemini fallback for entity extraction — opt-in last resort only."""
         from google import genai as _genai
 
         client = _genai.Client(api_key=GEMINI_API_KEY)
