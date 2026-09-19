@@ -1145,7 +1145,8 @@ class OsiaOrchestrator:
 
         # For inactive services, fetch Result + exit timestamp to distinguish successful oneshots
         inactive_svcs = [
-            svc for svc, state in zip(self._STATUS_SERVICES, states, strict=True)
+            svc
+            for svc, state in zip(self._STATUS_SERVICES, states, strict=True)
             if isinstance(state, str) and state == "inactive"
         ]
         results_map: dict[str, str] = {}
@@ -1153,13 +1154,14 @@ class OsiaOrchestrator:
         if inactive_svcs:
             result_vals, exit_ts_vals = await asyncio.gather(
                 asyncio.gather(
-                    *[self._run_cmd("systemctl", "show", "-p", "Result", "--value", svc)
-                      for svc in inactive_svcs],
+                    *[self._run_cmd("systemctl", "show", "-p", "Result", "--value", svc) for svc in inactive_svcs],
                     return_exceptions=True,
                 ),
                 asyncio.gather(
-                    *[self._run_cmd("systemctl", "show", "-p", "ExecMainExitTimestamp", "--value", svc)
-                      for svc in inactive_svcs],
+                    *[
+                        self._run_cmd("systemctl", "show", "-p", "ExecMainExitTimestamp", "--value", svc)
+                        for svc in inactive_svcs
+                    ],
                     return_exceptions=True,
                 ),
             )
