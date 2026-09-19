@@ -159,7 +159,7 @@ ECHO_RISK_THRESHOLD = float(os.getenv("HERMES_ECHO_RISK_THRESHOLD", "0.80"))
 STALENESS_DAYS = float(os.getenv("HERMES_STALENESS_DAYS", "30"))
 FRESH_HOURS = int(os.getenv("HERMES_FRESH_HOURS", "24"))
 SCORING_DOWNGRADE_DAYS = float(os.getenv("HERMES_SCORING_DOWNGRADE_DAYS", "14"))
-CONTRA_MODEL = os.getenv("HERMES_CONTRA_MODEL", "google/gemini-2.0-flash-lite-001")
+CONTRA_MODEL = os.getenv("HERMES_CONTRA_MODEL", "qwen/qwen3.8-27b")
 
 DESKS_DIR = Path("config/desks")
 

@@ -38,15 +38,14 @@ _TRANSITION_WAIT = (1.5, 3.0)  # random range in seconds — looks more human
 #       gemini-2.0-flash is restricted (no new access) and shuts down June 1 2026 — removed.
 _VISION_GOOGLE_MODELS = ["gemini-2.5-flash"]
 
-# OpenRouter fallbacks — tried in order when all Google direct models fail.
-# Covers Google-via-OR, Anthropic, and OpenAI so a single provider outage or
-# billing issue cannot take down all vision capability.
-# Last verified: 2026-04-10
+# OpenRouter fallbacks — LEGACY path, only reached if the VisionClient cascade
+# (Venice → OpenRouter, see src/intelligence/vision_client.py) is unavailable.
+# Non-Google models lead so a Google outage/billing issue never blocks vision.
 _VISION_OPENROUTER_MODELS = [
-    "google/gemini-2.5-flash",  # Google via OR — separate quota from direct API
-    "google/gemini-2.0-flash-001",  # pinned revision; bare alias google/gemini-2.0-flash removed from OR
-    "anthropic/claude-haiku-4.5",  # Anthropic — OR uses dot notation, not date suffix
-    "openai/gpt-4o-mini",  # OpenAI — reliable vision, different provider entirely
+    "anthropic/claude-sonnet-5",  # Anthropic — strong OCR/vision, different vendor
+    "qwen/qwen3.8-27b",  # open-weight VLM, cheap
+    "openai/gpt-5.6-luna",  # OpenAI — reliable vision, isolates vendor outage
+    "google/gemini-2.5-flash",  # Google via OR — last resort only (deprecating 2026-06)
 ]
 
 
