@@ -40,6 +40,7 @@ from google import genai
 
 from src.agents.social_media_agent import _HOME_SCREEN_PACKAGES, HomeScreenError, SocialMediaAgent
 from src.gateways.adb_device import ADBDevice
+from src.intelligence.text_client import TextClient, TextError
 from src.intelligence.vision_client import VisionClient, VisionError
 
 logger = logging.getLogger("osia.persona")
@@ -114,6 +115,8 @@ class PersonaDaemon:
         self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
         # Provider-agnostic vision (Google-free by default: Venice → OpenRouter).
         self.vision = VisionClient()
+        # Provider-agnostic plain text generation (Google-free by default).
+        self.text = TextClient()
         self.agent = SocialMediaAgent(
             adb=self.adb,
             gemini_client=self.gemini,
@@ -555,6 +558,31 @@ Respond with ONLY valid JSON (no markdown, no code fences):
                 logger.warning("[%s] Gemini vision fallback failed: %s", self.persona_name, exc)
         return ""
 
+    async def _text_generate(self, prompt: str) -> str:
+        """Plain text generation, Google-free first, Gemini as opt-in fallback.
+
+        Returns the model's text response, or "" if every backend failed.
+        """
+        if self.text.available:
+            try:
+                text = await self.text.generate(prompt)
+                if text and text.strip():
+                    return text
+            except TextError as te:
+                logger.warning("[%s] TextClient failed (%s) — trying Gemini.", self.persona_name, str(te)[:120])
+
+        if os.getenv("GEMINI_API_KEY"):
+            try:
+                response = await asyncio.to_thread(
+                    self.gemini.models.generate_content,
+                    model=self.model_id,
+                    contents=[prompt],
+                )
+                return response.text or ""
+            except Exception as exc:
+                logger.warning("[%s] Gemini text fallback failed: %s", self.persona_name, exc)
+        return ""
+
     async def _evaluate_and_engage_video(self, analysis: dict, app_name: str) -> None:
         """
         Given a video content analysis, evaluate it against DIRECTIVES.md and
@@ -604,12 +632,9 @@ Respond with ONLY valid JSON (no markdown, no code fences):
     "values_alignment": "none|low|medium|high"
 }}"""
 
-        response = self.gemini.models.generate_content(
-            model=self.model_id,
-            contents=[prompt],
-        )
+        response_text = await self._text_generate(prompt)
 
-        parsed = self._parse_json_response(response.text)
+        parsed = self._parse_json_response(response_text)
         if not parsed:
             logger.warning("[%s] Could not parse video engagement decision", name)
             return
@@ -845,12 +870,9 @@ Respond with ONLY valid JSON (no markdown, no code fences):
     "reasoning": "Why this feels natural right now"
 }}"""
 
-        response = self.gemini.models.generate_content(
-            model=self.model_id,
-            contents=[prompt],
-        )
+        response_text = await self._text_generate(prompt)
 
-        parsed = self._parse_json_response(response.text)
+        parsed = self._parse_json_response(response_text)
         if parsed and parsed.get("text"):
             return parsed
         logger.warning("[%s] Could not generate post content", self.persona_name)
