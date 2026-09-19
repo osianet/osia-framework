@@ -295,7 +295,6 @@ class VisionClient:
 
         parts = [{"type": "image_url", "image_url": {"url": self._bytes_data_url(f, "jpeg")}} for f in frames]
 
-        full_prompt = prompt
         if transcript and transcript.strip():
             full_prompt = (
                 f"AUDIO TRANSCRIPT (extracted separately — the frames below are silent):\n"
