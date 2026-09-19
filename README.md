@@ -11,7 +11,7 @@ OSIA models the structure of a real intelligence agency: a **Chief of Staff** or
 ### 1. Ingress
 Requests enter the system through three channels:
 - **Signal Gateway** — operatives send URLs or queries to a Signal group; the gateway pushes them to the Redis task queue (`osia:task_queue`) for the orchestrator to process.
-- **RSS Ingress** — a scheduled poller watches configured feeds. Each new article is deduplicated, cleaned, and summarised by Gemini, then upserted **directly into Qdrant** (`collection-directorate`) — bypassing the task queue and orchestrator entirely. Extracted entities are enqueued to `osia:research_queue` for the research worker. Summaries are also staged in Redis (`osia:rss:daily_digest`) for the 07:00 UTC SITREP.
+- **RSS Ingress** — a scheduled poller watches configured feeds. Each new article is deduplicated, cleaned, and summarised by the provider-agnostic text cascade (Venice → OpenRouter, Google-free by default), then upserted **directly into Qdrant** (`collection-directorate`) — bypassing the task queue and orchestrator entirely. Extracted entities are enqueued to `osia:research_queue` for the research worker. Summaries are also staged in Redis (`osia:rss:daily_digest`) for the 07:00 UTC SITREP.
 - **Ingress API** — an authenticated HTTPS endpoint for programmatic submission from internal tooling or external callers (see [Ingress API](#ingress-api)).
 
 ### 2. Research & Collection
@@ -25,7 +25,7 @@ The **Chief of Staff** (Venice `venice-uncensored`) reads the incoming task and 
 | Semantic Scholar | Citation-graph research |
 | YouTube (yt-dlp) | Video transcript extraction |
 
-**Media Interception (PHINT):** If a social media link is received, a physical Moto g06 Android device connected via ADB records the screen for the duration of the video. Gemini Vision analyses the recording. Post metadata and comments are extracted first via `yt-dlp` (no phone required); ADB is only used as a fallback.
+**Media Interception (PHINT):** If a social media link is received, a physical Moto g06 Android device connected via ADB records the screen for the duration of the video. A provider-agnostic vision pipeline (`src/intelligence/vision_client.py`) samples frames with ffmpeg and analyses them via an OpenAI-compatible vision model (Venice `qwen3-vl-235b-a22b` by default, OpenRouter Claude/Qwen/GPT as fallback — Google-free). Post metadata and comments are extracted first via `yt-dlp` (no phone required); ADB is only used as a fallback.
 
 ### 3. Background Workers
 
@@ -73,13 +73,13 @@ Desks are invoked directly via `DeskRegistry` — no middleware layer. Each desk
 | Cyber Intelligence & Warfare | Venice | `mistral-31-24b` | Nation-state cyber ops, digital threats |
 | Information & Psychological Warfare | Venice | `venice-uncensored` | Influence operations, narrative warfare (uncensored) |
 | Environment & Ecological Intelligence | OpenRouter | `anthropic/claude-sonnet-4-6` | Environmental/climate intelligence |
-| The Watch Floor | OpenRouter | `google/gemini-2.5-pro` | INTSUM synthesis & Signal dispatch |
+| The Watch Floor | OpenRouter | `anthropic/claude-sonnet-4-6` | INTSUM synthesis & Signal dispatch |
 
 **Chief of Staff routing** uses Venice `venice-uncensored` — an uncensored model is used deliberately so that no query about a sensitive subject is misrouted due to guardrails.
 
 **Uncensored routing policy:** Venice (`venice-uncensored`) is used for desk routing and the HUMINT/Cultural/Cyber desks. The Watch Floor uses Claude Sonnet 4.6 (capable on sensitive investigative topics) rather than a guardrailed model so final INTSUM synthesis is never sanitised. Entity extraction also uses Venice as primary.
 
-All desks fall back to `openrouter/google/gemini-2.5-flash`. The Watch Floor falls back to `openrouter/google/gemini-2.5-pro`.
+All desks fall back to `openrouter/qwen/qwen3.8-27b`. The Watch Floor falls back to `openrouter/qwen/qwen3.8-max`. **OSIA is Google-free by default** — no desk uses a Google model as primary or fallback. Google models can still be opted back in per-desk via config, and Gemini remains available as an explicit last-resort backend (see below).
 
 Venice desks (`venice-uncensored`, `mistral-31-24b`) call the Venice AI API directly — these models are not available via OpenRouter.
 
@@ -172,7 +172,7 @@ Qdrant Collections (RAG namespaces):
 
 - **Hardware:** Orange Pi 5 Plus (ARM64), Moto g06 (Android ADB gateway)
 - **Runtime:** Python 3.12 (`uv`), Redis, Qdrant
-- **Cloud AI:** Venice AI (`venice-uncensored`, `mistral-31-24b`), OpenRouter (Claude Sonnet 4.6, Gemini 2.5 Pro, GPT-4o mini, Gemini 2.5 Flash)
+- **Cloud AI:** Venice AI (`venice-uncensored`, `mistral-31-24b`, `qwen3-vl-235b-a22b` vision), OpenRouter (Claude Sonnet 4.6, Qwen 3.8, GPT vision). Google Gemini is optional — supported as an opt-in last-resort backend but not used by default.
 - **MCP Servers:** Tavily, Wikipedia, ArXiv, Semantic Scholar, YouTube (yt-dlp)
 - **Protocol:** Signal (E2EE ingress/egress), ADB (media interception)
 
