@@ -18,7 +18,7 @@ services:
     image: redis:alpine
     container_name: osia-redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     restart: always
 
   signal-api:
@@ -27,7 +27,7 @@ services:
     environment:
       - MODE=json-rpc
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
     volumes:
       - ./signal-data:/home/.local/share/signal-cli
     restart: always
@@ -94,7 +94,7 @@ services:
     restart: always
 
   authentik-server:
-    image: ghcr.io/goauthentik/server:2026.2.2
+    image: ghcr.io/goauthentik/server:2026.8.3
     container_name: osia-authentik-server
     command: server
     environment:
@@ -117,7 +117,7 @@ services:
     restart: always
 
   authentik-worker:
-    image: ghcr.io/goauthentik/server:2026.2.2
+    image: ghcr.io/goauthentik/server:2026.8.3
     container_name: osia-authentik-worker
     command: worker
     environment:
@@ -147,6 +147,77 @@ services:
       sh -c "apt-get update &&
              apt-get install -y nmap whois dnsutils iputils-ping curl &&
              tail -f /dev/null"
+
+  # ---------------------------------------------------------------------------
+  # OSIA application services — all built from one shared `osia-app` image and
+  # differentiated only by `command:`. This is the one-image-many-workloads
+  # shape that carries straight over to Kubernetes Deployments later.
+  #
+  # NOTE: the phone/ADB stack (persona-daemon, phone-bridge, adb-server) and
+  # the host nginx are intentionally NOT here yet — the phone is USB-bound to
+  # one node, and nginx becomes an Ingress at the k3s stage.
+  #
+  # Service-name env overrides below beat the `localhost`-based values in .env,
+  # which are correct for host processes but wrong inside the compose network.
+  # Using `qdrant` (the service name) instead of qdrant.osia.dev also sidesteps
+  # the split-horizon DNS issue where *.osia.dev resolves to 127.0.0.1 inside
+  # containers.
+  # ---------------------------------------------------------------------------
+  osia-app: &osia-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: osia-app:latest
+    env_file:
+      - .env
+    environment: &osia-app-env
+      REDIS_URL: redis://redis:6379/0
+      QDRANT_URL: http://qdrant:6333
+      OSIA_BASE_DIR: /app
+      # Reach the sibling containers by service name (the .env values use
+      # localhost:<host-port>, correct only for host processes). Note the
+      # INTERNAL ports here (8080, 3000), not the host-mapped ones.
+      SIGNAL_API_URL: http://signal-api:8080
+      SIGNAL_WS_URL: ws://signal-api:8080
+      WIKIJS_URL: http://wikijs:3000/graphql
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      - redis
+      - qdrant
+    restart: always
+    # This anchor service is a build/definition template only — it never runs
+    # on its own (the `profiles` guard keeps `docker compose up` from starting
+    # it). Concrete services below reuse it via `<<: *osia-app`.
+    profiles:
+      - _template
+    command: ["python", "main.py"]
+
+  orchestrator:
+    <<: *osia-app
+    container_name: osia-orchestrator
+    profiles: []
+    command: ["python", "main.py"]
+
+  research-worker:
+    <<: *osia-app
+    container_name: osia-research-worker
+    profiles: []
+    # Was: systemd timer every 15 min. Now a supervised long-running loop.
+    command: ["python", "-m", "src.workers.service_loop", "research_worker:main", "--interval", "900"]
+
+  hermes-worker:
+    <<: *osia-app
+    container_name: osia-hermes-worker
+    profiles: []
+    # Was: systemd timer daily at 03:30 UTC. Loop every 24h.
+    command: ["python", "-m", "src.workers.service_loop", "hermes_worker:main", "--interval", "86400"]
+
+  profile-worker:
+    <<: *osia-app
+    container_name: osia-profile-worker
+    profiles: []
+    # Was: systemd timer every 6h. Note the entrypoint is `_main` in this module.
+    command: ["python", "-m", "src.workers.service_loop", "profile_investigation_worker:_main", "--interval", "21600"]
 
 networks:
   default:

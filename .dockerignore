@@ -1,0 +1,42 @@
+# Keep the build context small and secrets out of the image.
+# Secrets are injected at runtime via env_file / environment, never baked in.
+
+.env
+*.env
+*.key
+*.pem
+*.p12
+*.pfx
+
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+.git/
+.github/
+.idea/
+.vscode/
+*.swp
+
+# Large local-only data that has no place in the image
+reports/
+sources/
+tmp/
+logs/
+signal-data/
+assets/aesthetic/
+assets/video/
+config/voice_refs/
+config/ig_cookies/
+
+# Docs / tooling not needed at runtime
+CLAUDE.md
+.claude/
+view.xml

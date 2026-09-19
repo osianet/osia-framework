@@ -1001,7 +1001,7 @@ class OsiaOrchestrator:
         "osia-redis",
         "osia-signal",
         "mailserver",
-        "osia-kali",
+        "kali-api",
     ]
 
     async def _run_cmd(self, *args: str, timeout: float = 5.0) -> str:
@@ -1120,14 +1120,43 @@ class OsiaOrchestrator:
             return_exceptions=True,
         )
 
+        # For inactive services, fetch Result + exit timestamp to distinguish successful oneshots
+        inactive_svcs = [
+            svc for svc, state in zip(self._STATUS_SERVICES, states, strict=True)
+            if isinstance(state, str) and state == "inactive"
+        ]
+        results_map: dict[str, str] = {}
+        exit_ts_map: dict[str, str] = {}
+        if inactive_svcs:
+            result_vals, exit_ts_vals = await asyncio.gather(
+                asyncio.gather(
+                    *[self._run_cmd("systemctl", "show", "-p", "Result", "--value", svc)
+                      for svc in inactive_svcs],
+                    return_exceptions=True,
+                ),
+                asyncio.gather(
+                    *[self._run_cmd("systemctl", "show", "-p", "ExecMainExitTimestamp", "--value", svc)
+                      for svc in inactive_svcs],
+                    return_exceptions=True,
+                ),
+            )
+            for svc, r, ts in zip(inactive_svcs, result_vals, exit_ts_vals, strict=True):
+                results_map[svc] = r if isinstance(r, str) else ""
+                exit_ts_map[svc] = ts[:16] if isinstance(ts, str) and len(ts) > 10 else ""
+
         ok = []
         fail = []
         for svc, state in zip(self._STATUS_SERVICES, states, strict=True):
             short = svc.replace(".service", "").replace("osia-", "")
-            if isinstance(state, Exception) or state != "active":
-                fail.append(f"  ❌ {short} ({state if isinstance(state, str) else 'error'})")
-            else:
+            if isinstance(state, Exception):
+                fail.append(f"  ❌ {short} (error)")
+            elif state == "active":
                 ok.append(short)
+            elif state == "inactive" and results_map.get(svc) == "success":
+                ts = exit_ts_map.get(svc, "")
+                ok.append(f"{short} (last run ✓{f'  {ts}' if ts else ''})")
+            else:
+                fail.append(f"  ❌ {short} ({state})")
 
         lines = [f"SERVICES [{len(ok)}/{len(self._STATUS_SERVICES)} active]"]
         if fail:
@@ -2037,6 +2066,15 @@ class OsiaOrchestrator:
             reel is loaded, before recording begins — no extra URL open needed.
         """
         logger.info("Triggering ADB capture for URL: %s", url)
+
+        # The phone/ADB stack lives on the host (persona daemon), not in the
+        # containerized orchestrator. If adb is unavailable in this process,
+        # fail with a clear message rather than a raw adb error deep in capture.
+        if not getattr(self.adb, "available", True):
+            raise RuntimeError(
+                "ADB/media-intercept is unavailable in this process (no adb) — "
+                "media capture is handled by the host phone stack"
+            )
 
         _FALLBACK_DURATION = 60
         _MAX_DURATION = 900

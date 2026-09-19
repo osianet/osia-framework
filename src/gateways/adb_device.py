@@ -13,15 +13,34 @@ class ADBDevice:
     def __init__(self, device_id: str = None, lock_check=None):
         self.device_id = device_id
         self._lock_check = lock_check  # optional async callable — called before every _run
-        self._ensure_adb_started()
+        # True once the local adb server is confirmed running. When adb is not
+        # installed (e.g. the containerized orchestrator, where the physical
+        # phone stack stays on the host), this stays False and the device is
+        # simply unavailable — construction must NOT crash the whole service.
+        self.available = self._ensure_adb_started()
 
-    def _ensure_adb_started(self):
-        subprocess.run(
-            ["adb", "start-server"],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+    def _ensure_adb_started(self) -> bool:
+        """Start the local adb server.
+
+        Returns False (rather than raising) when adb is absent or fails to
+        start, so a host without the phone stack — such as the containerized
+        orchestrator — can still construct this object and simply skip the
+        media-intercept path.
+        """
+        try:
+            subprocess.run(
+                ["adb", "start-server"],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError) as e:
+            logger.warning(
+                "adb unavailable (%s) — ADB/media-intercept path disabled for this process",
+                type(e).__name__,
+            )
+            return False
 
     def _build_cmd(self, args: list[str]) -> list[str]:
         cmd = ["adb"]
