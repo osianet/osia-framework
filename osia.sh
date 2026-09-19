@@ -42,7 +42,7 @@ CONTAINERS=(
     "osia-redis"
     "osia-signal"
     "mailserver"
-    "osia-kali"
+    "kali-api"
 )
 
 # --- Helper Functions ---
@@ -86,6 +86,16 @@ check_systemd_service() {
             fi
         fi
         echo -e "[${GREEN}OK${NC}]   $service${mem}"
+    elif [ "$active_state" == "inactive" ]; then
+        local result
+        result=$(systemctl show -p Result --value "$service" 2>/dev/null)
+        if [ "$result" == "success" ]; then
+            local last_run
+            last_run=$(systemctl show -p ExecMainExitTimestamp --value "$service" 2>/dev/null)
+            echo -e "[${GREEN}OK${NC}]   $service ${DIM}(oneshot — last: ${last_run})${NC}"
+        else
+            echo -e "[${RED}FAIL${NC}] $service ($active_state)"
+        fi
     else
         echo -e "[${RED}FAIL${NC}] $service ($active_state)"
     fi
@@ -500,7 +510,7 @@ case $command in
         check_timer "osia-research-worker.timer"
 
         # Active worker processes (parallel instances)
-        worker_pids=$(pgrep -fc "python.*research_worker" 2>/dev/null || echo 0)
+        worker_pids=$(pgrep -f "research_worker" 2>/dev/null | wc -l | tr -d ' ')
         worker_instances=$(grep -E '^RESEARCH_WORKER_INSTANCES=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]')
         worker_instances="${worker_instances:-1}"
         if [ "${worker_pids:-0}" -gt 0 ]; then
