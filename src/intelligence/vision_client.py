@@ -56,6 +56,7 @@ import logging
 import os
 import subprocess  # noqa: S404 — ffmpeg invocation is intentional
 import tempfile
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -79,6 +80,13 @@ DEFAULT_FRAME_LONG_EDGE = 768
 DEFAULT_VIDEO_MAX_SECS = 180
 REQUEST_TIMEOUT = 180.0
 DEFAULT_MAX_TOKENS = 1536
+
+# Reka — native video understanding via OpenRouter's OpenAI-compatible endpoint
+# (accepts the whole clip as a `video_url` part, no frame sampling). This makes
+# Reka a first-class, config-selectable provider: set OSIA_VISION_PROVIDERS to
+# lead with "reka" to make it primary (e.g. once a Reka subscription is active).
+DEFAULT_REKA_MODEL = "rekaai/reka-flash-3"
+DEFAULT_REKA_MAX_VIDEO_SECS = 60  # OpenRouter base64 path is best kept short
 
 _VENICE_BASE = "https://api.venice.ai/api"
 _OPENROUTER_BASE = "https://openrouter.ai/api"
@@ -134,6 +142,8 @@ class _Provider:
     api_key: str
     models: tuple[str, ...]
     extra_headers: tuple[tuple[str, str], ...] = ()
+    native_video: bool = False  # True = accepts the whole video as a `video_url` part
+    max_video_secs: int = 0  # 0 = no client-side trim; else trim the clip to this length
 
     @property
     def headers(self) -> dict[str, str]:
@@ -214,6 +224,29 @@ class VisionClient:
                         tuple(_OPENROUTER_HEADERS.items()),
                     )
                 )
+            elif name == "reka":
+                # Reka native video via OpenRouter (whole clip as a video_url part).
+                # First-class provider: lead OSIA_VISION_PROVIDERS with "reka" to
+                # make it primary. Requires OPENROUTER_API_KEY (Reka is served
+                # through OpenRouter here); the dedicated Reka Vision API remains
+                # available as the orchestrator's long-video safety net.
+                key = os.getenv("OPENROUTER_API_KEY", "")
+                if not key:
+                    logger.debug("VisionClient: skipping reka (no OPENROUTER_API_KEY).")
+                    continue
+                model = os.getenv("OSIA_VISION_REKA_MODEL", DEFAULT_REKA_MODEL)
+                max_secs = int(os.getenv("OSIA_VISION_REKA_MAX_VIDEO_SECS", str(DEFAULT_REKA_MAX_VIDEO_SECS)))
+                providers.append(
+                    _Provider(
+                        "reka",
+                        _OPENROUTER_BASE,
+                        key,
+                        (model,),
+                        tuple(_OPENROUTER_HEADERS.items()),
+                        native_video=True,
+                        max_video_secs=max_secs,
+                    )
+                )
             elif name == "gemini":
                 if not allow_gemini:
                     logger.debug("VisionClient: gemini requested but OSIA_VISION_ALLOW_GEMINI is off — skipping.")
@@ -282,30 +315,82 @@ class VisionClient:
         prompt: str,
         transcript: str | None = None,
     ) -> str:
-        """Sample frames from a video and analyse them. Returns text response.
+        """Analyse a video. Returns the model's text response.
 
-        ``transcript`` — optional pre-extracted audio transcript. Since none of
-        the frame-based vision backends hear audio, callers that already have a
-        transcript (yt-dlp captions, Whisper, ADB) should pass it so speech is
-        not lost. It is prepended to the prompt as context.
+        Two provider shapes are supported in one cascade:
+        * **native-video** providers (e.g. Reka) receive the whole clip as a
+          ``video_url`` part — no frame sampling, audio preserved.
+        * **frame-based** providers receive N sampled JPEG frames as image parts.
+
+        ``transcript`` — optional pre-extracted audio transcript. Frame-based
+        backends do not hear audio, so callers that already have a transcript
+        (yt-dlp captions, Whisper, ADB) should pass it; it is prepended so speech
+        is not lost. Native-video providers get the raw prompt (they hear audio).
         """
-        frames = await asyncio.to_thread(self._sample_frames, Path(video_path))
-        if not frames:
-            raise VisionError(f"Could not sample any frames from video: {video_path}")
+        vpath = Path(video_path)
+        if not vpath.exists():
+            raise VisionError(f"Video file not found: {video_path}")
 
-        parts = [{"type": "image_url", "image_url": {"url": self._bytes_data_url(f, "jpeg")}} for f in frames]
-
+        frame_prompt = prompt
         if transcript and transcript.strip():
-            full_prompt = (
+            frame_prompt = (
                 f"AUDIO TRANSCRIPT (extracted separately — the frames below are silent):\n"
                 f"{transcript.strip()}\n\n{prompt}"
             )
-        else:
-            full_prompt = (
-                f"The following {len(frames)} images are frames sampled in chronological order "
-                f"from a video (the frames are silent — no audio is available).\n\n{prompt}"
+
+        # Lazily-computed, cached frame parts — only sampled if a frame-based
+        # provider is actually reached (native-video providers skip this cost).
+        frame_cache: list[list[dict]] = []  # single-slot cache (closure-local, concurrency-safe)
+
+        async def build_frame_content() -> list[dict]:
+            if not frame_cache:
+                frames = await asyncio.to_thread(self._sample_frames, vpath)
+                if not frames:
+                    raise VisionError(f"Could not sample any frames from video: {video_path}")
+                frame_cache.append(
+                    [{"type": "image_url", "image_url": {"url": self._bytes_data_url(f, "jpeg")}} for f in frames]
+                )
+            return [*frame_cache[0], {"type": "text", "text": frame_prompt}]
+
+        async def build_native_content(provider: _Provider) -> list[dict]:
+            data_uri = await asyncio.to_thread(self._encode_video_data_uri, vpath, provider.max_video_secs)
+            return [
+                {"type": "text", "text": prompt},
+                {"type": "video_url", "video_url": {"url": data_uri}},
+            ]
+
+        async def content_for(provider: _Provider) -> list[dict]:
+            return await build_native_content(provider) if provider.native_video else await build_frame_content()
+
+        return await self._dispatch_per_provider(content_for)
+
+    # ------------------------------------------------------------------
+    # Video encoding for native-video providers
+    # ------------------------------------------------------------------
+
+    def _encode_video_data_uri(self, video_path: Path, max_secs: int) -> str:
+        """Return a base64 ``data:video/mp4`` URI, trimming to ``max_secs`` if set."""
+        use_path = video_path
+        trimmed: Path | None = None
+        if max_secs and max_secs > 0:
+            trimmed = video_path.with_name(video_path.stem + f"_v{max_secs}.mp4")
+            proc = subprocess.run(  # noqa: S603
+                ["ffmpeg", "-y", "-i", str(video_path), "-t", str(max_secs), "-c", "copy", str(trimmed)],
+                capture_output=True,
+                timeout=max_secs + 60,
+                check=False,
             )
-        return await self._dispatch(full_prompt, parts)
+            if proc.returncode == 0 and trimmed.exists():
+                use_path = trimmed
+        try:
+            b64 = base64.b64encode(use_path.read_bytes()).decode()
+            return f"data:video/mp4;base64,{b64}"
+        finally:
+            if trimmed is not None:
+                try:
+                    trimmed.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------------
     # Frame sampling (ffmpeg)
@@ -418,6 +503,38 @@ class VisionClient:
                             model,
                             str(exc)[:160],
                         )
+        raise VisionError(f"All vision providers exhausted; last error: {last_exc}") from last_exc
+
+    async def _dispatch_per_provider(self, content_for: Callable[[_Provider], Awaitable[list[dict]]]) -> str:
+        """Cascade where each provider gets its own content (built lazily).
+
+        ``content_for(provider)`` is an async callable returning the message
+        content list for that provider — lets native-video providers send a
+        ``video_url`` part while frame providers send sampled image parts, all in
+        one cascade. A provider whose content build fails is skipped, not fatal.
+        """
+        if not self._providers:
+            raise VisionError("No vision providers configured. Set VENICE_API_KEY and/or OPENROUTER_API_KEY.")
+
+        last_exc: Exception | None = None
+        for provider in self._providers:
+            try:
+                content = await content_for(provider)
+            except Exception as build_exc:  # noqa: BLE001 — a build failure just skips this provider
+                last_exc = build_exc
+                logger.warning(
+                    "Vision: could not build content for %s (%s) — skipping.", provider.name, str(build_exc)[:160]
+                )
+                continue
+            for model in provider.models:
+                try:
+                    text = await self._call(provider, model, content)
+                    if provider.name != self._providers[0].name or model != self._providers[0].models[0]:
+                        logger.info("Vision: succeeded via %s/%s (fallback).", provider.name, model)
+                    return text
+                except Exception as exc:  # noqa: BLE001 — cascade on any failure
+                    last_exc = exc
+                    logger.warning("Vision: %s/%s failed (%s) — trying next.", provider.name, model, str(exc)[:160])
         raise VisionError(f"All vision providers exhausted; last error: {last_exc}") from last_exc
 
     async def _call(self, provider: _Provider, model: str, content: list[dict]) -> str:

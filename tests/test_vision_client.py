@@ -36,6 +36,8 @@ _VISION_ENV_KEYS = [
     "OSIA_VISION_MAX_FRAMES",
     "OSIA_VISION_FRAME_FPS",
     "OSIA_VISION_GEMINI_MODEL",
+    "OSIA_VISION_REKA_MODEL",
+    "OSIA_VISION_REKA_MAX_VIDEO_SECS",
     "VENICE_API_KEY",
     "OPENROUTER_API_KEY",
     "GEMINI_API_KEY",
@@ -296,3 +298,64 @@ def test_frame_sampling_missing_file(tmp_path, monkeypatch):
     vc = VisionClient()
     with pytest.raises(VisionError):
         vc._sample_frames(tmp_path / "does_not_exist.mp4")
+
+
+# ---------------------------------------------------------------------------
+# Reka native-video provider
+# ---------------------------------------------------------------------------
+
+
+def test_reka_provider_assembly(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ok")
+    monkeypatch.setenv("OSIA_VISION_PROVIDERS", "reka,openrouter")
+    vc = VisionClient()
+    names = [p.name for p in vc._providers]
+    assert names == ["reka", "openrouter"]
+    reka = vc._providers[0]
+    assert reka.native_video is True
+    assert reka.max_video_secs > 0
+    # reka reuses the OpenRouter transport
+    assert "openrouter.ai" in reka.base_url
+
+
+def test_reka_skipped_without_openrouter_key(monkeypatch):
+    monkeypatch.setenv("OSIA_VISION_PROVIDERS", "reka")
+    assert VisionClient()._providers == []
+
+
+async def test_analyse_video_native_sends_video_url(monkeypatch, tmp_path):
+    """A native-video provider must receive a video_url part, NOT sampled frames."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ok")
+    monkeypatch.setenv("OSIA_VISION_PROVIDERS", "reka")
+    monkeypatch.setenv("OSIA_VISION_REKA_MAX_VIDEO_SECS", "0")  # no ffmpeg trim → read bytes directly
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "REKA WATCHED IT"}}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    vc = VisionClient(http_client=client)
+
+    # A fake "video" file — with max_video_secs=0 we skip ffmpeg and just base64 the bytes.
+    vid = tmp_path / "clip.mp4"
+    vid.write_bytes(b"\x00\x00\x00\x18ftypmp42FAKEVIDEO")
+
+    # Guard: frame sampling must NOT be invoked on the native path.
+    def _boom(*_a, **_k):
+        raise AssertionError("frame sampling must not run for a native-video provider")
+
+    monkeypatch.setattr(vc, "_sample_frames", _boom)
+
+    out = await vc.analyse_video(str(vid), "What manipulation techniques does this use?")
+    assert out == "REKA WATCHED IT"
+    content = captured["body"]["messages"][0]["content"]
+    types = [part["type"] for part in content]
+    assert "video_url" in types
+    assert "image_url" not in types
+    video_part = next(p for p in content if p["type"] == "video_url")
+    assert video_part["video_url"]["url"].startswith("data:video/mp4;base64,")
+    await client.aclose()
