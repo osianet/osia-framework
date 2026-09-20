@@ -38,6 +38,9 @@ _VISION_ENV_KEYS = [
     "OSIA_VISION_GEMINI_MODEL",
     "OSIA_VISION_REKA_MODEL",
     "OSIA_VISION_REKA_MAX_VIDEO_SECS",
+    "OSIA_VISION_VENICE_NATIVE_VIDEO",
+    "OSIA_VISION_VENICE_MAX_VIDEO_SECS",
+    "OSIA_VISION_FRAME_FALLBACK",
     "VENICE_API_KEY",
     "OPENROUTER_API_KEY",
     "GEMINI_API_KEY",
@@ -358,4 +361,53 @@ async def test_analyse_video_native_sends_video_url(monkeypatch, tmp_path):
     assert "image_url" not in types
     video_part = next(p for p in content if p["type"] == "video_url")
     assert video_part["video_url"]["url"].startswith("data:video/mp4;base64,")
+    await client.aclose()
+
+
+async def test_video_prefers_native_over_frames(monkeypatch, tmp_path):
+    """With a native (venice) AND a frame-based provider, video must go native — no sampling."""
+    monkeypatch.setenv("VENICE_API_KEY", "vk")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ok")
+    monkeypatch.setenv("OSIA_VISION_PROVIDERS", "openrouter,venice")  # frame provider listed FIRST
+    monkeypatch.setenv("OSIA_VISION_VENICE_MAX_VIDEO_SECS", "0")  # skip ffmpeg trim
+
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        captured["url"] = str(request.url)
+        captured["body"] = _json.loads(request.content)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "NATIVE WON"}}]})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    vc = VisionClient(http_client=client)
+
+    def _boom(*_a, **_k):
+        raise AssertionError("frame sampling must not run when a native-video provider exists")
+
+    monkeypatch.setattr(vc, "_sample_frames", _boom)
+
+    vid = tmp_path / "clip.mp4"
+    vid.write_bytes(b"\x00\x00\x00\x18ftypmp42FAKE")
+    out = await vc.analyse_video(str(vid), "analyse")
+    assert out == "NATIVE WON"
+    # even though openrouter was listed first, venice (native) served the video
+    assert "venice.ai" in captured["url"]
+    assert [p["type"] for p in captured["body"]["messages"][0]["content"]] == ["text", "video_url"]
+    await client.aclose()
+
+
+async def test_video_frame_fallback_disabled_raises(monkeypatch, tmp_path):
+    """With only a frame-based provider and OSIA_VISION_FRAME_FALLBACK=0, video is refused."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "ok")
+    monkeypatch.setenv("OSIA_VISION_PROVIDERS", "openrouter")  # frame-based only
+    monkeypatch.setenv("OSIA_VISION_FRAME_FALLBACK", "0")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    vc = VisionClient(http_client=client)
+    vid = tmp_path / "clip.mp4"
+    vid.write_bytes(b"\x00\x00\x00\x18ftypmp42FAKE")
+    with pytest.raises(VisionError, match="No video-capable provider"):
+        await vc.analyse_video(str(vid), "analyse")
     await client.aclose()

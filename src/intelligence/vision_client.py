@@ -9,14 +9,21 @@ path, so no single provider — Google included — is load-bearing any more.
 
 Design
 ------
+* **Video** prefers **native full-video APIs**: the whole clip is sent as an
+  OpenAI-compatible ``video_url`` part (base64 or URL), so motion, edit pacing,
+  and audio-visual sync are preserved — which matters for sentiment and
+  manipulation-technique analysis. Venice (``qwen3-vl-235b-a22b``) and Reka
+  (``rekaai/reka-edge``) are native-video providers and are tried first.
+* **Frame-sampling is a LAST-RESORT fallback only** — ffmpeg samples N frames and
+  sends them as ``image_url`` parts to an image-only provider. It loses temporal
+  and audio signal, so it runs only when no native-video provider succeeds, and
+  can be disabled entirely with ``OSIA_VISION_FRAME_FALLBACK=0``.
 * **Images** are base64-encoded and sent as one ``image_url`` content part.
-* **Videos** are transcoded/sampled with ffmpeg into N JPEG frames, each sent as
-  an ``image_url`` part alongside the prompt. Optionally an audio transcript can
-  be extracted and prepended (callers pass ``transcript=`` when they have one).
-* Providers are tried in a **cascade**. The default order is
-  Venice → OpenRouter, i.e. entirely Google-free. Google Gemini is available only
-  as an explicit, opt-in *last-resort* backend, enabled with
-  ``OSIA_VISION_ALLOW_GEMINI=1``. It is never tried first and never required.
+* Providers are tried in a **cascade**. The default is Venice → OpenRouter, i.e.
+  entirely Google-free. Google Gemini is available only as an explicit, opt-in
+  backend (``OSIA_VISION_ALLOW_GEMINI=1``); note its OpenAI-compatible endpoint
+  does NOT accept local/base64 video, so true native-video Gemini stays on the
+  orchestrator's genai-SDK path, not here.
 
 Environment variables
 ----------------------
@@ -85,7 +92,9 @@ DEFAULT_MAX_TOKENS = 1536
 # (accepts the whole clip as a `video_url` part, no frame sampling). This makes
 # Reka a first-class, config-selectable provider: set OSIA_VISION_PROVIDERS to
 # lead with "reka" to make it primary (e.g. once a Reka subscription is active).
-DEFAULT_REKA_MODEL = "rekaai/reka-flash-3"
+# NOTE: must be a VIDEO-capable Reka model. rekaai/reka-edge is the video VLM;
+# rekaai/reka-flash-3 is TEXT-ONLY and will fail the video_url modality check.
+DEFAULT_REKA_MODEL = "rekaai/reka-edge"
 DEFAULT_REKA_MAX_VIDEO_SECS = 60  # OpenRouter base64 path is best kept short
 
 _VENICE_BASE = "https://api.venice.ai/api"
@@ -207,7 +216,19 @@ class VisionClient:
                     logger.debug("VisionClient: skipping venice (no VENICE_API_KEY).")
                     continue
                 model = os.getenv("OSIA_VISION_VENICE_MODEL", DEFAULT_VENICE_MODEL)
-                providers.append(_Provider("venice", _VENICE_BASE, key, (model,)))
+                # Venice's qwen3-vl-235b-a22b accepts a native video_url part, so
+                # Venice is a full-video provider (no frame sampling) by default.
+                venice_native = _env_flag("OSIA_VISION_VENICE_NATIVE_VIDEO", True)
+                providers.append(
+                    _Provider(
+                        "venice",
+                        _VENICE_BASE,
+                        key,
+                        (model,),
+                        native_video=venice_native,
+                        max_video_secs=int(os.getenv("OSIA_VISION_VENICE_MAX_VIDEO_SECS", "0")),
+                    )
+                )
             elif name == "openrouter":
                 key = os.getenv("OPENROUTER_API_KEY", "")
                 if not key:
@@ -362,7 +383,23 @@ class VisionClient:
         async def content_for(provider: _Provider) -> list[dict]:
             return await build_native_content(provider) if provider.native_video else await build_frame_content()
 
-        return await self._dispatch_per_provider(content_for)
+        # Native full-video is strongly preferred (temporal/motion/audio signal
+        # that frame-sampling loses). Order native-video providers first; frame-
+        # based providers are a last-resort fallback and can be disabled entirely
+        # with OSIA_VISION_FRAME_FALLBACK=0.
+        native = [p for p in self._providers if p.native_video]
+        frame_based = (
+            []
+            if not _env_flag("OSIA_VISION_FRAME_FALLBACK", True)
+            else [p for p in self._providers if not p.native_video]
+        )
+        ordered = native + frame_based
+        if not ordered:
+            raise VisionError(
+                "No video-capable provider configured. Enable a native-video provider "
+                "(venice/reka) or set OSIA_VISION_FRAME_FALLBACK=1 with a frame-based provider."
+            )
+        return await self._dispatch_per_provider(content_for, providers=ordered)
 
     # ------------------------------------------------------------------
     # Video encoding for native-video providers
@@ -505,19 +542,27 @@ class VisionClient:
                         )
         raise VisionError(f"All vision providers exhausted; last error: {last_exc}") from last_exc
 
-    async def _dispatch_per_provider(self, content_for: Callable[[_Provider], Awaitable[list[dict]]]) -> str:
+    async def _dispatch_per_provider(
+        self,
+        content_for: Callable[[_Provider], Awaitable[list[dict]]],
+        providers: list[_Provider] | None = None,
+    ) -> str:
         """Cascade where each provider gets its own content (built lazily).
 
         ``content_for(provider)`` is an async callable returning the message
         content list for that provider — lets native-video providers send a
         ``video_url`` part while frame providers send sampled image parts, all in
         one cascade. A provider whose content build fails is skipped, not fatal.
+        ``providers`` overrides the default cascade order (the video path passes a
+        native-video-first ordering).
         """
-        if not self._providers:
+        cascade = providers if providers is not None else self._providers
+        if not cascade:
             raise VisionError("No vision providers configured. Set VENICE_API_KEY and/or OPENROUTER_API_KEY.")
 
+        first = cascade[0]
         last_exc: Exception | None = None
-        for provider in self._providers:
+        for provider in cascade:
             try:
                 content = await content_for(provider)
             except Exception as build_exc:  # noqa: BLE001 — a build failure just skips this provider
@@ -529,7 +574,7 @@ class VisionClient:
             for model in provider.models:
                 try:
                     text = await self._call(provider, model, content)
-                    if provider.name != self._providers[0].name or model != self._providers[0].models[0]:
+                    if provider.name != first.name or model != first.models[0]:
                         logger.info("Vision: succeeded via %s/%s (fallback).", provider.name, model)
                     return text
                 except Exception as exc:  # noqa: BLE001 — cascade on any failure

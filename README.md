@@ -25,7 +25,7 @@ The **Chief of Staff** (Venice `venice-uncensored`) reads the incoming task and 
 | Semantic Scholar | Citation-graph research |
 | YouTube (yt-dlp) | Video transcript extraction |
 
-**Media Interception (PHINT):** If a social media link is received, a physical Moto g06 Android device connected via ADB records the screen for the duration of the video. A provider-agnostic vision pipeline (`src/intelligence/vision_client.py`) samples frames with ffmpeg and analyses them via an OpenAI-compatible vision model (Venice `qwen3-vl-235b-a22b` by default, OpenRouter Claude/Qwen/GPT as fallback — Google-free). Post metadata and comments are extracted first via `yt-dlp` (no phone required); ADB is only used as a fallback.
+**Media Interception (PHINT):** If a social media link is received, a physical Moto g06 Android device connected via ADB records the screen for the duration of the video. A provider-agnostic vision pipeline (`src/intelligence/vision_client.py`) sends the whole clip to a **native full-video** model (Venice `qwen3-vl-235b-a22b` by default, or Reka — both ingest the entire video with audio, preserving the temporal signal needed for sentiment and manipulation-technique analysis). Frame-sampling to an image model is a last-resort fallback only. Post metadata and comments are extracted first via `yt-dlp` (no phone required); ADB is only used as a fallback.
 
 ### 3. Background Workers
 
