@@ -1,0 +1,601 @@
+"""
+OSIA Vision Client — provider-agnostic image & video comprehension.
+
+This module replaces OSIA's direct dependence on Google Gemini for multimodal
+(image / video) understanding. It uses the **frame-sampling → OpenAI-compatible
+`image_url`** technique, which works against every OpenAI-compatible vision
+backend (Venice, OpenRouter, DashScope, Anthropic-compat, …) with a single code
+path, so no single provider — Google included — is load-bearing any more.
+
+Design
+------
+* **Video** prefers **native full-video APIs**: the whole clip is sent as an
+  OpenAI-compatible ``video_url`` part (base64 or URL), so motion, edit pacing,
+  and audio-visual sync are preserved — which matters for sentiment and
+  manipulation-technique analysis. Venice (``qwen3-vl-235b-a22b``) and Reka
+  (``rekaai/reka-edge``) are native-video providers and are tried first.
+* **Frame-sampling is a LAST-RESORT fallback only** — ffmpeg samples N frames and
+  sends them as ``image_url`` parts to an image-only provider. It loses temporal
+  and audio signal, so it runs only when no native-video provider succeeds, and
+  can be disabled entirely with ``OSIA_VISION_FRAME_FALLBACK=0``.
+* **Images** are base64-encoded and sent as one ``image_url`` content part.
+* Providers are tried in a **cascade**. The default is Venice → OpenRouter, i.e.
+  entirely Google-free. Google Gemini is available only as an explicit, opt-in
+  backend (``OSIA_VISION_ALLOW_GEMINI=1``); note its OpenAI-compatible endpoint
+  does NOT accept local/base64 video, so true native-video Gemini stays on the
+  orchestrator's genai-SDK path, not here.
+
+Environment variables
+----------------------
+  OSIA_VISION_PROVIDERS       Comma-separated cascade (default: "venice,openrouter").
+                              Recognised: venice, openrouter, gemini.
+  OSIA_VISION_ALLOW_GEMINI    "1"/"true" to permit the gemini backend at all
+                              (default: off). Even when allowed it is only used
+                              if listed in OSIA_VISION_PROVIDERS.
+  OSIA_VISION_VENICE_MODEL    Venice vision model id (default: qwen3-vl-235b-a22b).
+  OSIA_VISION_OPENROUTER_MODELS
+                              Comma-separated OpenRouter vision model ids, tried
+                              in order (default: a spread across Anthropic / Qwen /
+                              OpenAI so one vendor outage cannot take vision down).
+  OSIA_VISION_MAX_FRAMES      Max frames sampled from a video (default: 16).
+  OSIA_VISION_FRAME_FPS       Frame sampling rate, frames/sec (default: 1.0).
+  OSIA_VISION_FRAME_LONG_EDGE Downscale long edge of each frame, px (default: 768).
+  OSIA_VISION_VIDEO_MAX_SECS  Hard cap on video seconds sampled (default: 180).
+  VENICE_API_KEY / OPENROUTER_API_KEY / GEMINI_API_KEY
+                              Provider credentials (only the ones in the cascade
+                              are needed).
+
+The public surface is intentionally small:
+
+    vc = VisionClient()
+    text = await vc.analyse_image(path, prompt)
+    text = await vc.analyse_video(path, prompt, transcript=optional_str)
+
+Both return the model's text response (str). On total failure they raise
+``VisionError`` with the last provider exception chained.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import logging
+import os
+import subprocess  # noqa: S404 — ffmpeg invocation is intentional
+import tempfile
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+
+logger = logging.getLogger("osia.vision")
+
+# ---------------------------------------------------------------------------
+# Defaults / config
+# ---------------------------------------------------------------------------
+
+DEFAULT_VENICE_MODEL = "qwen3-vl-235b-a22b"
+DEFAULT_OPENROUTER_MODELS = [
+    "anthropic/claude-sonnet-5",  # strong OCR + reasoning
+    "qwen/qwen3.8-27b",  # open-weight VLM, cheap, solid vision
+    "openai/gpt-5.6-luna",  # different vendor entirely — outage isolation
+]
+DEFAULT_MAX_FRAMES = 16
+DEFAULT_FRAME_FPS = 1.0
+DEFAULT_FRAME_LONG_EDGE = 768
+DEFAULT_VIDEO_MAX_SECS = 180
+REQUEST_TIMEOUT = 180.0
+DEFAULT_MAX_TOKENS = 1536
+
+# Reka — native video understanding via OpenRouter's OpenAI-compatible endpoint
+# (accepts the whole clip as a `video_url` part, no frame sampling). This makes
+# Reka a first-class, config-selectable provider: set OSIA_VISION_PROVIDERS to
+# lead with "reka" to make it primary (e.g. once a Reka subscription is active).
+# NOTE: must be a VIDEO-capable Reka model. rekaai/reka-edge is the video VLM;
+# rekaai/reka-flash-3 is TEXT-ONLY and will fail the video_url modality check.
+DEFAULT_REKA_MODEL = "rekaai/reka-edge"
+DEFAULT_REKA_MAX_VIDEO_SECS = 60  # OpenRouter base64 path is best kept short
+
+_VENICE_BASE = "https://api.venice.ai/api"
+_OPENROUTER_BASE = "https://openrouter.ai/api"
+_OPENROUTER_HEADERS = {"HTTP-Referer": "https://osia.dev", "X-Title": "OSIA Intelligence Framework"}
+
+
+class VisionError(RuntimeError):
+    """Raised when every configured vision provider fails."""
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Return True for errors that warrant trying the next provider."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (408, 409, 429, 500, 502, 503, 504)
+    msg = str(exc).upper()
+    return any(
+        tok in msg
+        for tok in (
+            "429",
+            "503",
+            "502",
+            "504",
+            "UNAVAILABLE",
+            "RESOURCE_EXHAUSTED",
+            "OVERLOADED",
+            "SSL",
+            "HANDSHAKE",
+            "TIMED OUT",
+            "TIMEOUT",
+            "CONNECTION",
+            "RESET",
+            "EOF",
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Provider descriptor
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Provider:
+    name: str
+    base_url: str
+    api_key: str
+    models: tuple[str, ...]
+    extra_headers: tuple[tuple[str, str], ...] = ()
+    native_video: bool = False  # True = accepts the whole video as a `video_url` part
+    max_video_secs: int = 0  # 0 = no client-side trim; else trim the clip to this length
+
+    @property
+    def headers(self) -> dict[str, str]:
+        h = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        h.update(dict(self.extra_headers))
+        return h
+
+
+# ---------------------------------------------------------------------------
+# VisionClient
+# ---------------------------------------------------------------------------
+
+
+class VisionClient:
+    """Provider-agnostic image/video comprehension via OpenAI-compatible APIs."""
+
+    def __init__(
+        self,
+        http_client: httpx.AsyncClient | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> None:
+        self._http = http_client
+        self._owns_http = http_client is None
+        self.max_tokens = max_tokens
+
+        self.max_frames = int(os.getenv("OSIA_VISION_MAX_FRAMES", str(DEFAULT_MAX_FRAMES)))
+        self.frame_fps = float(os.getenv("OSIA_VISION_FRAME_FPS", str(DEFAULT_FRAME_FPS)))
+        self.frame_long_edge = int(os.getenv("OSIA_VISION_FRAME_LONG_EDGE", str(DEFAULT_FRAME_LONG_EDGE)))
+        self.video_max_secs = int(os.getenv("OSIA_VISION_VIDEO_MAX_SECS", str(DEFAULT_VIDEO_MAX_SECS)))
+
+        self._providers = self._build_providers()
+        if not self._providers:
+            logger.warning(
+                "VisionClient: no usable providers configured. Set VENICE_API_KEY or "
+                "OPENROUTER_API_KEY (and OSIA_VISION_PROVIDERS if customising the cascade)."
+            )
+        else:
+            logger.info(
+                "VisionClient cascade: %s",
+                " → ".join(f"{p.name}({p.models[0]})" for p in self._providers),
+            )
+
+    # ------------------------------------------------------------------
+    # Provider assembly
+    # ------------------------------------------------------------------
+
+    def _build_providers(self) -> list[_Provider]:
+        order = [
+            p.strip().lower() for p in os.getenv("OSIA_VISION_PROVIDERS", "venice,openrouter").split(",") if p.strip()
+        ]
+        allow_gemini = _env_flag("OSIA_VISION_ALLOW_GEMINI", False)
+        providers: list[_Provider] = []
+
+        for name in order:
+            if name == "venice":
+                key = os.getenv("VENICE_API_KEY", "")
+                if not key:
+                    logger.debug("VisionClient: skipping venice (no VENICE_API_KEY).")
+                    continue
+                model = os.getenv("OSIA_VISION_VENICE_MODEL", DEFAULT_VENICE_MODEL)
+                # Venice's qwen3-vl-235b-a22b accepts a native video_url part, so
+                # Venice is a full-video provider (no frame sampling) by default.
+                venice_native = _env_flag("OSIA_VISION_VENICE_NATIVE_VIDEO", True)
+                providers.append(
+                    _Provider(
+                        "venice",
+                        _VENICE_BASE,
+                        key,
+                        (model,),
+                        native_video=venice_native,
+                        max_video_secs=int(os.getenv("OSIA_VISION_VENICE_MAX_VIDEO_SECS", "0")),
+                    )
+                )
+            elif name == "openrouter":
+                key = os.getenv("OPENROUTER_API_KEY", "")
+                if not key:
+                    logger.debug("VisionClient: skipping openrouter (no OPENROUTER_API_KEY).")
+                    continue
+                raw = os.getenv("OSIA_VISION_OPENROUTER_MODELS", "")
+                models = tuple(m.strip() for m in raw.split(",") if m.strip()) or tuple(DEFAULT_OPENROUTER_MODELS)
+                providers.append(
+                    _Provider(
+                        "openrouter",
+                        _OPENROUTER_BASE,
+                        key,
+                        models,
+                        tuple(_OPENROUTER_HEADERS.items()),
+                    )
+                )
+            elif name == "reka":
+                # Reka native video via OpenRouter (whole clip as a video_url part).
+                # First-class provider: lead OSIA_VISION_PROVIDERS with "reka" to
+                # make it primary. Requires OPENROUTER_API_KEY (Reka is served
+                # through OpenRouter here); the dedicated Reka Vision API remains
+                # available as the orchestrator's long-video safety net.
+                key = os.getenv("OPENROUTER_API_KEY", "")
+                if not key:
+                    logger.debug("VisionClient: skipping reka (no OPENROUTER_API_KEY).")
+                    continue
+                model = os.getenv("OSIA_VISION_REKA_MODEL", DEFAULT_REKA_MODEL)
+                max_secs = int(os.getenv("OSIA_VISION_REKA_MAX_VIDEO_SECS", str(DEFAULT_REKA_MAX_VIDEO_SECS)))
+                providers.append(
+                    _Provider(
+                        "reka",
+                        _OPENROUTER_BASE,
+                        key,
+                        (model,),
+                        tuple(_OPENROUTER_HEADERS.items()),
+                        native_video=True,
+                        max_video_secs=max_secs,
+                    )
+                )
+            elif name == "gemini":
+                if not allow_gemini:
+                    logger.debug("VisionClient: gemini requested but OSIA_VISION_ALLOW_GEMINI is off — skipping.")
+                    continue
+                key = os.getenv("GEMINI_API_KEY", "")
+                if not key:
+                    logger.debug("VisionClient: skipping gemini (no GEMINI_API_KEY).")
+                    continue
+                # Gemini exposes an OpenAI-compatible endpoint — no genai SDK needed.
+                model = os.getenv("OSIA_VISION_GEMINI_MODEL", "gemini-2.5-flash")
+                providers.append(
+                    _Provider(
+                        "gemini",
+                        "https://generativelanguage.googleapis.com/v1beta/openai",
+                        key,
+                        (model,),
+                    )
+                )
+            else:
+                logger.warning("VisionClient: unknown provider '%s' in OSIA_VISION_PROVIDERS — ignoring.", name)
+
+        return providers
+
+    # ------------------------------------------------------------------
+    # HTTP client
+    # ------------------------------------------------------------------
+
+    def _client(self) -> httpx.AsyncClient:
+        if self._http is None or self._http.is_closed:
+            self._http = httpx.AsyncClient(timeout=REQUEST_TIMEOUT)
+            self._owns_http = True
+        return self._http
+
+    async def aclose(self) -> None:
+        if self._owns_http and self._http and not self._http.is_closed:
+            await self._http.aclose()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    @property
+    def available(self) -> bool:
+        """True if at least one provider is configured."""
+        return bool(self._providers)
+
+    async def analyse_image(self, image_path: str | Path, prompt: str) -> str:
+        """Describe/analyse a single image. Returns the model's text response."""
+        data_url = self._image_data_url(Path(image_path))
+        parts = [{"type": "image_url", "image_url": {"url": data_url}}]
+        return await self._dispatch(prompt, parts)
+
+    async def analyse_image_bytes(
+        self, data: bytes, prompt: str = "Describe this image.", mime_subtype: str = "png"
+    ) -> str:
+        """Describe/analyse an in-memory image (no filesystem path required)."""
+        parts = [{"type": "image_url", "image_url": {"url": self._bytes_data_url(data, mime_subtype)}}]
+        return await self._dispatch(prompt, parts)
+
+    # Test-facing alias kept stable for the unit suite.
+    analyse_image_bytes_for_test = analyse_image_bytes
+
+    async def analyse_video(
+        self,
+        video_path: str | Path,
+        prompt: str,
+        transcript: str | None = None,
+    ) -> str:
+        """Analyse a video. Returns the model's text response.
+
+        Two provider shapes are supported in one cascade:
+        * **native-video** providers (e.g. Reka) receive the whole clip as a
+          ``video_url`` part — no frame sampling, audio preserved.
+        * **frame-based** providers receive N sampled JPEG frames as image parts.
+
+        ``transcript`` — optional pre-extracted audio transcript. Frame-based
+        backends do not hear audio, so callers that already have a transcript
+        (yt-dlp captions, Whisper, ADB) should pass it; it is prepended so speech
+        is not lost. Native-video providers get the raw prompt (they hear audio).
+        """
+        vpath = Path(video_path)
+        if not vpath.exists():
+            raise VisionError(f"Video file not found: {video_path}")
+
+        frame_prompt = prompt
+        if transcript and transcript.strip():
+            frame_prompt = (
+                f"AUDIO TRANSCRIPT (extracted separately — the frames below are silent):\n"
+                f"{transcript.strip()}\n\n{prompt}"
+            )
+
+        # Lazily-computed, cached frame parts — only sampled if a frame-based
+        # provider is actually reached (native-video providers skip this cost).
+        frame_cache: list[list[dict]] = []  # single-slot cache (closure-local, concurrency-safe)
+
+        async def build_frame_content() -> list[dict]:
+            if not frame_cache:
+                frames = await asyncio.to_thread(self._sample_frames, vpath)
+                if not frames:
+                    raise VisionError(f"Could not sample any frames from video: {video_path}")
+                frame_cache.append(
+                    [{"type": "image_url", "image_url": {"url": self._bytes_data_url(f, "jpeg")}} for f in frames]
+                )
+            return [*frame_cache[0], {"type": "text", "text": frame_prompt}]
+
+        async def build_native_content(provider: _Provider) -> list[dict]:
+            data_uri = await asyncio.to_thread(self._encode_video_data_uri, vpath, provider.max_video_secs)
+            return [
+                {"type": "text", "text": prompt},
+                {"type": "video_url", "video_url": {"url": data_uri}},
+            ]
+
+        async def content_for(provider: _Provider) -> list[dict]:
+            return await build_native_content(provider) if provider.native_video else await build_frame_content()
+
+        # Native full-video is strongly preferred (temporal/motion/audio signal
+        # that frame-sampling loses). Order native-video providers first; frame-
+        # based providers are a last-resort fallback and can be disabled entirely
+        # with OSIA_VISION_FRAME_FALLBACK=0.
+        native = [p for p in self._providers if p.native_video]
+        frame_based = (
+            []
+            if not _env_flag("OSIA_VISION_FRAME_FALLBACK", True)
+            else [p for p in self._providers if not p.native_video]
+        )
+        ordered = native + frame_based
+        if not ordered:
+            raise VisionError(
+                "No video-capable provider configured. Enable a native-video provider "
+                "(venice/reka) or set OSIA_VISION_FRAME_FALLBACK=1 with a frame-based provider."
+            )
+        return await self._dispatch_per_provider(content_for, providers=ordered)
+
+    # ------------------------------------------------------------------
+    # Video encoding for native-video providers
+    # ------------------------------------------------------------------
+
+    def _encode_video_data_uri(self, video_path: Path, max_secs: int) -> str:
+        """Return a base64 ``data:video/mp4`` URI, trimming to ``max_secs`` if set."""
+        use_path = video_path
+        trimmed: Path | None = None
+        if max_secs and max_secs > 0:
+            trimmed = video_path.with_name(video_path.stem + f"_v{max_secs}.mp4")
+            proc = subprocess.run(  # noqa: S603
+                ["ffmpeg", "-y", "-i", str(video_path), "-t", str(max_secs), "-c", "copy", str(trimmed)],
+                capture_output=True,
+                timeout=max_secs + 60,
+                check=False,
+            )
+            if proc.returncode == 0 and trimmed.exists():
+                use_path = trimmed
+        try:
+            b64 = base64.b64encode(use_path.read_bytes()).decode()
+            return f"data:video/mp4;base64,{b64}"
+        finally:
+            if trimmed is not None:
+                try:
+                    trimmed.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    # ------------------------------------------------------------------
+    # Frame sampling (ffmpeg)
+    # ------------------------------------------------------------------
+
+    def _sample_frames(self, video_path: Path) -> list[bytes]:
+        """Extract up to ``max_frames`` JPEG frames from a video via ffmpeg.
+
+        Runs synchronously (call via asyncio.to_thread). Returns a list of JPEG
+        byte blobs in chronological order. Frames are downscaled so the long edge
+        is at most ``frame_long_edge`` to keep token cost bounded.
+        """
+        if not video_path.exists():
+            raise VisionError(f"Video file not found: {video_path}")
+
+        with tempfile.TemporaryDirectory(prefix="osia_vision_", dir=os.getenv("KIROCREW_SCRATCH") or None) as tmp:
+            out_pattern = str(Path(tmp) / "frame_%04d.jpg")
+            # fps=N/1 sampling + scale long edge, capped at video_max_secs.
+            vf = (
+                f"fps={self.frame_fps},"
+                f"scale='if(gt(iw,ih),{self.frame_long_edge},-2)':'if(gt(iw,ih),-2,{self.frame_long_edge})'"
+            )
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-t",
+                str(self.video_max_secs),
+                "-i",
+                str(video_path),
+                "-vf",
+                vf,
+                "-vsync",
+                "vfr",
+                "-frames:v",
+                str(self.max_frames),
+                "-q:v",
+                "4",
+                out_pattern,
+            ]
+            proc = subprocess.run(  # noqa: S603
+                cmd,
+                capture_output=True,
+                timeout=self.video_max_secs + 120,
+                check=False,
+            )
+            if proc.returncode != 0:
+                logger.warning(
+                    "ffmpeg frame sampling failed (rc=%d): %s",
+                    proc.returncode,
+                    proc.stderr.decode(errors="replace")[:400],
+                )
+                return []
+
+            frame_files = sorted(Path(tmp).glob("frame_*.jpg"))
+            if len(frame_files) > self.max_frames:
+                # Evenly subsample down to max_frames if ffmpeg over-produced.
+                step = len(frame_files) / self.max_frames
+                frame_files = [frame_files[int(i * step)] for i in range(self.max_frames)]
+            return [f.read_bytes() for f in frame_files]
+
+    # ------------------------------------------------------------------
+    # Encoding helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _image_data_url(path: Path) -> str:
+        if not path.exists():
+            raise VisionError(f"Image file not found: {path}")
+        suffix = path.suffix.lower().lstrip(".") or "png"
+        mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp", "gif": "gif"}.get(suffix, "png")
+        return VisionClient._bytes_data_url(path.read_bytes(), mime)
+
+    @staticmethod
+    def _bytes_data_url(data: bytes, mime_subtype: str) -> str:
+        b64 = base64.b64encode(data).decode()
+        return f"data:image/{mime_subtype};base64,{b64}"
+
+    # ------------------------------------------------------------------
+    # Dispatch cascade
+    # ------------------------------------------------------------------
+
+    async def _dispatch(self, prompt: str, media_parts: list[dict]) -> str:
+        """Try each provider/model in the cascade until one succeeds."""
+        if not self._providers:
+            raise VisionError("No vision providers configured. Set VENICE_API_KEY and/or OPENROUTER_API_KEY.")
+
+        content = [*media_parts, {"type": "text", "text": prompt}]
+        last_exc: Exception | None = None
+
+        for provider in self._providers:
+            for model in provider.models:
+                try:
+                    text = await self._call(provider, model, content)
+                    if provider.name != self._providers[0].name or model != self._providers[0].models[0]:
+                        logger.info("Vision: succeeded via %s/%s (fallback).", provider.name, model)
+                    return text
+                except Exception as exc:  # noqa: BLE001 — cascade on any failure
+                    last_exc = exc
+                    if _is_transient(exc):
+                        logger.warning(
+                            "Vision: %s/%s transient failure (%s) — trying next.",
+                            provider.name,
+                            model,
+                            str(exc)[:160],
+                        )
+                    else:
+                        logger.warning(
+                            "Vision: %s/%s failed (%s) — trying next.",
+                            provider.name,
+                            model,
+                            str(exc)[:160],
+                        )
+        raise VisionError(f"All vision providers exhausted; last error: {last_exc}") from last_exc
+
+    async def _dispatch_per_provider(
+        self,
+        content_for: Callable[[_Provider], Awaitable[list[dict]]],
+        providers: list[_Provider] | None = None,
+    ) -> str:
+        """Cascade where each provider gets its own content (built lazily).
+
+        ``content_for(provider)`` is an async callable returning the message
+        content list for that provider — lets native-video providers send a
+        ``video_url`` part while frame providers send sampled image parts, all in
+        one cascade. A provider whose content build fails is skipped, not fatal.
+        ``providers`` overrides the default cascade order (the video path passes a
+        native-video-first ordering).
+        """
+        cascade = providers if providers is not None else self._providers
+        if not cascade:
+            raise VisionError("No vision providers configured. Set VENICE_API_KEY and/or OPENROUTER_API_KEY.")
+
+        first = cascade[0]
+        last_exc: Exception | None = None
+        for provider in cascade:
+            try:
+                content = await content_for(provider)
+            except Exception as build_exc:  # noqa: BLE001 — a build failure just skips this provider
+                last_exc = build_exc
+                logger.warning(
+                    "Vision: could not build content for %s (%s) — skipping.", provider.name, str(build_exc)[:160]
+                )
+                continue
+            for model in provider.models:
+                try:
+                    text = await self._call(provider, model, content)
+                    if provider.name != first.name or model != first.models[0]:
+                        logger.info("Vision: succeeded via %s/%s (fallback).", provider.name, model)
+                    return text
+                except Exception as exc:  # noqa: BLE001 — cascade on any failure
+                    last_exc = exc
+                    logger.warning("Vision: %s/%s failed (%s) — trying next.", provider.name, model, str(exc)[:160])
+        raise VisionError(f"All vision providers exhausted; last error: {last_exc}") from last_exc
+
+    async def _call(self, provider: _Provider, model: str, content: list[dict]) -> str:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": content}],
+            "max_tokens": self.max_tokens,
+        }
+        resp = await self._client().post(
+            f"{provider.base_url}/v1/chat/completions",
+            headers=provider.headers,
+            json=payload,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        try:
+            return body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise VisionError(f"{provider.name}/{model}: unexpected response shape: {str(body)[:200]}") from exc

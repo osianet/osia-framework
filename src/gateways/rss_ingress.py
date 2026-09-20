@@ -9,19 +9,20 @@ import httpx
 import redis.asyncio as redis
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from google import genai
 
 from src.intelligence.entity_extractor import EntityExtractor
 from src.intelligence.qdrant_store import QdrantStore
+from src.intelligence.text_client import TextClient, TextError
 
 logger = logging.getLogger("osia.rss")
 
 # ---------------------------------------------------------------------------
-# Summarisation model chain
-# OpenRouter options first (2), then Gemini direct (non-OR), then raw fallback.
+# Summarisation model chain (Google-free)
+# OpenRouter options first (2), then the TextClient cascade (Venice → OpenRouter),
+# then raw truncation fallback.
 # ---------------------------------------------------------------------------
 _OR_SUMMARISE_MODELS = [
-    "google/gemma-4-31b-it:free",  # zero-cost first attempt
+    "qwen/qwen3.8-27b",  # cheap, open-weight first attempt
     "anthropic/claude-haiku-4.5",  # paid, reliable second
 ]
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
@@ -38,8 +39,8 @@ class RSSIngress:
     def __init__(self):
         load_dotenv()
         self.redis = redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
-        self.client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        self.model_id = os.getenv("GEMINI_MODEL_ID", "gemini-2.5-flash")
+        # Google-free text generation (Venice → OpenRouter; Gemini opt-in only).
+        self.text = TextClient()
         base_dir = Path(os.getenv("OSIA_BASE_DIR", Path(__file__).resolve().parent.parent.parent))
         self.feeds_file = base_dir / "config" / "feeds.txt"
 
@@ -76,18 +77,15 @@ class RSSIngress:
                 except Exception as e:
                     logger.warning("OR summarization failed (model=%s, title='%s'): %s", model, title, e)
 
-        # Non-OR fallback: Gemini direct
-        try:
-            res = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=self.model_id,
-                contents=prompt,
-            )
-            logger.debug("RSS summary via Gemini direct for '%s'", title)
-            return res.text
-        except Exception as e:
-            logger.error("Gemini summarization failed for '%s': %s", title, e)
-            return None
+        # Non-OR fallback: TextClient cascade (Venice → OpenRouter → optional Gemini)
+        if self.text.available:
+            try:
+                result = await self.text.generate(prompt, max_tokens=1024)
+                logger.debug("RSS summary via TextClient cascade for '%s'", title)
+                return result
+            except TextError as e:
+                logger.error("TextClient summarization failed for '%s': %s", title, e)
+        return None
 
     def get_feeds(self) -> list[str]:
         if not self.feeds_file.exists():

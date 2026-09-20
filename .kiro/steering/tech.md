@@ -9,9 +9,10 @@
 
 ## Core Dependencies
 
-- `google-genai` — Gemini API client (primary LLM, vision, and tool-calling)
+- `httpx` — async HTTP client (OpenAI-compatible LLM/vision providers, Signal API, AnythingLLM API)
+- `src/intelligence/text_client.py` / `vision_client.py` — provider-agnostic text + image/video clients (Venice → OpenRouter, OpenAI-compatible). **Google-free by default.**
+- `google-genai` — Gemini SDK. OPTIONAL for LLM/vision (opt-in last-resort backend only); still used by the research/hermes tool-calling loops' Gemini fallback path.
 - `redis` — async Redis client for task queue (`redis.asyncio`)
-- `httpx` — async HTTP client (Signal API, AnythingLLM API)
 - `websockets` — Signal WebSocket listener
 - `fastapi` + `uvicorn` — HTTP bridges (phone bridge, MCP SSE bridge)
 - `mcp[cli]` — Model Context Protocol client/server SDK
@@ -79,7 +80,8 @@ uv run python scripts/provision_hf_endpoints.py --pause     # stop billing
 
 All secrets and config live in `.env` (git-ignored). See `.env.example` for required variables. Key ones:
 
-- `GEMINI_API_KEY` — Google Gemini API key
+- `VENICE_API_KEY` / `OPENROUTER_API_KEY` — primary LLM + vision providers (at least one required; Google-free stack)
+- `GEMINI_API_KEY` — Google Gemini API key. OPTIONAL — opt-in last-resort backend only (vision needs `OSIA_VISION_ALLOW_GEMINI=1`)
 - `SIGNAL_SENDER_NUMBER` — registered Signal number
 - `ANYTHINGLLM_API_KEY` — AnythingLLM workspace access
 - `REDIS_URL` — Redis connection string

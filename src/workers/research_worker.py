@@ -140,7 +140,7 @@ TAVILY_MONTHLY_BUDGET = int(os.getenv("TAVILY_MONTHLY_BUDGET", "500"))
 # OpenRouter model used when falling back from Venice at runtime.
 # Must be an OpenRouter-compatible model ID — Venice slugs (e.g. venice-uncensored)
 # are not valid on OpenRouter.
-OPENROUTER_RESEARCH_MODEL = os.getenv("RESEARCH_OPENROUTER_MODEL", "google/gemini-2.5-flash")
+OPENROUTER_RESEARCH_MODEL = os.getenv("RESEARCH_OPENROUTER_MODEL", "qwen/qwen3.8-27b")
 
 # Venice model routing per desk
 VENICE_MODEL_UNCENSORED = os.getenv("VENICE_MODEL_UNCENSORED", "venice-uncensored")
